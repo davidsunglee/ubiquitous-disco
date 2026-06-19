@@ -1,10 +1,17 @@
 import {
+  createReplay,
   createSimulation,
   DEFAULT_CONFIG,
+  deserializeReplay,
   FLAT_DOJO,
   type InputFrame,
+  playReplay,
   type RenderState,
+  type ReplayData,
+  recordFrame,
+  type SimConfig,
   type Simulation,
+  serializeReplay,
 } from "@bb/sim";
 import Phaser from "phaser";
 import { KeyboardAdapter } from "../input/KeyboardAdapter";
@@ -14,6 +21,7 @@ import {
   toScreenX,
   toScreenY,
 } from "../render/worldToScreen";
+import { type HudBridge, hudBridge } from "./HudScene";
 
 export class GameScene extends Phaser.Scene {
   private sim!: Simulation;
@@ -27,16 +35,27 @@ export class GameScene extends Phaser.Scene {
   private bellText!: Phaser.GameObjects.Text;
   private bellFlash: { left: number; right: number } = { left: 0, right: 0 };
 
+  // ── Phase 5: pause/step/replay state ────────────────────────────────────────
+  private paused = false;
+  /** When true, advance exactly one tick this frame then re-pause. */
+  private doSingleStep = false;
+  /** The live config (may be patched by HUD sliders). */
+  private liveConfig: SimConfig = { ...DEFAULT_CONFIG };
+  /** Replay capture accumulator. Null when not recording. */
+  private captureData: ReplayData | null = null;
+  /** Last captured replay JSON (for the Replay button). */
+  private lastCaptureJson: string | null = null;
+
+  // Replay playback state (null when not replaying via startReplay).
+  private replayFrames: InputFrame[] | null = null;
+  private replayFrameCursor = 0;
+
   constructor() {
     super("GameScene");
   }
 
   create(): void {
-    this.sim = createSimulation({
-      config: DEFAULT_CONFIG,
-      arena: FLAT_DOJO,
-      seed: 1234,
-    });
+    this.sim = this.buildSim(this.liveConfig);
     this.gfx = this.add.graphics();
     if (!this.input.keyboard) {
       throw new Error("Keyboard input plugin unavailable");
@@ -56,24 +75,145 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5)
       .setAlpha(0);
+
+    // Wire up the HUD bridge so HudScene can control us.
+    this.wireHudBridge();
+
+    // Launch the HUD in parallel (it renders on top without replacing GameScene).
+    this.scene.launch("HudScene");
+  }
+
+  // ── HUD bridge wiring ────────────────────────────────────────────────────────
+
+  private wireHudBridge(): void {
+    const bridge: HudBridge = {
+      isPaused: () => this.paused,
+      pause: () => {
+        this.paused = true;
+      },
+      resume: () => {
+        this.paused = false;
+      },
+      step: () => {
+        if (this.paused) this.doSingleStep = true;
+      },
+      reset: () => {
+        this.resetSim();
+      },
+      getConfig: () => this.liveConfig,
+      updateConfig: (patch) => {
+        this.liveConfig = { ...this.liveConfig, ...patch };
+        this.sim.updateConfig(this.liveConfig);
+      },
+      getDebugColliders: () => this.sim.getDebugColliders(),
+      startCapture: () => {
+        this.captureData = createReplay(1234, FLAT_DOJO.id, "default");
+      },
+      stopCapture: () => {
+        if (!this.captureData) return null;
+        const json = serializeReplay(this.captureData);
+        this.lastCaptureJson = json;
+        this.captureData = null;
+        return json;
+      },
+      replayCapture: () => {
+        if (!this.lastCaptureJson) return;
+        this.startReplay(this.lastCaptureJson);
+      },
+      isCapturing: () => this.captureData !== null,
+    };
+    // Overwrite all fields of the shared singleton bridge.
+    Object.assign(hudBridge, bridge);
+  }
+
+  // ── Sim lifecycle ────────────────────────────────────────────────────────────
+
+  private buildSim(config: SimConfig): Simulation {
+    return createSimulation({ config, arena: FLAT_DOJO, seed: 1234 });
+  }
+
+  private resetSim(): void {
+    this.paused = false;
+    this.doSingleStep = false;
+    this.captureData = null;
+    this.replayFrames = null;
+    this.replayFrameCursor = 0;
+    this.accumulator = 0;
+    this.liveConfig = { ...DEFAULT_CONFIG };
+    this.sim = this.buildSim(this.liveConfig);
+    const s = this.sim.getRenderState();
+    this.prev = structuredClone(s);
+    this.cur = structuredClone(s);
+    this.bellFlash = { left: 0, right: 0 };
+    this.bellText.setAlpha(0).setText("");
+  }
+
+  private startReplay(json: string): void {
+    this.captureData = null;
+    this.accumulator = 0;
+    this.liveConfig = { ...DEFAULT_CONFIG };
+    this.sim = this.buildSim(this.liveConfig);
+    const s = this.sim.getRenderState();
+    this.prev = structuredClone(s);
+    this.cur = structuredClone(s);
+    this.bellFlash = { left: 0, right: 0 };
+
+    const replayData = deserializeReplay(json);
+    // Log the replay hash vs live hash to confirm determinism in the console.
+    const replayHash = playReplay(replayData);
+    console.info(`[replay] determinism hash: ${replayHash}`);
+
+    // Schedule replay frames to be fed into the sim on each fixed tick.
+    this.replayFrames = replayData.inputFrames;
+    this.replayFrameCursor = 0;
   }
 
   private collectInputFrame(): InputFrame {
+    if (this.replayFrames !== null) {
+      const f = this.replayFrames[this.replayFrameCursor];
+      if (f !== undefined) {
+        this.replayFrameCursor++;
+        return f;
+      }
+      // Replay finished.
+      this.replayFrames = null;
+      this.replayFrameCursor = 0;
+      console.info("[replay] playback complete");
+    }
     return this.keyboard.collect();
   }
 
   update(_time: number, delta: number): void {
-    this.accumulator += delta;
+    // Honor pause flag — don't advance the accumulator while paused (unless a
+    // single-step was requested by the HUD).
+    const shouldStep = !this.paused || this.doSingleStep;
+    if (this.doSingleStep) this.doSingleStep = false;
+
+    if (shouldStep) {
+      this.accumulator += delta;
+    }
+
     while (this.accumulator >= this.FIXED_STEP) {
       this.prev = this.cur;
-      this.sim.step(this.collectInputFrame());
+      const inputFrame = this.collectInputFrame();
+
+      // Record frame into capture data if capture is active.
+      if (this.captureData) {
+        recordFrame(this.captureData, inputFrame);
+      }
+
+      this.sim.step(inputFrame);
       this.cur = structuredClone(this.sim.getRenderState());
       // Drain sim events each tick and surface Bell Ring feedback.
       for (const event of this.sim.drainEvents()) {
         if (event.type === "bellRing") this.onBellRing(event.bell);
       }
       this.accumulator -= this.FIXED_STEP;
+
+      // When paused+stepping, only advance exactly one tick.
+      if (!shouldStep) break;
     }
+
     const alpha = this.accumulator / this.FIXED_STEP; // [0,1)
 
     this.gfx.clear();

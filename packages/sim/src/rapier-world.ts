@@ -130,4 +130,50 @@ export class RapierWorld {
   takeSnapshot(): Uint8Array {
     return this.world.takeSnapshot();
   }
+
+  /**
+   * Replace the current Rapier world with the state from a previously taken
+   * snapshot. JS-side objects (character controller, rigid body handles etc.)
+   * are re-bound from the restored world. The restored world has the same
+   * body/collider insertion order as the original, so handles are stable.
+   */
+  restoreSnapshot(bytes: Uint8Array): void {
+    const R = getRapier();
+    // World.restoreSnapshot() is static and returns a brand-new World.
+    const restored = R.World.restoreSnapshot(bytes);
+    // Swap the world reference (type cast — the readonly is only for external callers).
+    (this as { world: WorldInstance }).world = restored;
+    // Re-bind rigid body handles. Insertion order: arena colliders → player → ball.
+    // The player was the first dynamic/kinematic body inserted, ball was second.
+    const bodies: RigidBodyInstance[] = [];
+    restored.forEachRigidBody((b) => bodies.push(b));
+    // Player is the first kinematic body (index 0), ball is the dynamic (index 1).
+    // We rely on the fact that arena colliders are all fixed (no rigid body), so
+    // the only rigid bodies are player + ball in insertion order.
+    const playerBody = bodies[0];
+    const ballBody = bodies[1];
+    if (!playerBody || !ballBody) {
+      throw new Error(
+        "restoreSnapshot: expected 2 rigid bodies (player, ball)",
+      );
+    }
+    (this as { player: RigidBodyInstance }).player = playerBody;
+    (this as { ball: RigidBodyInstance }).ball = ballBody;
+
+    // Re-bind colliders. The player collider is the first collider attached to
+    // the player body; the ball collider is the first attached to the ball body.
+    const playerCol = playerBody.collider(0);
+    if (!playerCol) {
+      throw new Error("restoreSnapshot: player collider not found");
+    }
+    (this as { playerCollider: ColliderInstance }).playerCollider = playerCol;
+
+    // Re-create the character controller (not serialized by Rapier snapshot).
+    restored.removeCharacterController(this.controller);
+    const ctrl = restored.createCharacterController(0.01);
+    ctrl.setUp({ x: 0, y: 1 });
+    ctrl.setApplyImpulsesToDynamicBodies(true);
+    ctrl.enableSnapToGround(0.1);
+    (this as { controller: CharacterControllerInstance }).controller = ctrl;
+  }
 }
