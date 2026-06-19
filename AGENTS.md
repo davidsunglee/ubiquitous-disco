@@ -52,7 +52,7 @@ unit/replay tests, and applicable browser smoke tests.
 
 ## Per-phase agent workflow
 
-The slice sequence lives in [`docs/specs/README.md`](./docs/specs/README.md). For every phase:
+The slice sequence lives in [`docs/phases/README.md`](./docs/phases/README.md). For every phase:
 
 1. Refine the phase spec against current code and prior phase output.
 2. Produce an implementation plan with small, independently reviewable tasks.
