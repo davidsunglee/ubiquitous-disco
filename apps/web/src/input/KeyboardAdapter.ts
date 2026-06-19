@@ -7,9 +7,13 @@ import {
 import Phaser from "phaser";
 
 /**
- * Gathers raw keyboard state (WASD + arrows for movement, Space/Up for Jump) and
- * normalizes it into a sim-owned InputFrame using the protected helpers. Dash and
- * Strike keys are stubbed (always up) until Phase 3 wires their actions.
+ * Gathers raw keyboard state and normalizes it into a sim-owned InputFrame using
+ * the protected helpers:
+ *  - movement: WASD + arrow keys,
+ *  - Jump: Space / Up / W,
+ *  - Tele-Dash: Shift,
+ *  - Strike: J (held-to-charge, released to fire).
+ * Edge flags (pressed/released) are derived from the previous frame's held state.
  */
 export class KeyboardAdapter {
   private readonly keys: {
@@ -22,6 +26,8 @@ export class KeyboardAdapter {
     w: Phaser.Input.Keyboard.Key;
     s: Phaser.Input.Keyboard.Key;
     space: Phaser.Input.Keyboard.Key;
+    shift: Phaser.Input.Keyboard.Key;
+    strike: Phaser.Input.Keyboard.Key;
   };
   private prevHeld: HeldState = { jump: false, dash: false, strike: false };
 
@@ -37,6 +43,8 @@ export class KeyboardAdapter {
       w: keyboard.addKey(K.W),
       s: keyboard.addKey(K.S),
       space: keyboard.addKey(K.SPACE),
+      shift: keyboard.addKey(K.SHIFT),
+      strike: keyboard.addKey(K.J),
     };
   }
 
@@ -54,8 +62,8 @@ export class KeyboardAdapter {
     const move = normalizeMove(rawX, rawY);
     const held: HeldState = {
       jump: k.space.isDown || k.up.isDown || k.w.isDown,
-      dash: false, // Phase 3
-      strike: false, // Phase 3
+      dash: k.shift.isDown,
+      strike: k.strike.isDown,
     };
 
     const frame = buildInputFrame(move, held, this.prevHeld);

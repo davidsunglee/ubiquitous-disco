@@ -108,5 +108,33 @@ export class GameScene extends Phaser.Scene {
     this.gfx
       .fillStyle(0xffffff, 1)
       .fillCircle(noseX, toScreenY(y + halfH * 0.4), 4);
+
+    this.drawChargeFeedback(x, y, halfW, halfH);
+  }
+
+  /**
+   * Strike charge feedback: a ring around the player whose radius and color
+   * intensity grow with RenderState.player.charge (ticks). charge is 0 when not
+   * charging, so the ring only appears while holding Strike.
+   */
+  private drawChargeFeedback(
+    x: number,
+    y: number,
+    halfW: number,
+    halfH: number,
+  ): void {
+    const charge = this.cur.player.charge;
+    if (charge <= 0) return;
+    const max = DEFAULT_CONFIG.strike.maxChargeTicks;
+    const t = Math.min(1, charge / max);
+    const cx = toScreenX(x);
+    const cy = toScreenY(y + halfH * 0.25);
+    const baseR = Math.max(halfW, halfH) * PX_PER_UNIT;
+    const ringR = baseR + 6 + t * 18;
+    // Warmer/brighter as the charge nears full.
+    const color = t >= 0.999 ? 0xff5522 : 0xffaa33;
+    this.gfx
+      .lineStyle(2 + t * 3, color, 0.35 + t * 0.5)
+      .strokeCircle(cx, cy, ringR);
   }
 }
