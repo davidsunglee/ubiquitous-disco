@@ -147,3 +147,11 @@ vite.config.ts.timestamp-*
 
 # macOS
 .DS_Store
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
+
+# build / test artifacts
+dist/
+apps/web/playwright-report/
+apps/web/test-results/
