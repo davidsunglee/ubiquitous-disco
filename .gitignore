@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # Riptide workspace local overrides
 .humanlayer/workspace.local.json
+
+# macOS
+.DS_Store
