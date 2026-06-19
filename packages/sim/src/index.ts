@@ -1,4 +1,12 @@
-export type { ArenaDef, ColliderDef } from "./arena";
+export type {
+  ArenaDef,
+  ArtShape,
+  BellDef,
+  BoxArt,
+  BoxCollider,
+  CircleZone,
+  ColliderDef,
+} from "./arena";
 export { FLAT_DOJO } from "./arena";
 export type {
   BallConfig,

@@ -23,6 +23,9 @@ export class GameScene extends Phaser.Scene {
   private readonly FIXED_STEP = 1000 / DEFAULT_CONFIG.tickHz;
   private prev!: RenderState;
   private cur!: RenderState;
+  // Bell Ring feedback: a banner that fades out, plus a per-Bell flash timer.
+  private bellText!: Phaser.GameObjects.Text;
+  private bellFlash: { left: number; right: number } = { left: 0, right: 0 };
 
   constructor() {
     super("GameScene");
@@ -42,6 +45,17 @@ export class GameScene extends Phaser.Scene {
     const s = this.sim.getRenderState();
     this.prev = structuredClone(s);
     this.cur = structuredClone(s);
+
+    // Bell Ring banner (hidden until a Bell rings). Drawn above the canvas-center.
+    this.bellText = this.add
+      .text(480, 60, "", {
+        fontFamily: "monospace",
+        fontSize: "40px",
+        color: "#ffe066",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setAlpha(0);
   }
 
   private collectInputFrame(): InputFrame {
@@ -54,14 +68,45 @@ export class GameScene extends Phaser.Scene {
       this.prev = this.cur;
       this.sim.step(this.collectInputFrame());
       this.cur = structuredClone(this.sim.getRenderState());
+      // Drain sim events each tick and surface Bell Ring feedback.
+      for (const event of this.sim.drainEvents()) {
+        if (event.type === "bellRing") this.onBellRing(event.bell);
+      }
       this.accumulator -= this.FIXED_STEP;
     }
     const alpha = this.accumulator / this.FIXED_STEP; // [0,1)
 
     this.gfx.clear();
     this.drawArena();
+    this.drawBells();
     this.drawBall(alpha);
     this.drawPlayer(alpha);
+    this.tickBellFeedback(delta);
+  }
+
+  /**
+   * Bell Ring feedback (obvious, tagged with the side): flash the rung Bell and
+   * show a banner. A sound stub is logged so audio can hang off this hook later.
+   */
+  private onBellRing(bell: "left" | "right"): void {
+    this.bellFlash[bell] = 1; // full intensity, decays in tickBellFeedback
+    const label = bell === "left" ? "LEFT BELL!" : "RIGHT BELL!";
+    this.bellText
+      .setText(label)
+      .setColor(bell === "left" ? "#66d9ff" : "#ff9966")
+      .setAlpha(1);
+    // Sound stub — wire real SFX here in a later art/audio pass.
+    console.info(`[bellRing] ${bell}`);
+  }
+
+  /** Decay the banner alpha and per-Bell flash intensity over real time. */
+  private tickBellFeedback(delta: number): void {
+    const decay = delta / 1000; // ~1s fade
+    this.bellFlash.left = Math.max(0, this.bellFlash.left - decay);
+    this.bellFlash.right = Math.max(0, this.bellFlash.right - decay);
+    if (this.bellText.alpha > 0) {
+      this.bellText.setAlpha(Math.max(0, this.bellText.alpha - decay * 0.8));
+    }
   }
 
   private drawArena(): void {
@@ -73,6 +118,37 @@ export class GameScene extends Phaser.Scene {
         c.halfW * 2 * PX_PER_UNIT,
         c.halfH * 2 * PX_PER_UNIT,
       );
+    }
+  }
+
+  /**
+   * Render the two Bells (art shapes only — the hit-zone is intentionally
+   * invisible here; the Phase 5 debug overlay draws it). A rung Bell flashes
+   * brighter for a moment via bellFlash.
+   */
+  private drawBells(): void {
+    for (const bell of FLAT_DOJO.bells) {
+      const art = bell.art;
+      const flash = this.bellFlash[bell.id];
+      const base = bell.id === "left" ? 0x3aa0c0 : 0xc06a3a;
+      const color = flash > 0 ? 0xffffff : base;
+      this.gfx
+        .fillStyle(color, 1)
+        .fillRect(
+          toScreenX(art.x - art.halfW),
+          toScreenY(art.y + art.halfH),
+          art.halfW * 2 * PX_PER_UNIT,
+          art.halfH * 2 * PX_PER_UNIT,
+        );
+      if (flash > 0) {
+        this.gfx
+          .lineStyle(3, 0xffe066, flash)
+          .strokeCircle(
+            toScreenX(art.x),
+            toScreenY(art.y),
+            (art.halfW + 0.4) * PX_PER_UNIT,
+          );
+      }
     }
   }
 

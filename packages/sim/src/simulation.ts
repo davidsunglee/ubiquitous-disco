@@ -5,6 +5,12 @@ import { hashBytes } from "./hash";
 import type { InputFrame } from "./input";
 import { RapierWorld } from "./rapier-world";
 import { stepBall } from "./rules/ball";
+import {
+  type BellRingState,
+  createBellRingState,
+  serializeBellRingState,
+  stepBellRing,
+} from "./rules/bellRing";
 import { resetDashOnLanding, stepDash } from "./rules/dash";
 import { stepMovement } from "./rules/movement";
 import { stepStrike } from "./rules/strike";
@@ -40,10 +46,16 @@ export function createSimulation(opts: {
   arena: ArenaDef;
   seed: number;
 }): Simulation {
-  const { config } = opts;
-  const rw = new RapierWorld(config, opts.arena);
+  const { config, arena } = opts;
+  const rw = new RapierWorld(config, arena);
   const actor: Actor = createActor(1);
   // seed reserved for Phase 3+ seeded RNG; deterministic w/o RNG this phase.
+
+  // Authoritative tick counter (incremented per step) and the drainable event
+  // queue. The Bell Ring debounce state persists across ticks and is hashed.
+  let tick = 0;
+  const events: SimEvent[] = [];
+  const bellRing: BellRingState = createBellRingState(arena);
 
   return {
     step(input) {
@@ -61,6 +73,21 @@ export function createSimulation(opts: {
       rw.step();
       // Post-step ball maintenance: light contact push + speed clamp.
       stepBall(actor, config, rw);
+      // Bell Ring detection runs after the world step, when the ball position is
+      // current for this tick. Pure geometry (ball circle vs. each hit-zone),
+      // debounced once per contact; queue an event per Bell that rang.
+      const ball = rw.ballPos();
+      const hits = stepBellRing(
+        arena,
+        ball.x,
+        ball.y,
+        config.ball.radius,
+        bellRing,
+      );
+      for (const hit of hits) {
+        events.push({ type: "bellRing", bell: hit.bell, tick });
+      }
+      tick += 1;
     },
     getRenderState() {
       return {
@@ -74,13 +101,19 @@ export function createSimulation(opts: {
       };
     },
     drainEvents() {
-      return [];
+      if (events.length === 0) return [];
+      return events.splice(0, events.length);
     },
-    // Composite hash: Rapier snapshot bytes ‖ serialized actor state. The actor
-    // struct and KinematicCharacterController are NOT captured by takeSnapshot(),
-    // so both halves are required to detect divergence.
+    // Composite hash: Rapier snapshot bytes ‖ serialized actor state ‖ serialized
+    // Bell Ring debounce state. The actor struct, KinematicCharacterController,
+    // and the per-Bell armed flags are NOT captured by takeSnapshot(), so all
+    // halves are required to detect divergence.
     hashState() {
-      return hashBytes(rw.takeSnapshot(), serializeActor(actor));
+      return hashBytes(
+        rw.takeSnapshot(),
+        serializeActor(actor),
+        serializeBellRingState(bellRing),
+      );
     },
   };
 }

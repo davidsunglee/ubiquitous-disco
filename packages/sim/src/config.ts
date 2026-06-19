@@ -1,4 +1,4 @@
-export const SIM_CONFIG_VERSION = 3;
+export const SIM_CONFIG_VERSION = 4;
 
 export interface MovementConfig {
   moveSpeed: number; // world units / second of horizontal movement
