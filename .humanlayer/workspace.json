@@ -3,7 +3,7 @@
   "pathTemplate": "~/.humanlayer/workspaces/{{ TASKSLUG }}/{{ REPOBASENAME }}",
   "branchTemplate": "{{ TASKSLUG }}",
   "sourceRef": "HEAD",
-  "setupCommand": "",
+  "setupCommand": "pnpm install",
   "copyGlobs": [
     ".env",
     ".env.local",
