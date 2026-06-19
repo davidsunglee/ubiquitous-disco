@@ -41,12 +41,15 @@ export class RapierWorld {
       this.player,
     );
 
-    // 3) ball dynamic body — inserted AFTER the player, every run
+    // 3) ball dynamic body — inserted AFTER the player, every run. CCD (swept
+    // collision) is enabled: a hard Strike can drive the ball faster than a wall
+    // is thick per tick, which a discrete solver would tunnel straight through.
     this.ball = this.world.createRigidBody(
       R.RigidBodyDesc.dynamic()
         .setTranslation(arena.ballSpawn.x, arena.ballSpawn.y)
         .setGravityScale(config.ball.gravityScale)
-        .setLinearDamping(config.ball.linearDamping),
+        .setLinearDamping(config.ball.linearDamping)
+        .setCcdEnabled(true),
     );
     this.world.createCollider(
       R.ColliderDesc.ball(config.ball.radius)
