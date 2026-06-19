@@ -1,33 +1,21 @@
+import { type Actor, createActor, serializeActor } from "./actor";
 import type { ArenaDef } from "./arena";
 import type { SimConfig } from "./config";
 import { hashBytes } from "./hash";
+import type { InputFrame } from "./input";
 import { RapierWorld } from "./rapier-world";
+import { stepMovement } from "./rules/movement";
 
-export interface InputFrame {
-  moveX: number;
-  moveY: number;
-  jumpHeld: boolean;
-  dashHeld: boolean;
-  strikeHeld: boolean;
-  jumpPressed: boolean;
-  dashPressed: boolean;
-  strikePressed: boolean;
-  strikeReleased: boolean;
-}
-
-export const EMPTY_INPUT: InputFrame = {
-  moveX: 0,
-  moveY: 0,
-  jumpHeld: false,
-  dashHeld: false,
-  strikeHeld: false,
-  jumpPressed: false,
-  dashPressed: false,
-  strikePressed: false,
-  strikeReleased: false,
-};
+export type { InputFrame } from "./input";
 
 export interface RenderState {
+  player: {
+    x: number;
+    y: number;
+    facing: 1 | -1;
+    grounded: boolean;
+    charge: number;
+  };
   ball: { x: number; y: number; radius: number };
 }
 
@@ -49,22 +37,35 @@ export function createSimulation(opts: {
   arena: ArenaDef;
   seed: number;
 }): Simulation {
-  const { config, arena } = opts;
-  const rw = new RapierWorld(config, arena);
-  // seed reserved for Phase 2+ seeded RNG; deterministic w/o RNG this phase.
+  const { config } = opts;
+  const rw = new RapierWorld(config, opts.arena);
+  const actor: Actor = createActor(1);
+  // seed reserved for Phase 3+ seeded RNG; deterministic w/o RNG this phase.
 
   return {
-    step(_input) {
+    step(input) {
+      stepMovement(actor, input, config, rw);
       rw.step();
-    }, // input ignored this phase
+    },
     getRenderState() {
-      return { ball: { ...rw.ballPos(), radius: config.ball.radius } };
+      return {
+        player: {
+          ...rw.playerPos(),
+          facing: actor.facing,
+          grounded: actor.grounded,
+          charge: actor.charge,
+        },
+        ball: { ...rw.ballPos(), radius: config.ball.radius },
+      };
     },
     drainEvents() {
       return [];
     },
+    // Composite hash: Rapier snapshot bytes ‖ serialized actor state. The actor
+    // struct and KinematicCharacterController are NOT captured by takeSnapshot(),
+    // so both halves are required to detect divergence.
     hashState() {
-      return hashBytes(rw.takeSnapshot());
-    }, // Phase 2 appends actor bytes
+      return hashBytes(rw.takeSnapshot(), serializeActor(actor));
+    },
   };
 }
