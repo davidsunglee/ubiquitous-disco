@@ -47,12 +47,14 @@ export function createSimulation(opts: {
 
   return {
     step(input) {
-      // Tele-Dash blink first (instant reposition, also ticks the cooldown).
-      stepDash(actor, input, config, rw);
+      // Resolve any Tele-Dash this tick (ticks cooldown, gates air-dash) and get
+      // its blink displacement — applied inside movement's single sweep below.
+      const blink = stepDash(actor, input, config);
       // Strike imparts impulse to the ball before the physics step integrates it.
       stepStrike(actor, input, config, rw);
-      // Player movement: collide-and-slide + grounded reconciliation.
-      stepMovement(actor, input, config, rw);
+      // Player movement: one collide-and-slide for walk + jump + blink, then
+      // grounded reconciliation.
+      stepMovement(actor, input, config, rw, blink);
       // Restore the air-dash budget once the actor is grounded again.
       resetDashOnLanding(actor);
       // Advance Rapier (ball integrates, player commits its kinematic move).

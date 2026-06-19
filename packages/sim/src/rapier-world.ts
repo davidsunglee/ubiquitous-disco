@@ -74,17 +74,22 @@ export class RapierWorld {
    * then commit the resulting translation to the kinematic body. Returns the
    * actually-applied movement and whether the controller reports grounded.
    *
-   * Dynamic bodies (the ball) are no longer excluded, so the player body lightly
-   * contacts and pushes the ball as it walks/jumps into it.
+   * By default dynamic bodies (the ball) are included, so the player body lightly
+   * contacts and pushes the ball as it walks/jumps into it. On a Tele-Dash tick
+   * the whole movement (walk + blink) is swept with `excludeDynamic` so the blink
+   * passes the ball rather than shoving it.
    */
   movePlayer(
     dx: number,
     dy: number,
+    excludeDynamic = false,
   ): { movedX: number; movedY: number; grounded: boolean } {
-    this.controller.computeColliderMovement(this.playerCollider, {
-      x: dx,
-      y: dy,
-    });
+    const R = getRapier();
+    this.controller.computeColliderMovement(
+      this.playerCollider,
+      { x: dx, y: dy },
+      excludeDynamic ? R.QueryFilterFlags.EXCLUDE_DYNAMIC : undefined,
+    );
     const corrected = this.controller.computedMovement();
     const grounded = this.controller.computedGrounded();
     const t = this.player.translation();
@@ -93,18 +98,6 @@ export class RapierWorld {
       y: t.y + corrected.y,
     });
     return { movedX: corrected.x, movedY: corrected.y, grounded };
-  }
-
-  /**
-   * Teleport the player instantly by (dx, dy) world units (Tele-Dash blink). The
-   * kinematic body is moved through both its current and next translation so the
-   * jump is honored on the very next step without a collide-and-slide sweep.
-   */
-  teleportPlayer(dx: number, dy: number): void {
-    const t = this.player.translation();
-    const next = { x: t.x + dx, y: t.y + dy };
-    this.player.setTranslation(next, true);
-    this.player.setNextKinematicTranslation(next);
   }
 
   /** Apply an impulse (world units) to the ball, waking it. */
