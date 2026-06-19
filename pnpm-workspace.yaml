@@ -1,0 +1,7 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - phaser@4.2.0
