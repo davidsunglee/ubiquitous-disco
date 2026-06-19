@@ -15,6 +15,13 @@ import {
 } from "@bb/sim";
 import Phaser from "phaser";
 import { KeyboardAdapter } from "../input/KeyboardAdapter";
+import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
+import { attemptLandscapeLock } from "../orientation";
+import {
+  bellSubjectFromWorld,
+  GroupCamera,
+  subjectFromWorld,
+} from "../render/GroupCamera";
 import {
   lerp,
   PX_PER_UNIT,
@@ -22,11 +29,15 @@ import {
   toScreenY,
 } from "../render/worldToScreen";
 import { type HudBridge, hudBridge } from "./HudScene";
+import { OrientationOverlay } from "./OrientationOverlay";
 
 export class GameScene extends Phaser.Scene {
   private sim!: Simulation;
   private gfx!: Phaser.GameObjects.Graphics;
   private keyboard!: KeyboardAdapter;
+  private touch!: TouchAdapter;
+  private groupCamera!: GroupCamera;
+  private orientationOverlay!: OrientationOverlay;
   private accumulator = 0;
   private readonly FIXED_STEP = 1000 / DEFAULT_CONFIG.tickHz;
   private prev!: RenderState;
@@ -50,6 +61,9 @@ export class GameScene extends Phaser.Scene {
   private replayFrames: InputFrame[] | null = null;
   private replayFrameCursor = 0;
 
+  // ── Phase 6: static Bell screen positions ────────────────────────────────────
+  private bellSubjects!: Array<{ screenX: number; screenY: number }>;
+
   constructor() {
     super("GameScene");
   }
@@ -61,6 +75,32 @@ export class GameScene extends Phaser.Scene {
       throw new Error("Keyboard input plugin unavailable");
     }
     this.keyboard = new KeyboardAdapter(this.input.keyboard);
+
+    // Phase 6: touch adapter.
+    this.touch = new TouchAdapter(this);
+    this.touch.create();
+
+    // Phase 6: group-framing camera using the main camera.
+    this.groupCamera = new GroupCamera(this.cameras.main);
+
+    // Pre-compute static Bell screen positions (Bells don't move).
+    this.bellSubjects = FLAT_DOJO.bells.map((b) =>
+      bellSubjectFromWorld(b.hitZone.x, b.hitZone.y),
+    );
+
+    // Phase 6: orientation overlay — attempt landscape lock then show prompt
+    // in portrait.
+    attemptLandscapeLock();
+    this.orientationOverlay = new OrientationOverlay({
+      onPortrait: () => {
+        this.paused = true;
+      },
+      onLandscape: () => {
+        this.paused = false;
+      },
+    });
+    this.orientationOverlay.mount();
+
     const s = this.sim.getRenderState();
     this.prev = structuredClone(s);
     this.cur = structuredClone(s);
@@ -74,7 +114,9 @@ export class GameScene extends Phaser.Scene {
         fontStyle: "bold",
       })
       .setOrigin(0.5)
-      .setAlpha(0);
+      .setAlpha(0)
+      // Pin the banner to the viewport so zoom/scroll don't affect it.
+      .setScrollFactor(0);
 
     // Wire up the HUD bridge so HudScene can control us.
     this.wireHudBridge();
@@ -180,7 +222,10 @@ export class GameScene extends Phaser.Scene {
       this.replayFrameCursor = 0;
       console.info("[replay] playback complete");
     }
-    return this.keyboard.collect();
+    // Merge keyboard + touch: both active simultaneously is fine (OR/add).
+    const kbFrame = this.keyboard.collect();
+    const touchFrame = this.touch.collect();
+    return mergeInputFrames(kbFrame, touchFrame);
   }
 
   update(_time: number, delta: number): void {
@@ -222,6 +267,33 @@ export class GameScene extends Phaser.Scene {
     this.drawBall(alpha);
     this.drawPlayer(alpha);
     this.tickBellFeedback(delta);
+
+    // Phase 6: draw touch UI on top of game graphics (pinned layer).
+    this.touch.drawUI();
+
+    // Phase 6: update group camera after rendering to frame all subjects.
+    this.updateGroupCamera(alpha);
+  }
+
+  // ── Phase 6: group camera ────────────────────────────────────────────────────
+
+  private updateGroupCamera(alpha: number): void {
+    const s = this.cur;
+    const p = this.prev;
+
+    // Interpolated positions for smoother camera tracking.
+    const playerX = lerp(p.player.x, s.player.x, alpha);
+    const playerY = lerp(p.player.y, s.player.y, alpha);
+    const ballX = lerp(p.ball.x, s.ball.x, alpha);
+    const ballY = lerp(p.ball.y, s.ball.y, alpha);
+
+    const subjects = [
+      subjectFromWorld(playerX, playerY),
+      subjectFromWorld(ballX, ballY),
+      ...this.bellSubjects,
+    ];
+
+    this.groupCamera.update(subjects);
   }
 
   /**
@@ -352,5 +424,9 @@ export class GameScene extends Phaser.Scene {
     this.gfx
       .lineStyle(2 + t * 3, color, 0.35 + t * 0.5)
       .strokeCircle(cx, cy, ringR);
+  }
+
+  shutdown(): void {
+    this.orientationOverlay?.destroy();
   }
 }

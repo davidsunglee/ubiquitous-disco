@@ -57,6 +57,10 @@ export const FLAT_DOJO: ArenaDef = {
     { kind: "box", x: 12, y: 4, halfW: 0.5, halfH: 5 },
     // low overhang/ledge on the right side (underside at y = 3)
     { kind: "box", x: 8, y: 3.5, halfW: 2, halfH: 0.5 },
+    // ceiling: underside at y = 9, meeting the wall tops to close the box so a
+    // hard upward Strike can't loft the ball out over the walls (ball has CCD,
+    // so it can't tunnel through either)
+    { kind: "box", x: 0, y: 9.5, halfW: 12, halfH: 0.5 },
   ],
   bells: [
     // Left Bell: elevated near the left wall, defends the left side.
