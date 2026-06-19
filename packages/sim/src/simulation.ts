@@ -34,11 +34,76 @@ export type SimEvent = {
   tick: number;
 };
 
+// ── Debug collider shapes (world units — no Phaser pixels) ───────────────────
+
+export interface DebugBox {
+  kind: "box";
+  label: string; // human-readable name for the overlay
+  x: number; // centre X (world units)
+  y: number; // centre Y (world units, Y-up)
+  halfW: number;
+  halfH: number;
+}
+
+export interface DebugCircle {
+  kind: "circle";
+  label: string;
+  x: number;
+  y: number;
+  radius: number;
+}
+
+export type DebugCollider = DebugBox | DebugCircle;
+
+// ── Opaque snapshot type for save/restore ────────────────────────────────────
+
+export interface SimSnapshot {
+  rapierBytes: Uint8Array;
+  actor: Actor;
+  bellRingArmed: boolean[];
+  tick: number;
+}
+
 export interface Simulation {
   step(input: InputFrame): void;
   getRenderState(): RenderState;
   drainEvents(): SimEvent[];
   hashState(): string;
+
+  /**
+   * Return all physics/scoring shapes in world units so the debug overlay can
+   * draw them without knowing about Rapier or pixel conversion. Includes:
+   *  - arena collider boxes
+   *  - player bounding box (current position)
+   *  - ball circle (current position)
+   *  - Bell art boxes
+   *  - Bell hit-zone circles
+   */
+  getDebugColliders(): DebugCollider[];
+
+  /**
+   * Capture the full simulation state into an opaque snapshot that can be
+   * passed back to restoreSnapshot() to rewind to this exact moment.
+   * Exposed for tooling (single-step, rewind) — not part of the gameplay path.
+   */
+  takeSnapshot(): SimSnapshot;
+
+  /**
+   * Restore a previously taken snapshot, rewinding the sim to that state.
+   * The pending event queue is cleared; tick is restored from the snapshot.
+   */
+  restoreSnapshot(snap: SimSnapshot): void;
+
+  /**
+   * Update one or more SimConfig fields at runtime (for HUD slider tuning).
+   * Only the supplied fields are changed; the rest of the config is unchanged.
+   * Note: fields that affect Rapier world construction (gravity, tickHz, body
+   * sizes) cannot be mutated on a live world; only the JS-side knobs
+   * (movement speeds, dash, strike parameters, ball speed clamp, etc.) are
+   * live-tunable. Attempting to change physics-construction fields is silently
+   * ignored in this implementation.
+   */
+  updateConfig(patch: Partial<SimConfig>): void;
 }
 
 export function createSimulation(opts: {
@@ -46,16 +111,19 @@ export function createSimulation(opts: {
   arena: ArenaDef;
   seed: number;
 }): Simulation {
-  const { config, arena } = opts;
+  // Work on a mutable copy so updateConfig() can mutate freely without
+  // touching the caller's original DEFAULT_CONFIG object.
+  let config: SimConfig = { ...opts.config };
+  const { arena } = opts;
   const rw = new RapierWorld(config, arena);
-  const actor: Actor = createActor(1);
+  let actor: Actor = createActor(1);
   // seed reserved for Phase 3+ seeded RNG; deterministic w/o RNG this phase.
 
   // Authoritative tick counter (incremented per step) and the drainable event
   // queue. The Bell Ring debounce state persists across ticks and is hashed.
   let tick = 0;
   const events: SimEvent[] = [];
-  const bellRing: BellRingState = createBellRingState(arena);
+  let bellRing: BellRingState = createBellRingState(arena);
 
   return {
     step(input) {
@@ -114,6 +182,99 @@ export function createSimulation(opts: {
         serializeActor(actor),
         serializeBellRingState(bellRing),
       );
+    },
+
+    getDebugColliders(): DebugCollider[] {
+      const shapes: DebugCollider[] = [];
+
+      // Arena collider boxes.
+      for (let i = 0; i < arena.colliders.length; i++) {
+        const c = arena.colliders[i];
+        if (!c) continue;
+        shapes.push({
+          kind: "box",
+          label: `arena[${i}]`,
+          x: c.x,
+          y: c.y,
+          halfW: c.halfW,
+          halfH: c.halfH,
+        });
+      }
+
+      // Player bounding box at current world position.
+      const pp = rw.playerPos();
+      shapes.push({
+        kind: "box",
+        label: "player",
+        x: pp.x,
+        y: pp.y,
+        halfW: config.player.halfW,
+        halfH: config.player.halfH,
+      });
+
+      // Ball circle at current world position.
+      const bp = rw.ballPos();
+      shapes.push({
+        kind: "circle",
+        label: "ball",
+        x: bp.x,
+        y: bp.y,
+        radius: config.ball.radius,
+      });
+
+      // Bell art boxes + hit-zone circles.
+      for (const bell of arena.bells) {
+        // Art box.
+        shapes.push({
+          kind: "box",
+          label: `bell-${bell.id}-art`,
+          x: bell.art.x,
+          y: bell.art.y,
+          halfW: bell.art.halfW,
+          halfH: bell.art.halfH,
+        });
+        // Hit-zone circle (separate from art — this is what scores).
+        shapes.push({
+          kind: "circle",
+          label: `bell-${bell.id}-hitzone`,
+          x: bell.hitZone.x,
+          y: bell.hitZone.y,
+          radius: bell.hitZone.radius,
+        });
+      }
+
+      return shapes;
+    },
+
+    takeSnapshot(): SimSnapshot {
+      return {
+        rapierBytes: rw.takeSnapshot(),
+        // Deep-copy the actor so the snapshot is independent of future mutations.
+        actor: { ...actor },
+        bellRingArmed: [...bellRing.armed],
+        tick,
+      };
+    },
+
+    restoreSnapshot(snap: SimSnapshot): void {
+      // Restore Rapier world state.
+      rw.restoreSnapshot(snap.rapierBytes);
+      // Restore JS-side actor.
+      actor = { ...snap.actor };
+      // Restore Bell Ring debounce state.
+      bellRing = { armed: [...snap.bellRingArmed] };
+      // Restore tick counter.
+      tick = snap.tick;
+      // Clear any pending events that were queued after the snapshot was taken.
+      events.splice(0, events.length);
+    },
+
+    updateConfig(patch: Partial<SimConfig>): void {
+      // Merge the patch into the mutable config copy. Only JS-side fields
+      // (movement, dash, strike, ball speed/damping etc.) take effect immediately.
+      // Physics-construction fields (gravity, tickHz, body sizes) are silently
+      // ignored because they would require re-building the Rapier world.
+      config = { ...config, ...patch };
     },
   };
 }

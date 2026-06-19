@@ -25,5 +25,21 @@ export {
   normalizeMove,
 } from "./input";
 export { initSim } from "./rapier";
-export type { RenderState, SimEvent, Simulation } from "./simulation";
+export type { ReplayData } from "./replay";
+export {
+  createReplay,
+  deserializeReplay,
+  playReplay,
+  recordFrame,
+  serializeReplay,
+} from "./replay";
+export type {
+  DebugBox,
+  DebugCircle,
+  DebugCollider,
+  RenderState,
+  SimEvent,
+  SimSnapshot,
+  Simulation,
+} from "./simulation";
 export { createSimulation } from "./simulation";
