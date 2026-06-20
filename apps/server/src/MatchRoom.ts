@@ -1,4 +1,9 @@
-import type { PlayerInput, Slot, WorldSnapshot } from "@bb/protocol";
+import type {
+  MatchClosed,
+  PlayerInput,
+  Slot,
+  WorldSnapshot,
+} from "@bb/protocol";
 import {
   createSimulation,
   DEFAULT_CONFIG,
@@ -20,6 +25,8 @@ export class MatchRoom extends Room {
   // matters (it avoids an orphaned 60Hz clock.tick() interval).
 
   private slotOf = new Map<string, Slot>();
+  /** Set to true once disconnect() has been called so double-dispose is avoided. */
+  private roomDisposed = false;
 
   // Authoritative sim + buffers (initialised in onCreate after initSim() is awaited)
   private sim!: ReturnType<typeof createSimulation>;
@@ -126,6 +133,17 @@ export class MatchRoom extends Room {
 
   onLeave(client: Client): void {
     this.slotOf.delete(client.sessionId);
+    if (this.roomDisposed) return; // Already shutting down — avoid double-dispose.
+    this.roomDisposed = true;
+    // Fail-closed: any disconnect ends the match. Broadcast MatchClosed to all
+    // remaining clients so they show the fail-closed banner. No reconnect.
+    const msg: MatchClosed = {
+      type: "MatchClosed",
+      reason: "peer-left",
+    };
+    this.broadcast("MatchClosed", msg);
+    // Dispose the room — this disconnects any remaining clients.
+    void this.disconnect();
   }
 
   slot(client: Client): Slot {
@@ -155,6 +173,11 @@ export class MatchRoom extends Room {
   /** Expose sim for testing. */
   get simulation() {
     return this.sim;
+  }
+
+  /** True once disconnect() has been called (fail-closed path). For testing. */
+  get isDisposed(): boolean {
+    return this.roomDisposed;
   }
 }
 

@@ -2,16 +2,22 @@ import { EMPTY_INPUT } from "@bb/sim";
 import { expect, test } from "vitest";
 import {
   deserializeInputAck,
+  deserializeMatchClosed,
   deserializePlayerInput,
   deserializeRoomReady,
+  deserializeTelemetry,
   deserializeWorldSnapshot,
   type InputAck,
+  type MatchClosed,
   type PlayerInput,
   type RoomReady,
   serializeInputAck,
+  serializeMatchClosed,
   serializePlayerInput,
   serializeRoomReady,
+  serializeTelemetry,
   serializeWorldSnapshot,
+  type Telemetry,
   type WorldSnapshot,
 } from "../index";
 
@@ -135,4 +141,42 @@ test("WorldSnapshot round-trips with all match phases", () => {
       deserializeWorldSnapshot(serializeWorldSnapshot(m)).match.phase,
     ).toBe(phase);
   }
+});
+
+// ── MatchClosed ───────────────────────────────────────────────────────────────
+
+test("MatchClosed round-trips (peer-left)", () => {
+  const m: MatchClosed = { type: "MatchClosed", reason: "peer-left" };
+  expect(deserializeMatchClosed(serializeMatchClosed(m))).toEqual(m);
+});
+
+test("MatchClosed round-trips (server-shutdown)", () => {
+  const m: MatchClosed = { type: "MatchClosed", reason: "server-shutdown" };
+  expect(deserializeMatchClosed(serializeMatchClosed(m))).toEqual(m);
+});
+
+test("MatchClosed preserves reason after round-trip", () => {
+  const m: MatchClosed = { type: "MatchClosed", reason: "peer-left" };
+  const decoded = deserializeMatchClosed(serializeMatchClosed(m));
+  expect(decoded.reason).toBe("peer-left");
+  expect(decoded.type).toBe("MatchClosed");
+});
+
+// ── Telemetry ─────────────────────────────────────────────────────────────────
+
+test("Telemetry round-trips (typical values)", () => {
+  const m: Telemetry = { type: "Telemetry", rtt: 42, ackLag: 3 };
+  expect(deserializeTelemetry(serializeTelemetry(m))).toEqual(m);
+});
+
+test("Telemetry round-trips (zero values)", () => {
+  const m: Telemetry = { type: "Telemetry", rtt: 0, ackLag: 0 };
+  expect(deserializeTelemetry(serializeTelemetry(m))).toEqual(m);
+});
+
+test("Telemetry round-trips (high latency)", () => {
+  const m: Telemetry = { type: "Telemetry", rtt: 500, ackLag: 15 };
+  const decoded = deserializeTelemetry(serializeTelemetry(m));
+  expect(decoded.rtt).toBe(500);
+  expect(decoded.ackLag).toBe(15);
 });

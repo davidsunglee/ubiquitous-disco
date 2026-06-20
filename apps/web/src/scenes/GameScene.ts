@@ -102,8 +102,16 @@ export class GameScene extends Phaser.Scene {
    * phantom local match behind the connection panel.
    */
   private awaitingOpponent = false;
+  /**
+   * Phase 5: set when the match ends fail-closed (peer disconnect / server
+   * shutdown). Input is frozen and the fail-closed banner is shown.
+   */
+  private matchFailClosed = false;
   /** Phase 4: dev network simulator (dev-only). */
   private simTransport: SimulatedTransport | null = null;
+
+  /** Phase 5: telemetry interval handle (clearInterval on shutdown). */
+  private telemetryTimer: ReturnType<typeof setInterval> | null = null;
 
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
   // hudOverlay is sized/positioned to exactly overlay the (scaled, centered)
@@ -382,6 +390,7 @@ export class GameScene extends Phaser.Scene {
           this.cur = cur;
         },
         onMatchState: (m) => {
+          // Networked HUD is driven by authoritative MatchState from snapshots.
           this.updateMatchHud(m);
         },
         onDisconnect: () => {
@@ -392,6 +401,54 @@ export class GameScene extends Phaser.Scene {
     );
     this.netLoop.start();
     console.info(`[net] NetLoop started (slot ${slot})`);
+
+    // Phase 5: fail-closed — stop the net loop and show the banner on any
+    // peer disconnect, server shutdown, or WebSocket error.
+    this.netClient.onFailClosed((reason) => {
+      console.info(`[net] fail-closed: ${reason}`);
+      // Stop the net loop so no more predicted ticks or sends happen.
+      this.netLoop = null;
+      // Freeze the scene so stray input can't interact with the frozen state.
+      this.matchFailClosed = true;
+      // Show the fail-closed banner and update the status badge.
+      this.connectionOverlay.showFailClosed(reason);
+    });
+
+    // Phase 5: periodic RTT telemetry (every 2 seconds).
+    this.startTelemetry();
+  }
+
+  // ── Phase 5: telemetry ───────────────────────────────────────────────────────
+
+  /**
+   * Start a periodic RTT telemetry sample. Fires every 2 seconds while the
+   * match is live (netLoop not null). Stops automatically on fail-closed
+   * (netLoop becomes null). Shows the telemetry readout in the overlay.
+   */
+  private startTelemetry(): void {
+    if (this.telemetryTimer !== null) return; // already running
+    this.connectionOverlay.updateTelemetry(0); // show the element with initial value
+    this.telemetryTimer = setInterval(() => {
+      if (this.netLoop === null) {
+        // Match ended — hide telemetry and stop sampling.
+        this.connectionOverlay.updateTelemetry(null);
+        if (this.telemetryTimer !== null) {
+          clearInterval(this.telemetryTimer);
+          this.telemetryTimer = null;
+        }
+        return;
+      }
+      // Sample RTT from the Colyseus room. ping() is fire-and-forget;
+      // the callback updates the overlay with the measured value.
+      this.netClient
+        .ping()
+        .then((rtt) => {
+          this.connectionOverlay.updateTelemetry(rtt);
+        })
+        .catch(() => {
+          // Ignore ping errors (room may have closed between the call and reply).
+        });
+    }, 2000);
   }
 
   // ── Sim lifecycle ────────────────────────────────────────────────────────────
@@ -547,6 +604,20 @@ export class GameScene extends Phaser.Scene {
     // current frame but don't step the sim or collect input, so the connection
     // panel's "waiting for opponent" message is the only thing in play.
     if (this.awaitingOpponent) {
+      this.gfx.clear();
+      this.drawArena();
+      this.drawBells();
+      this.drawBall(1);
+      this.drawPlayers(1);
+      this.touch.drawUI();
+      this.updateGroupCamera(1);
+      return;
+    }
+
+    // ── Fail-closed: freeze the scene as a static background ─────────────────
+    // The match ended via peer disconnect or server shutdown. Render the last
+    // known frame but accept no input — the fail-closed banner covers the scene.
+    if (this.matchFailClosed) {
       this.gfx.clear();
       this.drawArena();
       this.drawBells();
@@ -831,5 +902,10 @@ export class GameScene extends Phaser.Scene {
     this.connectionOverlay?.destroy();
     // Removing the overlay removes all match HUD nodes (its children) with it.
     this.hudOverlay?.remove();
+    // Phase 5: stop telemetry timer if running.
+    if (this.telemetryTimer !== null) {
+      clearInterval(this.telemetryTimer);
+      this.telemetryTimer = null;
+    }
   }
 }

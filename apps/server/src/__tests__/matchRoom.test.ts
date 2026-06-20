@@ -33,12 +33,55 @@ function makeClient(sessionId: string) {
 
 function makeRoom() {
   const room = new MatchRoom();
+
   // Patch clients array so onJoin's broadcast loop can find them.
-  (room as unknown as { clients: unknown[] }).clients = [];
+  const clients: Array<ReturnType<typeof makeClient>> = [];
+  (room as unknown as { clients: unknown[] }).clients = clients;
+
+  // Intercept broadcast() calls to capture messages for testing.
+  // Colyseus's real broadcast goes through enqueueRaw, but in unit tests we
+  // don't have a real transport. Patch the method to record calls and forward
+  // to all stub client send() methods.
+  const broadcastMessages: Array<{ type: string; payload: unknown }> = [];
+  (
+    room as unknown as {
+      broadcast: (type: string, payload: unknown) => void;
+    }
+  ).broadcast = (type: string, payload: unknown) => {
+    broadcastMessages.push({ type, payload });
+    for (const c of clients) {
+      c.send(type, payload);
+    }
+  };
+
+  // Patch disconnect() so it doesn't throw in the unit-test environment
+  // (no real Colyseus transport running).
+  let disconnectCalled = false;
+  (room as unknown as { disconnect: () => Promise<void> }).disconnect = () => {
+    disconnectCalled = true;
+    return Promise.resolve();
+  };
+
   // Call onCreate to initialise the sim and buffers (sim is no longer a class
   // field initialiser — it's constructed inside onCreate after initSim()).
   room.onCreate();
-  return room;
+
+  // Attach test helpers as live properties (getters must be defined with
+  // Object.defineProperty since Object.assign evaluates getters eagerly).
+  const extended = room as typeof room & {
+    broadcastMessages: typeof broadcastMessages;
+    readonly disconnectCalled: boolean;
+  };
+  Object.defineProperty(extended, "broadcastMessages", {
+    get: () => broadcastMessages,
+    enumerable: true,
+  });
+  Object.defineProperty(extended, "disconnectCalled", {
+    get: () => disconnectCalled,
+    enumerable: true,
+  });
+
+  return extended;
 }
 
 function f(partial: Partial<InputFrame>): InputFrame {
@@ -319,4 +362,92 @@ test("snapshot broadcast: rapierBytesB64 round-trips to valid Uint8Array", () =>
       });
     },
   );
+});
+
+// ── Phase 5: fail-closed disconnect ──────────────────────────────────────────
+
+test("onLeave: broadcasts MatchClosed to remaining clients", () => {
+  const room = makeRoom();
+  const clientA = makeClient("session-a");
+  const clientB = makeClient("session-b");
+  // Register both clients in the room's clients array.
+  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+
+  room.onJoin(clientA as never);
+  room.onJoin(clientB as never);
+
+  // A leaves (unexpected disconnect / consented leave).
+  room.onLeave(clientA as never);
+
+  // The room should have broadcast a MatchClosed message.
+  const closed = room.broadcastMessages.find((m) => m.type === "MatchClosed");
+  expect(closed).toBeDefined();
+  expect((closed?.payload as { type: string; reason: string }).reason).toBe(
+    "peer-left",
+  );
+});
+
+test("onLeave: remaining client receives MatchClosed", () => {
+  const room = makeRoom();
+  const clientA = makeClient("session-a");
+  const clientB = makeClient("session-b");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+
+  room.onJoin(clientA as never);
+  room.onJoin(clientB as never);
+
+  // A leaves — B should receive MatchClosed via the broadcast stub.
+  room.onLeave(clientA as never);
+
+  const bClosed = clientB.messages.find((m) => m.type === "MatchClosed");
+  expect(bClosed).toBeDefined();
+  expect((bClosed?.payload as { type: string; reason: string }).type).toBe(
+    "MatchClosed",
+  );
+});
+
+test("onLeave: room disposes (disconnect called)", () => {
+  const room = makeRoom();
+  const clientA = makeClient("session-a");
+  const clientB = makeClient("session-b");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+
+  room.onJoin(clientA as never);
+  room.onJoin(clientB as never);
+
+  expect(room.disconnectCalled).toBe(false);
+  room.onLeave(clientA as never);
+  expect(room.disconnectCalled).toBe(true);
+});
+
+test("onLeave: double-leave does not double-broadcast or double-disconnect", () => {
+  const room = makeRoom();
+  const clientA = makeClient("session-a");
+  const clientB = makeClient("session-b");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+
+  room.onJoin(clientA as never);
+  room.onJoin(clientB as never);
+
+  // A leaves, then B also triggers onLeave (server dispose calls back).
+  room.onLeave(clientA as never);
+  room.onLeave(clientB as never);
+
+  // MatchClosed should only be broadcast once (roomDisposed guard).
+  const closedCount = room.broadcastMessages.filter(
+    (m) => m.type === "MatchClosed",
+  ).length;
+  expect(closedCount).toBe(1);
+});
+
+test("onLeave: isDisposed is true after first leave", () => {
+  const room = makeRoom();
+  const clientA = makeClient("session-a");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA);
+
+  room.onJoin(clientA as never);
+
+  expect(room.isDisposed).toBe(false);
+  room.onLeave(clientA as never);
+  expect(room.isDisposed).toBe(true);
 });

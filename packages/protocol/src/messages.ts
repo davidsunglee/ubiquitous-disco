@@ -82,8 +82,38 @@ export interface WorldSnapshot {
   lastAckedSeq: [number, number];
 }
 
+// ── Disconnect + telemetry messages (Phase 5) ────────────────────────────────
+
+/**
+ * Server → Client: the match has ended due to a peer disconnect or server
+ * shutdown. Clients should show a fail-closed banner and stop accepting input.
+ * No reconnect is supported — disconnect means match over.
+ */
+export interface MatchClosed {
+  type: "MatchClosed";
+  reason: "peer-left" | "server-shutdown";
+}
+
+/**
+ * Server → Client (optional): basic telemetry sampled from the server's
+ * perspective. Clients may also derive RTT from `room.ping()`.
+ */
+export interface Telemetry {
+  type: "Telemetry";
+  /** Round-trip time in milliseconds (from room.ping()). */
+  rtt: number;
+  /** Difference between current server seq and last acked seq for this client. */
+  ackLag: number;
+}
+
 // grows in later phases
-export type ServerMessage = RoomReady | RoomErrorMsg | InputAck | WorldSnapshot;
+export type ServerMessage =
+  | RoomReady
+  | RoomErrorMsg
+  | InputAck
+  | WorldSnapshot
+  | MatchClosed
+  | Telemetry;
 export type ClientMessage = PlayerInput;
 
 // ── (De)serializers ───────────────────────────────────────────────────────────
@@ -105,3 +135,12 @@ export const serializeWorldSnapshot = (m: WorldSnapshot): string =>
   JSON.stringify(m);
 export const deserializeWorldSnapshot = (s: string): WorldSnapshot =>
   JSON.parse(s) as WorldSnapshot;
+
+export const serializeMatchClosed = (m: MatchClosed): string =>
+  JSON.stringify(m);
+export const deserializeMatchClosed = (s: string): MatchClosed =>
+  JSON.parse(s) as MatchClosed;
+
+export const serializeTelemetry = (m: Telemetry): string => JSON.stringify(m);
+export const deserializeTelemetry = (s: string): Telemetry =>
+  JSON.parse(s) as Telemetry;

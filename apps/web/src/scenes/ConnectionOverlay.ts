@@ -4,12 +4,17 @@
  * Sits inside #game-container and tracks the canvas position/size each frame
  * (same pattern as GameScene.updateMatchHud). Provides data-testid hooks for
  * Playwright tests.
+ *
+ * Phase 5 additions:
+ *  - Fail-closed banner (`data-testid="net-closed"`) shown when the match ends
+ *    due to a peer disconnect or server shutdown.
+ *  - Optional telemetry readout (`data-testid="net-telemetry"`) showing RTT.
  */
 
-import type { Slot } from "@bb/protocol";
+import type { MatchClosed, Slot } from "@bb/protocol";
 import type { NetClient } from "../net/NetClient";
 
-type Status = "idle" | "connecting" | "connected" | "error";
+type Status = "idle" | "connecting" | "connected" | "error" | "closed";
 
 export class ConnectionOverlay {
   private root!: HTMLElement;
@@ -20,6 +25,10 @@ export class ConnectionOverlay {
   private joinBtn!: HTMLButtonElement;
   private roomIdEl!: HTMLElement;
   private hintEl!: HTMLElement;
+  /** Fail-closed banner (Phase 5). Hidden until the match is closed. */
+  private closedBannerEl!: HTMLElement;
+  /** Telemetry readout (Phase 5). Hidden until a match is live. */
+  private telemetryEl!: HTMLElement;
 
   private status: Status = "idle";
   private net: NetClient | null = null;
@@ -95,6 +104,30 @@ export class ConnectionOverlay {
     this.hintEl = document.createElement("div");
     this.hintEl.style.cssText = "color:#aaa;font-size:11px;min-height:14px;";
     panel.appendChild(this.hintEl);
+
+    // ── Fail-closed banner (Phase 5) ─────────────────────────────────────────
+    // Shown (centred, full-width) when the match ends due to a disconnect.
+    // Hidden by default; shown via showFailClosed().
+    this.closedBannerEl = document.createElement("div");
+    this.closedBannerEl.dataset.testid = "net-closed";
+    this.closedBannerEl.style.cssText =
+      "display:none;position:absolute;top:50%;left:50%;" +
+      "transform:translate(-50%,-50%);" +
+      "background:rgba(0,0,0,0.82);border:2px solid #ff5555;border-radius:8px;" +
+      "padding:20px 32px;color:#ff5555;font-size:20px;font-weight:bold;" +
+      "text-align:center;pointer-events:none;z-index:200;";
+    this.closedBannerEl.textContent = "Match Over — Opponent Left";
+    this.root.appendChild(this.closedBannerEl);
+
+    // ── Telemetry readout (Phase 5) ───────────────────────────────────────────
+    // Shows RTT in the corner during an active match. Hidden by default.
+    this.telemetryEl = document.createElement("div");
+    this.telemetryEl.dataset.testid = "net-telemetry";
+    this.telemetryEl.style.cssText =
+      "display:none;position:absolute;bottom:8px;right:8px;" +
+      "background:rgba(0,0,0,0.5);border-radius:4px;padding:2px 8px;" +
+      "color:#88cc88;font-size:11px;pointer-events:none;";
+    this.root.appendChild(this.telemetryEl);
 
     parent.appendChild(this.root);
   }
@@ -224,6 +257,7 @@ export class ConnectionOverlay {
       connecting: "connecting…",
       connected: "connected",
       error: "error",
+      closed: "match over",
     };
     this.updateBadge(labels[s]);
   }
@@ -235,9 +269,47 @@ export class ConnectionOverlay {
       "connecting…": "#ffcc44",
       disconnected: "#aaaaaa",
       error: "#ff5555",
+      "match over": "#ff5555",
     };
     const baseText = text.startsWith("connected") ? "connected" : text;
     this.statusEl.style.color = colors[baseText] ?? "#aaaaaa";
+  }
+
+  /**
+   * Show the fail-closed banner and update the status badge.
+   * Called by GameScene when a MatchClosed signal is received.
+   *
+   * @param reason  The reason string from MatchClosed or "ws-error".
+   */
+  showFailClosed(reason: MatchClosed["reason"] | "ws-error"): void {
+    this.setStatus("closed");
+    const messages: Record<string, string> = {
+      "peer-left": "Match Over — Opponent Left",
+      "server-shutdown": "Match Over — Server Shutdown",
+      "ws-error": "Match Over — Connection Lost",
+    };
+    this.closedBannerEl.textContent =
+      messages[reason] ?? "Match Over — Connection Lost";
+    this.closedBannerEl.style.display = "block";
+    // Show the telemetry element if it was visible (keeps the readout).
+    // Hide the panel so the banner stands alone.
+    this.hidePanel();
+  }
+
+  /**
+   * Update the telemetry readout. Pass null to hide the element.
+   *
+   * @param rtt     Round-trip time in ms (from room.ping()).
+   * @param ackLag  Unacked input lag (pending queue depth).
+   */
+  updateTelemetry(rtt: number | null, ackLag?: number): void {
+    if (rtt === null) {
+      this.telemetryEl.style.display = "none";
+      return;
+    }
+    this.telemetryEl.style.display = "block";
+    const lagStr = ackLag !== undefined ? ` lag:${ackLag}` : "";
+    this.telemetryEl.textContent = `RTT:${rtt}ms${lagStr}`;
   }
 
   get currentStatus(): Status {
