@@ -20,6 +20,8 @@ export interface StrikeConfig {
   maxImpulse: number; // impulse magnitude at full charge
   upwardBias: number; // baseline +Y added to the strike direction (the "pop")
   reach: number; // max distance (world units) from player to ball to connect
+  headerUpwardBias: number; // extra +Y for an airborne neutral/up header
+  spikeMultiplier: number; // multiplies magnitude for a downward spike
 }
 
 export interface BallConfig {
@@ -93,6 +95,8 @@ export const DEFAULT_CONFIG: SimConfig = {
     maxImpulse: 16,
     upwardBias: 0.5,
     reach: 2,
+    headerUpwardBias: 1.2,
+    spikeMultiplier: 1.6,
   },
   match: {
     lengthTicks: 5400, // 3:00 @ 30 Hz

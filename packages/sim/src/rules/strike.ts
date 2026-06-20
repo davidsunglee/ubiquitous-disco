@@ -59,7 +59,7 @@ export function stepStrike(
 
   const player = world.playerPos(slot);
 
-  // ── Ball connection (unchanged geometry/impulse) ──
+  // ── Ball connection ──
   const ball = world.ballPos();
   const bdx = ball.x - player.x;
   const bdy = ball.y - player.y;
@@ -67,13 +67,24 @@ export function stepStrike(
     // Charge fraction in [0, 1] across the configured charge window.
     const span = Math.max(1, s.maxChargeTicks - s.minChargeTicks);
     const t = Math.min(1, Math.max(0, (chargeTicks - s.minChargeTicks) / span));
-    const magnitude = s.minImpulse + (s.maxImpulse - s.minImpulse) * t;
+    let magnitude = s.minImpulse + (s.maxImpulse - s.minImpulse) * t;
 
     // Direction shaping: horizontal from move intent (fall back to facing), and an
     // always-present upward bias so a neutral Strike pops the ball up.
     let shapeX = input.moveX;
     if (shapeX === 0 && input.moveY === 0) shapeX = actor.facing;
-    const shapeY = input.moveY + s.upwardBias;
+    let shapeY = input.moveY + s.upwardBias;
+
+    if (!actor.grounded) {
+      if (input.moveY < 0) {
+        // Spike: strong downward redirect — cancel the grounded upward pop, drive down.
+        shapeY = input.moveY - s.upwardBias;
+        magnitude *= s.spikeMultiplier;
+      } else {
+        // Header / air-redirect: preserve horizontal intent, add extra lift.
+        shapeY = input.moveY + s.headerUpwardBias;
+      }
+    }
 
     const len = Math.hypot(shapeX, shapeY) || 1;
     const nx = shapeX / len;
