@@ -168,6 +168,23 @@ export interface Simulation {
   }): void;
 
   /**
+   * Teleport the non-owned (remote) player slot to the given interpolated
+   * position so that local ball↔remote collisions during prediction/replay
+   * use a realistic remote position (Q4 / Phase 3).
+   *
+   * Only updates the Rapier body position and (optionally) the actor facing
+   * field — all other actor JS state is left unchanged. This is the hook
+   * called each predicted/replayed tick to feed the interpolation buffer
+   * position into the live sim without stepping the remote player's input.
+   */
+  setSlotKinematicPosition(
+    slot: number,
+    x: number,
+    y: number,
+    facing?: 1 | -1,
+  ): void;
+
+  /**
    * Apply a full authoritative state from the server.
    *
    * Ball path (Phase-0 Decision 0b): calls rw.restoreSnapshot(s.rapierBytes)
@@ -497,6 +514,19 @@ export function createSimulation(opts: {
       }
       rw.setBallPosition(state.ball.x, state.ball.y);
       rw.setBallVel(state.ball.vx, state.ball.vy);
+    },
+
+    setSlotKinematicPosition(
+      slot: number,
+      x: number,
+      y: number,
+      facing?: 1 | -1,
+    ): void {
+      rw.setPlayerPosition(slot, x, y);
+      const a = actors[slot];
+      if (a && facing !== undefined) {
+        a.facing = facing;
+      }
     },
 
     applyAuthoritativeState(s: AuthoritativeState): void {

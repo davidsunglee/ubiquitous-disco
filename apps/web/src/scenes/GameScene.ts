@@ -404,7 +404,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
-    // ── Phase 2: networked mode — drive NetLoop, render from snapshots ────────
+    // ── Phase 3: networked mode — predicted loop + reconciliation ─────────────
     if (this.netLoop !== null) {
       // Collect local player input. Unlike hotseat (two keymaps on one
       // keyboard), each networked client controls only its own player on its
@@ -425,11 +425,52 @@ export class GameScene extends Phaser.Scene {
         return mergeInputFrames(this.kbNet.collect(), this.touch.collect());
       };
 
+      // Advance the predicted loop (prediction + sends). NetLoop updates
+      // this.prev/this.cur via onRenderState callback.
       this.netLoop.tick(delta, collectLocal);
 
-      // Render uses whatever prev/cur the NetLoop last pushed via onRenderState.
-      // Use alpha=0 in Phase 2 (snap to latest; Phase 3 adds interpolation).
+      // Phase 3: use predicted render state with smooth interpolation.
       const alpha = this.netLoop.renderAlpha;
+
+      // Override the remote player's render position from the interpolation
+      // buffer so it moves smoothly independent of the prediction sim.
+      // We do this by patching prev/cur just before drawing.
+      const remoteSample = this.netLoop.sampleRemoteRender();
+      if (remoteSample !== null) {
+        const remoteSlot = localSlot === 0 ? 1 : 0;
+        // Patch the current render state for the remote slot.
+        if (this.cur.players[remoteSlot]) {
+          this.cur = {
+            ...this.cur,
+            players: this.cur.players.map((p, s) =>
+              s === remoteSlot && p
+                ? {
+                    ...p,
+                    x: remoteSample.x,
+                    y: remoteSample.y,
+                    facing: remoteSample.facing,
+                  }
+                : p,
+            ),
+          };
+        }
+        // Also patch prev so lerp doesn't jump from wrong prev position.
+        if (this.prev.players[remoteSlot]) {
+          this.prev = {
+            ...this.prev,
+            players: this.prev.players.map((p, s) =>
+              s === remoteSlot && p
+                ? {
+                    ...p,
+                    x: remoteSample.x,
+                    y: remoteSample.y,
+                    facing: remoteSample.facing,
+                  }
+                : p,
+            ),
+          };
+        }
+      }
 
       this.gfx.clear();
       this.drawArena();

@@ -1,31 +1,51 @@
 /**
- * NetLoop — Phase 2: naive (un-predicted) authoritative client.
+ * NetLoop — Phase 3: predicted client loop with reconciliation.
  *
  * Each fixed tick:
  *  1. Collects the local slot's InputFrame.
- *  2. Pushes it to pendingInputs with a monotonic seq.
- *  3. Sends PlayerInput { frames: [current + last 3 unacked] } to the server.
+ *  2. Pushes it to pendingInputs (seq + tick) for reconciliation.
+ *  3. Sends PlayerInput { frames: [current + last 3 unacked] } to server.
+ *  4. Sets the remote slot's Rapier body from the interpolation buffer
+ *     (Q4: drives remote at current serverTick - INTERP_DELAY_TICKS).
+ *  5. Steps the local prediction sim with [localInput, EMPTY_INPUT].
+ *  6. Updates prev/cur from the predicted sim for lerp rendering.
+ *  7. Drains predicted sim events for immediate local feedback.
  *
  * On WorldSnapshot:
- *  - Restores the Rapier world via rapierBytesB64 decode → restoreSnapshot().
- *  - Writes actor JS fields for each player from the snapshot.
- *  - Renders directly from the authoritative snapshot (no prediction yet).
- *  - Trims the pending-input queue using lastAckedSeq.
+ *  - Pushes the remote player's authoritative pose into InterpolationBuffer.
+ *  - Calls Reconciler.reconcile(snap):
+ *      a) applyAuthoritativeState (rapierBytes restore path — 0b).
+ *      b) discard acked pending inputs.
+ *      c) replay remaining unacked, feeding historical remote positions (0d).
+ *      d) smooth small / snap large corrections.
+ *  - Reconciler's onCorrectedState callback updates prev/cur.
  *
- * Phase 3 will add local prediction + reconciliation on top of this base.
+ * The render loop in GameScene uses prev/cur + alpha for the local predicted
+ * render, and samples the InterpolationBuffer for the remote player render
+ * (at serverTick - INTERP_DELAY_TICKS).
  */
 
 import type { PlayerInput, SeqInput, Slot, WorldSnapshot } from "@bb/protocol";
-import type { InputFrame, MatchState, RenderState } from "@bb/sim";
-import { createSimulation, DEFAULT_CONFIG, FLAT_DOJO, initSim } from "@bb/sim";
-import { FIXED_STEP_MS } from "./config";
+import {
+  createSimulation,
+  DEFAULT_CONFIG,
+  EMPTY_INPUT,
+  FLAT_DOJO,
+  type InputFrame,
+  initSim,
+  type MatchState,
+  type RenderState,
+} from "@bb/sim";
+import { FIXED_STEP_MS, INTERP_DELAY_TICKS } from "./config";
+import { InterpolationBuffer } from "./InterpolationBuffer";
 import type { NetClient } from "./NetClient";
+import { type PendingInput, Reconciler } from "./Reconciler";
 
 // Max unacked tail frames to send for reliability.
 const MAX_REDUNDANT = 3;
 
 export interface NetLoopCallbacks {
-  /** Called when the local render state updates from a snapshot. */
+  /** Called when the local render state updates (predicted or reconciled). */
   onRenderState(prev: RenderState, cur: RenderState): void;
   /** Called when match state changes (for HUD). */
   onMatchState(m: MatchState): void;
@@ -35,14 +55,16 @@ export interface NetLoopCallbacks {
 
 export class NetLoop {
   private seq = 0;
+  /** Next local tick counter (advances each predicted step). */
+  private localTick = 0;
   private pending: SeqInput[] = [];
   private accumulator = 0;
 
-  /** The last authoritative render state (snapshot-derived). */
+  /** The last predicted render state for lerp rendering. */
   private prevRender: RenderState | null = null;
   private curRender: RenderState | null = null;
 
-  /** The last received server tick (for Phase 3 interpolation). */
+  /** The last received server tick (for interp buffer sampling). */
   latestServerTick = 0;
 
   /** Latest match state from snapshots. */
@@ -52,8 +74,7 @@ export class NetLoop {
   private slot: Slot;
   private cb: NetLoopCallbacks;
 
-  // Client-side sim for applying authoritative state.
-  // In Phase 2 we only use it to decode snapshots (restoreSnapshot).
+  // Client-side prediction sim.
   private sim = createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
@@ -61,13 +82,39 @@ export class NetLoop {
   });
   private simReady = false;
 
+  // Interpolation buffer for the remote slot.
+  readonly interpBuffer = new InterpolationBuffer();
+
+  // Reconciler: handles snapshot → replay → smooth/snap.
+  private reconciler: Reconciler;
+
   constructor(net: NetClient, slot: Slot, cb: NetLoopCallbacks) {
     this.net = net;
     this.slot = slot;
     this.cb = cb;
 
+    const remoteSlot: Slot = slot === 0 ? 1 : 0;
+
+    this.reconciler = new Reconciler(
+      this.sim,
+      slot,
+      remoteSlot,
+      this.interpBuffer,
+      (prev, cur) => {
+        // Reconciler pushes corrected state back here.
+        this.prevRender = prev;
+        this.curRender = cur;
+        this.cb.onRenderState(prev, cur);
+      },
+    );
+
     void initSim().then(() => {
       this.simReady = true;
+      // Initialize prev/cur from the starting sim state.
+      const s = this.sim.getRenderState();
+      this.prevRender = structuredClone(s);
+      this.curRender = structuredClone(s);
+      this.reconciler.setDisplayedRender(s);
     });
   }
 
@@ -90,8 +137,6 @@ export class NetLoop {
 
   /**
    * Advance the net loop by `delta` ms. Called from the Phaser update loop.
-   * In Phase 2 we only send inputs; rendering is driven by snapshots.
-   *
    * `collectLocalInput` is called by GameScene to provide the current frame
    * for the local slot.
    */
@@ -107,17 +152,64 @@ export class NetLoop {
 
   private tickOnce(localInput: InputFrame): void {
     this.seq += 1;
-    const entry: SeqInput = { seq: this.seq, input: localInput };
-    this.pending.push(entry);
+    this.localTick += 1;
 
-    // Send current + last MAX_REDUNDANT unacked for reliability.
+    const seqEntry: SeqInput = { seq: this.seq, input: localInput };
+    this.pending.push(seqEntry);
+
+    // Track this input in the reconciler's pending queue (with local tick for
+    // interpolation buffer lookup during replay — Design 0d).
+    const pendingEntry: PendingInput = {
+      seq: this.seq,
+      tick: this.localTick,
+      input: localInput,
+    };
+    this.reconciler.addPending(pendingEntry);
+
+    // Send current + last MAX_REDUNDANT unacked for reliability (Q6).
     const tail = this.pending.slice(-MAX_REDUNDANT);
     const msg: PlayerInput = {
       type: "PlayerInput",
       slot: this.slot,
-      frames: [entry, ...tail.filter((f) => f.seq !== entry.seq)],
+      frames: [seqEntry, ...tail.filter((f) => f.seq !== seqEntry.seq)],
     };
     this.net.send("PlayerInput", msg);
+
+    // Drive the remote slot from the interpolation buffer at
+    // serverTick - INTERP_DELAY_TICKS (Q4 + Design 0c).
+    const sampleTick = Math.max(0, this.latestServerTick - INTERP_DELAY_TICKS);
+    const remotePose = this.interpBuffer.sample(sampleTick);
+    const remoteSlot: Slot = this.slot === 0 ? 1 : 0;
+    if (remotePose) {
+      this.sim.setSlotKinematicPosition(
+        remoteSlot,
+        remotePose.x,
+        remotePose.y,
+        remotePose.facing,
+      );
+    }
+
+    // Step the prediction sim: local slot gets local input, remote gets EMPTY.
+    const frames: InputFrame[] = [];
+    frames[this.slot] = localInput;
+    frames[remoteSlot] = EMPTY_INPUT;
+    this.sim.step(frames);
+
+    // Snapshot the predicted render state.
+    const cur = structuredClone(this.sim.getRenderState());
+    const prev = this.curRender ?? cur;
+    this.prevRender = prev;
+    this.curRender = cur;
+    this.reconciler.setDisplayedRender(cur);
+
+    // Drain predicted sim events for immediate local feedback (flashes).
+    // These are cosmetic predictions; reconciliation will correct them if wrong.
+    for (const _event of this.sim.drainEvents()) {
+      // Events are available for GameScene to tap into via the onRenderState
+      // callback cycle. For now, draining keeps the queue clean.
+    }
+
+    this.cb.onRenderState(prev, cur);
   }
 
   private trimPending(ackedSeq: number): void {
@@ -130,44 +222,32 @@ export class NetLoop {
     this.latestServerTick = snap.serverTick;
     this.latestMatchState = snap.match;
 
-    // Decode base64 → Uint8Array and restore full Rapier world.
-    const rapierBytes = base64ToUint8Array(snap.rapierBytesB64);
+    // Push the remote slot's authoritative pose into the interpolation buffer.
+    const remoteSlot: Slot = this.slot === 0 ? 1 : 0;
+    const remotePoseInSnap = snap.players[remoteSlot];
+    if (remotePoseInSnap) {
+      this.interpBuffer.push({
+        serverTick: snap.serverTick,
+        x: remotePoseInSnap.x,
+        y: remotePoseInSnap.y,
+        vx: remotePoseInSnap.vx,
+        vy: remotePoseInSnap.vy,
+        facing: remotePoseInSnap.facing,
+      });
+    }
 
-    // Build an AuthoritativeState and apply it to the local sim.
-    // This restores the ball (via rapierBytes) and overwrites player JS fields.
-    this.sim.applyAuthoritativeState({
-      tick: snap.serverTick,
-      players: snap.players.map((p) => ({
-        x: p.x,
-        y: p.y,
-        vx: p.vx,
-        vy: p.vy,
-        facing: p.facing,
-        grounded: p.grounded,
-        charge: p.charge,
-        knockdownTicks: p.knockdownTicks,
-        invulnTicks: p.invulnTicks,
-      })),
-      ball: snap.ball,
-      rapierBytes,
-      match: snap.match,
-    });
-
-    // In Phase 2: render directly from the restored sim state (no prediction).
-    const render = this.sim.getRenderState();
-    const prev = this.curRender ?? render;
-    this.prevRender = prev;
-    this.curRender = render;
-
-    this.cb.onRenderState(prev, render);
-    this.cb.onMatchState(snap.match);
-
-    // Trim pending inputs using lastAckedSeq for our slot.
+    // Trim SeqInput pending queue using snapshot's lastAckedSeq.
     const ackedForSlot = snap.lastAckedSeq[this.slot] ?? 0;
     this.trimPending(ackedForSlot);
+
+    // Reconcile: restore authoritative state → replay pending → smooth/snap.
+    this.reconciler.reconcile(snap);
+
+    // Notify HUD of match state update.
+    this.cb.onMatchState(snap.match);
   }
 
-  /** Current render interpolation alpha (accumulator / step). For Phase 3. */
+  /** Current render interpolation alpha (accumulator / step). */
   get renderAlpha(): number {
     return Math.min(1, this.accumulator / FIXED_STEP_MS);
   }
@@ -179,15 +259,14 @@ export class NetLoop {
   get previousRender(): RenderState | null {
     return this.prevRender;
   }
-}
 
-// ── Base64 decode (browser + Bun) ─────────────────────────────────────────────
-
-function base64ToUint8Array(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+  /**
+   * Sample the remote player's interpolated pose for rendering.
+   * Called by GameScene each frame to position the remote player.
+   * Returns null if the buffer is empty (before any snapshot).
+   */
+  sampleRemoteRender(): import("./InterpolationBuffer").RemotePose | null {
+    const sampleTick = Math.max(0, this.latestServerTick - INTERP_DELAY_TICKS);
+    return this.interpBuffer.sample(sampleTick);
   }
-  return bytes;
 }
