@@ -112,6 +112,27 @@ export interface Simulation {
   getMatchState(): MatchState;
 
   /**
+   * Return the ball's current linear velocity (world units/s).
+   * Used by the server to build `WorldSnapshot.ball.vx/vy` and by Phase-0
+   * fidelity tests to capture lightweight authoritative state.
+   */
+  getBallVel(): { vx: number; vy: number };
+
+  /**
+   * Apply lightweight authoritative state: write player positions and ball
+   * position+velocity directly into the live Rapier world without a full
+   * rapierBytes snapshot restore. Used as the Phase-0 candidate path in
+   * fidelity testing; superseded by `applyAuthoritativeState` in Phase 2.
+   *
+   * Does NOT restore actor JS fields (charge, knockdown, etc.) — those
+   * require the full AuthoritativeState that Phase 2 introduces.
+   */
+  applyLightweightPositions(state: {
+    players: { x: number; y: number }[];
+    ball: { x: number; y: number; vx: number; vy: number };
+  }): void;
+
+  /**
    * Return all physics/scoring shapes in world units so the debug overlay can
    * draw them without knowing about Rapier or pixel conversion. Includes:
    *  - arena collider boxes
@@ -365,6 +386,24 @@ export function createSimulation(opts: {
     getMatchState(): MatchState {
       // Return a shallow copy with a cloned scores array to prevent external mutation.
       return { ...match, scores: [...match.scores] };
+    },
+
+    getBallVel(): { vx: number; vy: number } {
+      const v = rw.ballVel();
+      return { vx: v.x, vy: v.y };
+    },
+
+    applyLightweightPositions(state: {
+      players: { x: number; y: number }[];
+      ball: { x: number; y: number; vx: number; vy: number };
+    }): void {
+      for (let i = 0; i < state.players.length; i++) {
+        const p = state.players[i];
+        if (!p) continue;
+        rw.setPlayerPosition(i, p.x, p.y);
+      }
+      rw.setBallPosition(state.ball.x, state.ball.y);
+      rw.setBallVel(state.ball.vx, state.ball.vy);
     },
 
     getDebugColliders(): DebugCollider[] {
