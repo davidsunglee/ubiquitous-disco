@@ -82,6 +82,10 @@ export class GameScene extends Phaser.Scene {
   private simTick = 0;
 
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
+  // hudOverlay is sized/positioned to exactly overlay the (scaled, centered)
+  // canvas each frame, so the %/px-positioned HUD children stay aligned with the
+  // game at any window size under Phaser.Scale.FIT.
+  private hudOverlay!: HTMLElement;
   private scoreEl!: HTMLElement;
   private timerEl!: HTMLElement;
   private startPromptEl!: HTMLElement;
@@ -163,21 +167,25 @@ export class GameScene extends Phaser.Scene {
 
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
 
-  /** Create a DOM node (data-testid anchor + visible HUD element). */
+  /** Create a DOM node (data-testid anchor + visible HUD element) in the overlay. */
   private makeTestNode(testid: string, css: string): HTMLElement {
     const el = document.createElement("div");
     el.dataset.testid = testid;
     el.style.cssText = `position:absolute;pointer-events:none;font-family:monospace;color:#fff;text-shadow:0 1px 3px #000,0 0 6px #000;${css}`;
-    const parent = document.getElementById("game-container") ?? document.body;
-    parent.appendChild(el);
+    this.hudOverlay.appendChild(el);
     return el;
   }
 
   private createMatchHudNodes(): void {
-    // Anchor the absolutely-positioned HUD nodes to the canvas wrapper so they
-    // line up with the 960x540 game area instead of the whole viewport.
+    // An overlay that is resized each frame to exactly cover the (scaled,
+    // centered) canvas, so the %/px-positioned HUD children line up with the
+    // game area at any window size — not the whole viewport.
     const parent = document.getElementById("game-container");
     if (parent) parent.style.position = "relative";
+    this.hudOverlay = document.createElement("div");
+    this.hudOverlay.style.cssText =
+      "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:hidden;";
+    (parent ?? document.body).appendChild(this.hudOverlay);
 
     // Score: large, top-centre.
     this.scoreEl = this.makeTestNode(
@@ -215,6 +223,16 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateMatchHud(m: MatchState): void {
+    // Keep the HUD overlay aligned with the scaled/centered canvas (Scale.FIT
+    // letterboxes and re-centers on resize, so the canvas rect moves).
+    const canvas = this.game.canvas;
+    if (canvas && this.hudOverlay) {
+      this.hudOverlay.style.left = `${canvas.offsetLeft}px`;
+      this.hudOverlay.style.top = `${canvas.offsetTop}px`;
+      this.hudOverlay.style.width = `${canvas.clientWidth}px`;
+      this.hudOverlay.style.height = `${canvas.clientHeight}px`;
+    }
+
     const ticks = m.timer;
     const hz = DEFAULT_CONFIG.tickHz;
     const totalSec = Math.max(0, Math.ceil(ticks / hz));
@@ -615,11 +633,7 @@ export class GameScene extends Phaser.Scene {
 
   shutdown(): void {
     this.orientationOverlay?.destroy();
-    // Clean up match HUD DOM nodes.
-    this.scoreEl?.remove();
-    this.timerEl?.remove();
-    this.startPromptEl?.remove();
-    this.goldenGoalEl?.remove();
-    this.matchSummaryEl?.remove();
+    // Removing the overlay removes all match HUD nodes (its children) with it.
+    this.hudOverlay?.remove();
   }
 }
