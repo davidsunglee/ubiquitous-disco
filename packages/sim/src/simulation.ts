@@ -1,4 +1,4 @@
-import { type Actor, createActor, serializeActor } from "./actor";
+import { type Actor, controllable, createActor, serializeActor } from "./actor";
 import type { ArenaDef } from "./arena";
 import type { SimConfig } from "./config";
 import { hashBytes } from "./hash";
@@ -11,28 +11,65 @@ import {
   serializeBellRingState,
   stepBellRing,
 } from "./rules/bellRing";
+import type { DashBlink } from "./rules/dash";
 import { resetDashOnLanding, stepDash } from "./rules/dash";
+import {
+  createMatchState,
+  isLivePhase,
+  type MatchState,
+  serializeMatchState,
+  stepMatch,
+} from "./rules/match";
 import { stepMovement } from "./rules/movement";
 import { stepStrike } from "./rules/strike";
 
 export type { InputFrame } from "./input";
+export type { MatchPhase, MatchState } from "./rules/match";
 
 export interface RenderState {
-  player: {
+  players: {
     x: number;
     y: number;
     facing: 1 | -1;
     grounded: boolean;
     charge: number;
-  };
+    knockedDown: boolean; // knockdownTicks > 0
+    invulnerable: boolean; // invulnTicks > 0
+  }[];
   ball: { x: number; y: number; radius: number };
 }
 
-export type SimEvent = {
-  type: "bellRing";
-  bell: "left" | "right";
-  tick: number;
-};
+export type SimEvent =
+  | {
+      type: "bellRing";
+      bell: "left" | "right";
+      scoringTeam: number;
+      tick: number;
+    }
+  | {
+      type: "matchPhase";
+      phase: import("./rules/match").MatchPhase;
+      tick: number;
+    }
+  | {
+      type: "matchEnd";
+      winner: number | "tie";
+      scores: number[];
+      tick: number;
+    }
+  | {
+      type: "knockdown";
+      slot: number;
+      tick: number;
+    }
+  | {
+      // Emitted whenever a strike connects with a player (every connecting hit,
+      // not just knockdowns) so the renderer can give clear per-hit feedback.
+      type: "playerHit";
+      slot: number; // the target slot that got hit
+      knockdown: boolean; // true if this hit caused a knockdown
+      tick: number;
+    };
 
 // ── Debug collider shapes (world units — no Phaser pixels) ───────────────────
 
@@ -59,22 +96,26 @@ export type DebugCollider = DebugBox | DebugCircle;
 
 export interface SimSnapshot {
   rapierBytes: Uint8Array;
-  actor: Actor;
+  actors: Actor[];
   bellRingArmed: boolean[];
   tick: number;
+  match: MatchState;
 }
 
 export interface Simulation {
-  step(input: InputFrame): void;
+  step(inputs: InputFrame[]): void;
   getRenderState(): RenderState;
   drainEvents(): SimEvent[];
   hashState(): string;
+
+  /** Return the current match state (scores, phase, timer, etc.) for HUD display. */
+  getMatchState(): MatchState;
 
   /**
    * Return all physics/scoring shapes in world units so the debug overlay can
    * draw them without knowing about Rapier or pixel conversion. Includes:
    *  - arena collider boxes
-   *  - player bounding box (current position)
+   *  - player bounding boxes (current position, one per slot)
    *  - ball circle (current position)
    *  - Bell art boxes
    *  - Bell hit-zone circles
@@ -116,7 +157,10 @@ export function createSimulation(opts: {
   let config: SimConfig = { ...opts.config };
   const { arena } = opts;
   const rw = new RapierWorld(config, arena);
-  let actor: Actor = createActor(1);
+  // Slot 0 faces right (+1), slot 1 faces left (-1) toward the centre.
+  let actors: Actor[] = arena.playerSpawns.map((_, s) =>
+    createActor(s === 0 ? 1 : -1),
+  );
   // seed reserved for Phase 3+ seeded RNG; deterministic w/o RNG this phase.
 
   // Authoritative tick counter (incremented per step) and the drainable event
@@ -125,46 +169,180 @@ export function createSimulation(opts: {
   const events: SimEvent[] = [];
   let bellRing: BellRingState = createBellRingState(arena);
 
+  // Match state: owns phase, scores, timer, pause/reset counters.
+  let match: MatchState = createMatchState(config, actors.length);
+
   return {
-    step(input) {
-      // Resolve any Tele-Dash this tick (ticks cooldown, gates air-dash) and get
-      // its blink displacement — applied inside movement's single sweep below.
-      const blink = stepDash(actor, input, config);
-      // Strike imparts impulse to the ball before the physics step integrates it.
-      stepStrike(actor, input, config, rw);
-      // Player movement: one collide-and-slide for walk + jump + blink, then
-      // grounded reconciliation.
-      stepMovement(actor, input, config, rw, blink);
-      // Restore the air-dash budget once the actor is grounded again.
-      resetDashOnLanding(actor);
-      // Advance Rapier (ball integrates, player commits its kinematic move).
-      rw.step();
-      // Post-step ball maintenance: light contact push + speed clamp.
-      stepBall(actor, config, rw);
-      // Bell Ring detection runs after the world step, when the ball position is
-      // current for this tick. Pure geometry (ball circle vs. each hit-zone),
-      // debounced once per contact; queue an event per Bell that rang.
-      const ball = rw.ballPos();
-      const hits = stepBellRing(
-        arena,
-        ball.x,
-        ball.y,
-        config.ball.radius,
-        bellRing,
-      );
-      for (const hit of hits) {
-        events.push({ type: "bellRing", bell: hit.bell, tick });
+    step(inputs: InputFrame[]) {
+      if (isLivePhase(match) && match.pauseTicks === 0) {
+        // ── Gameplay rules run ONLY in live phases ──
+        const blinks: (DashBlink | null)[] = [];
+
+        // Snapshot start-of-tick state for each slot before any strikes resolve.
+        // This ensures:
+        //  (a) A slot that was already knocked down before this tick cannot
+        //      initiate a strike (wasControllable[s] = false).
+        //  (b) A slot that BECOMES knocked down by an earlier slot's strike this
+        //      tick can still resolve its own strike (mutual trades land for both).
+        //  (c) The knockdown event is emitted only for slots that were NOT already
+        //      knocked down at tick start (wasDown).
+        const wasDown = actors.map((a) => a.knockdownTicks > 0);
+        // Capture start-of-tick controllable state for each slot so that:
+        //  (a) Already-knocked-down actors cannot initiate strikes this tick.
+        //  (b) An actor knocked DOWN by an earlier slot's strike this tick can
+        //      still resolve its own strike (mutual trades land for both).
+        const wasControllable = actors.map((a) => controllable(a));
+        // Start-of-tick stagger per slot, so we can detect non-knockdown hits
+        // (stagger is reset to 0 by the hit that causes a knockdown).
+        const staggerBefore = actors.map((a) => a.stagger);
+
+        for (let s = 0; s < actors.length; s++) {
+          const actor = actors[s];
+          const input = inputs[s];
+          if (!actor || !input) continue;
+          blinks[s] = stepDash(actor, input, config);
+          // Only initiate a strike if the actor was controllable at tick START.
+          if (wasControllable[s]) {
+            stepStrike(actor, input, config, rw, s, actors);
+          } else {
+            // Clear charge so it doesn't linger while knocked down.
+            actor.charge = 0;
+          }
+        }
+
+        // Emit per-hit + knockdown events for any target struck this tick.
+        for (let t = 0; t < actors.length; t++) {
+          const a = actors[t];
+          if (!a) continue;
+          const newlyDown = !wasDown[t] && a.knockdownTicks > 0;
+          // A hit landed if stagger went up, or if this hit caused a knockdown
+          // (which resets stagger to 0, hiding it from the stagger comparison).
+          const struck = newlyDown || a.stagger > (staggerBefore[t] ?? 0);
+          if (struck) {
+            events.push({
+              type: "playerHit",
+              slot: t,
+              knockdown: newlyDown,
+              tick,
+            });
+          }
+          if (newlyDown) {
+            events.push({ type: "knockdown", slot: t, tick });
+          }
+        }
+
+        for (let s = 0; s < actors.length; s++) {
+          const actor = actors[s];
+          const input = inputs[s];
+          if (!actor || !input) continue;
+          stepMovement(actor, input, config, rw, s, blinks[s] ?? null);
+          resetDashOnLanding(actor);
+        }
+        // One physics step commits both kinematic moves + integrates the ball.
+        rw.step();
+        // Post-physics per-slot ball maintenance, then one bell-ring pass.
+        for (let s = 0; s < actors.length; s++) {
+          const actor = actors[s];
+          if (!actor) continue;
+          stepBall(actor, config, rw, s);
+        }
+
+        // ── Combat timers advance each live tick (anti-stunlock) ──
+        for (let s = 0; s < actors.length; s++) {
+          const a = actors[s];
+          if (!a) continue;
+          // Stagger holds during the post-hit grace window, then bleeds off so
+          // a paused exchange doesn't keep stale stagger (anti-chip).
+          if (a.staggerDecayDelay > 0) {
+            a.staggerDecayDelay -= 1;
+          } else if (a.stagger > 0) {
+            a.stagger = Math.max(
+              0,
+              a.stagger - config.combat.staggerDecayPerTick,
+            );
+          }
+          // Knockdown countdown; stand-up edge grants i-frames and returns control.
+          if (a.knockdownTicks > 0) {
+            a.knockdownTicks -= 1;
+            if (a.knockdownTicks === 0) {
+              a.controlLock = false;
+              a.invulnTicks = config.combat.recoveryInvulnTicks;
+            }
+          } else if (a.invulnTicks > 0) {
+            a.invulnTicks -= 1;
+          }
+        }
+        // Bell Ring detection runs after the world step, when the ball position is
+        // current for this tick.
+        const ball = rw.ballPos();
+        const hits = stepBellRing(
+          arena,
+          ball.x,
+          ball.y,
+          config.ball.radius,
+          bellRing,
+        );
+        for (const hit of hits) {
+          // Map bell → defending team → OPPOSING scorer (own-goals fall out naturally).
+          const bellDef = arena.bells.find((b) => b.id === hit.bell);
+          const defendingTeam = bellDef?.defends === "left" ? 0 : 1;
+          const scoringTeam = defendingTeam === 0 ? 1 : 0;
+          match.scores[scoringTeam] = (match.scores[scoringTeam] ?? 0) + 1;
+          events.push({ type: "bellRing", bell: hit.bell, scoringTeam, tick });
+          // Golden Goal: a ring ends the match immediately (finish set by sim, not stepMatch).
+          if (match.phase === "goldenGoal") {
+            const top = Math.max(...match.scores);
+            const leaders = match.scores.filter((s) => s === top).length;
+            match.winner = leaders > 1 ? -1 : match.scores.indexOf(top);
+            match.phase = "complete";
+            events.push({ type: "matchPhase", phase: "complete", tick });
+            events.push({
+              type: "matchEnd",
+              winner: match.winner === -1 ? "tie" : match.winner,
+              scores: [...match.scores],
+              tick,
+            });
+          } else {
+            // Normal scoring: enter bellPause, then resetting.
+            match.pauseTicks = config.match.scoringPauseTicks;
+            match.phase = "bellPause";
+            events.push({ type: "matchPhase", phase: "bellPause", tick });
+          }
+        }
+      } else if (
+        match.phase === "resetting" &&
+        match.resetTicks === config.match.resetTicks
+      ) {
+        // First tick of resetting: teleport everyone home, then freeze for the countdown.
+        rw.resetPositions(arena);
+        for (let s = 0; s < actors.length; s++) {
+          // Re-create the actor to clear all velocity/charge state on respawn.
+          actors[s] = createActor(s === 0 ? 1 : -1);
+        }
+        // Re-arm bells after respawn so the next contact can ring.
+        bellRing = createBellRingState(arena);
       }
+
+      // Match lifecycle advances EVERY tick (even frozen ones); tick always increments.
+      stepMatch(
+        match,
+        inputs,
+        { push: (e) => events.push(e as SimEvent) },
+        config,
+        tick,
+      );
       tick += 1;
     },
     getRenderState() {
       return {
-        player: {
-          ...rw.playerPos(),
-          facing: actor.facing,
-          grounded: actor.grounded,
-          charge: actor.charge,
-        },
+        players: actors.map((a, s) => ({
+          ...rw.playerPos(s),
+          facing: a.facing,
+          grounded: a.grounded,
+          charge: a.charge,
+          knockedDown: a.knockdownTicks > 0,
+          invulnerable: a.invulnTicks > 0,
+        })),
         ball: { ...rw.ballPos(), radius: config.ball.radius },
       };
     },
@@ -172,16 +350,21 @@ export function createSimulation(opts: {
       if (events.length === 0) return [];
       return events.splice(0, events.length);
     },
-    // Composite hash: Rapier snapshot bytes ‖ serialized actor state ‖ serialized
-    // Bell Ring debounce state. The actor struct, KinematicCharacterController,
-    // and the per-Bell armed flags are NOT captured by takeSnapshot(), so all
-    // halves are required to detect divergence.
+    // Composite hash: Rapier snapshot bytes ‖ serialized actor[0] ‖ serialized actor[1]
+    // ‖ serialized Bell Ring debounce state ‖ serialized match state. Fixed concatenation
+    // order — any change in field count or type shape must be reflected here.
     hashState() {
       return hashBytes(
         rw.takeSnapshot(),
-        serializeActor(actor),
+        ...actors.map((a) => serializeActor(a)),
         serializeBellRingState(bellRing),
+        serializeMatchState(match),
       );
+    },
+
+    getMatchState(): MatchState {
+      // Return a shallow copy with a cloned scores array to prevent external mutation.
+      return { ...match, scores: [...match.scores] };
     },
 
     getDebugColliders(): DebugCollider[] {
@@ -201,16 +384,18 @@ export function createSimulation(opts: {
         });
       }
 
-      // Player bounding box at current world position.
-      const pp = rw.playerPos();
-      shapes.push({
-        kind: "box",
-        label: "player",
-        x: pp.x,
-        y: pp.y,
-        halfW: config.player.halfW,
-        halfH: config.player.halfH,
-      });
+      // Player bounding boxes at current world positions (one per slot).
+      for (let s = 0; s < actors.length; s++) {
+        const pp = rw.playerPos(s);
+        shapes.push({
+          kind: "box",
+          label: `player[${s}]`,
+          x: pp.x,
+          y: pp.y,
+          halfW: config.player.halfW,
+          halfH: config.player.halfH,
+        });
+      }
 
       // Ball circle at current world position.
       const bp = rw.ballPos();
@@ -249,22 +434,26 @@ export function createSimulation(opts: {
     takeSnapshot(): SimSnapshot {
       return {
         rapierBytes: rw.takeSnapshot(),
-        // Deep-copy the actor so the snapshot is independent of future mutations.
-        actor: { ...actor },
+        // Deep-copy each actor so the snapshot is independent of future mutations.
+        actors: actors.map((a) => ({ ...a })),
         bellRingArmed: [...bellRing.armed],
         tick,
+        // Deep-copy match state (scores array must be copied too).
+        match: { ...match, scores: [...match.scores] },
       };
     },
 
     restoreSnapshot(snap: SimSnapshot): void {
       // Restore Rapier world state.
       rw.restoreSnapshot(snap.rapierBytes);
-      // Restore JS-side actor.
-      actor = { ...snap.actor };
+      // Restore JS-side actors.
+      actors = snap.actors.map((a) => ({ ...a }));
       // Restore Bell Ring debounce state.
       bellRing = { armed: [...snap.bellRingArmed] };
       // Restore tick counter.
       tick = snap.tick;
+      // Restore match state.
+      match = { ...snap.match, scores: [...snap.match.scores] };
       // Clear any pending events that were queued after the snapshot was taken.
       events.splice(0, events.length);
     },

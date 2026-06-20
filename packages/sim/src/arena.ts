@@ -39,6 +39,9 @@ export interface ArenaDef {
   id: string;
   colliders: ColliderDef[]; // inserted in array order (determinism contract)
   bells: BellDef[]; // tested in array order (determinism contract)
+  /** Per-slot spawn points, slot 0 first (left), slot 1 second (right). */
+  playerSpawns: { x: number; y: number }[];
+  /** @deprecated Use playerSpawns[0] instead. Kept for compatibility. */
   playerSpawn: { x: number; y: number };
   ballSpawn: { x: number; y: number };
 }
@@ -79,6 +82,10 @@ export const FLAT_DOJO: ArenaDef = {
       hitZone: { kind: "circle", x: 9, y: 5, radius: 0.8 },
     },
   ],
-  playerSpawn: { x: -4, y: 1 },
+  playerSpawns: [
+    { x: -4, y: 1 }, // slot 0 — left
+    { x: 4, y: 1 }, // slot 1 — right
+  ],
+  playerSpawn: { x: -4, y: 1 }, // deprecated alias for slot 0
   ballSpawn: { x: 0, y: 5 },
 };

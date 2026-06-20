@@ -19,12 +19,13 @@ export function stepBall(
   actor: Actor,
   config: SimConfig,
   world: RapierWorld,
+  slot: number,
 ): void {
   // Light player-body contact: nudge the ball when the player is touching it and
   // pressing toward it. Kept gentle (capped at playerPush) so it reads as contact,
   // not a Strike.
   if (actor.vx !== 0) {
-    const player = world.playerPos();
+    const player = world.playerPos(slot);
     const ball = world.ballPos();
     const dx = ball.x - player.x;
     const dy = ball.y - player.y;

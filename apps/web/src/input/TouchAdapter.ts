@@ -7,8 +7,10 @@
  * (whichever axis/button is active wins), so both input modes coexist.
  *
  * Layout (landscape):
- *   Left half of screen:  circular analog joystick (drag from base point)
- *   Right half of screen: Jump (top), Dash (middle), Strike (bottom) buttons
+ *   Lower-left:  circular analog joystick (floats to where the left zone is pressed)
+ *   Lower-right: three action buttons on an arc around the bottom-right corner,
+ *                evenly spaced and equidistant from the thumb pivot. Bottom→top of
+ *                the arc (left→right on screen): Strike (S), Jump (J), Dash (D).
  *
  * The joystick is implemented as a lightweight canvas-pointer handler rather
  * than a heavy external plugin, giving identical forceX/forceY semantics.
@@ -28,16 +30,26 @@ import Phaser from "phaser";
 /** Radius of the virtual joystick knob travel area (pixels). */
 const JOYSTICK_RADIUS = 60;
 
-/** Base (rest) position of the joystick centre as a fraction of canvas size. */
-const JOYSTICK_BASE_X_FRAC = 0.2; // 20% from left
-const JOYSTICK_BASE_Y_FRAC = 0.75; // 75% from top
+/** Rest position of the joystick centre (lower-left) as a fraction of canvas size. */
+const JOYSTICK_BASE_X_FRAC = 0.15; // 15% from left
+const JOYSTICK_BASE_Y_FRAC = 0.78; // 78% from top
+/** A press anywhere in the left fraction of the screen spawns/drives the joystick. */
+const JOYSTICK_ZONE_X_FRAC = 0.5;
 
-/** Button layout on the right side. */
-const BTN_RADIUS = 36;
-const BTN_RIGHT_X_FRAC = 0.82;
-const BTN_JUMP_Y_FRAC = 0.45;
-const BTN_DASH_Y_FRAC = 0.65;
-const BTN_STRIKE_Y_FRAC = 0.82;
+/** Action buttons: an arc hugging the bottom-right corner. */
+const BTN_RADIUS = 34;
+/** Arc pivot (the thumb's pivot point) = bottom-right corner. */
+const BTN_ARC_PIVOT_X_FRAC = 1.0;
+const BTN_ARC_PIVOT_Y_FRAC = 1.0;
+/** Arc radius as a fraction of the smaller viewport dimension (keeps it on-screen). */
+const BTN_ARC_RADIUS_FRAC = 0.42;
+/**
+ * Angle (degrees) of each button along the arc, measured from the +X axis going
+ * counter-clockwise up from the bottom-right corner (90°=straight up the right
+ * edge, 180°=straight left along the bottom edge). Even 30° spacing → even gaps.
+ * Strike sits lowest (nearest the thumb's rest); Dash highest.
+ */
+const BTN_ARC_ANGLE_DEG = { strike: 165, jump: 135, dash: 105 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -74,10 +86,45 @@ export class TouchAdapter {
   /** Graphics object for drawing the touch UI. */
   private gfx!: Phaser.GameObjects.Graphics;
 
+  /** Button label text objects (J / D / S), drawn above the graphics layer. */
+  private labels!: {
+    jump: Phaser.GameObjects.Text;
+    dash: Phaser.GameObjects.Text;
+    strike: Phaser.GameObjects.Text;
+  };
+
   /** Whether any touch has been detected (used to show/hide the UI). */
   private touchDetected = false;
 
   constructor(private readonly scene: Phaser.Scene) {}
+
+  /**
+   * Compute the three action-button centres in pixels from the current camera
+   * size. Single source of truth for both drawing and hit-testing so they can
+   * never drift apart. Buttons lie on an arc around the bottom-right corner.
+   */
+  private buttonCenters(
+    cw: number,
+    ch: number,
+  ): {
+    jump: { x: number; y: number };
+    dash: { x: number; y: number };
+    strike: { x: number; y: number };
+  } {
+    const pivotX = cw * BTN_ARC_PIVOT_X_FRAC;
+    const pivotY = ch * BTN_ARC_PIVOT_Y_FRAC;
+    const r = Math.min(cw, ch) * BTN_ARC_RADIUS_FRAC;
+    const at = (deg: number) => {
+      const rad = (deg * Math.PI) / 180;
+      // Arc rises up-left from the corner: +X via cos, screen-up via -sin.
+      return { x: pivotX + Math.cos(rad) * r, y: pivotY - Math.sin(rad) * r };
+    };
+    return {
+      strike: at(BTN_ARC_ANGLE_DEG.strike),
+      jump: at(BTN_ARC_ANGLE_DEG.jump),
+      dash: at(BTN_ARC_ANGLE_DEG.dash),
+    };
+  }
 
   /**
    * Call from the scene's create() to install pointer listeners and create
@@ -103,6 +150,25 @@ export class TouchAdapter {
       .setScrollFactor(0)
       .setDepth(500)
       .setAlpha(0); // hidden until first touch
+
+    // Button labels (J / D / S), pinned just above the graphics layer.
+    const makeLabel = (text: string) =>
+      this.scene.add
+        .text(0, 0, text, {
+          fontFamily: "monospace",
+          fontSize: "20px",
+          color: "#ffffff",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(501)
+        .setAlpha(0); // hidden until first touch
+    this.labels = {
+      jump: makeLabel("J"),
+      dash: makeLabel("D"),
+      strike: makeLabel("S"),
+    };
 
     // Pointer down — determine which element was hit.
     this.scene.input.on(
@@ -181,30 +247,17 @@ export class TouchAdapter {
       .fillStyle(0xffffff, 0.35)
       .fillCircle(this.knobX, this.knobY, JOYSTICK_RADIUS * 0.35);
 
-    // ── Buttons ───────────────────────────────────────────────────────────────
+    // ── Buttons (arc around the bottom-right corner) ────────────────────────────
 
-    const bx = cw * BTN_RIGHT_X_FRAC;
-    this.drawButton(
-      gfx,
-      bx,
-      ch * BTN_JUMP_Y_FRAC,
-      "↑",
-      this.jumpPointers.size > 0,
-    );
-    this.drawButton(
-      gfx,
-      bx,
-      ch * BTN_DASH_Y_FRAC,
-      "D",
-      this.dashPointers.size > 0,
-    );
-    this.drawButton(
-      gfx,
-      bx,
-      ch * BTN_STRIKE_Y_FRAC,
-      "S",
-      this.strikePointers.size > 0,
-    );
+    const c = this.buttonCenters(cw, ch);
+    this.drawButton(gfx, c.jump.x, c.jump.y, this.jumpPointers.size > 0);
+    this.drawButton(gfx, c.dash.x, c.dash.y, this.dashPointers.size > 0);
+    this.drawButton(gfx, c.strike.x, c.strike.y, this.strikePointers.size > 0);
+
+    // Position + reveal the labels (centred on each button).
+    this.labels.jump.setPosition(c.jump.x, c.jump.y).setAlpha(1);
+    this.labels.dash.setPosition(c.dash.x, c.dash.y).setAlpha(1);
+    this.labels.strike.setPosition(c.strike.x, c.strike.y).setAlpha(1);
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
@@ -217,22 +270,23 @@ export class TouchAdapter {
     const px = ptr.x;
     const py = ptr.y;
 
-    // Check buttons first (right half).
-    if (this.hitButton(px, py, cw * BTN_RIGHT_X_FRAC, ch * BTN_JUMP_Y_FRAC)) {
+    // Check buttons first (arc in the lower-right).
+    const c = this.buttonCenters(cw, ch);
+    if (this.hitButton(px, py, c.jump.x, c.jump.y)) {
       this.jumpPointers.add(ptr.id);
       return;
     }
-    if (this.hitButton(px, py, cw * BTN_RIGHT_X_FRAC, ch * BTN_DASH_Y_FRAC)) {
+    if (this.hitButton(px, py, c.dash.x, c.dash.y)) {
       this.dashPointers.add(ptr.id);
       return;
     }
-    if (this.hitButton(px, py, cw * BTN_RIGHT_X_FRAC, ch * BTN_STRIKE_Y_FRAC)) {
+    if (this.hitButton(px, py, c.strike.x, c.strike.y)) {
       this.strikePointers.add(ptr.id);
       return;
     }
 
-    // Anything on the left half drives the joystick.
-    if (px < cw * 0.6 && this.joystickPointerId === null) {
+    // A press in the left zone spawns/drives the floating joystick.
+    if (px < cw * JOYSTICK_ZONE_X_FRAC && this.joystickPointerId === null) {
       this.joystickPointerId = ptr.id;
       this.joystickBaseX = px;
       this.joystickBaseY = py;
@@ -280,7 +334,6 @@ export class TouchAdapter {
     gfx: Phaser.GameObjects.Graphics,
     bx: number,
     by: number,
-    _label: string,
     active: boolean,
   ): void {
     const alpha = active ? 0.7 : 0.3;

@@ -15,6 +15,7 @@ beforeAll(async () => {
 // the ball inside the arena (right wall inner face at x = 11.5; ball radius 0.3
 // → center stays ≤ ~11.2, modulo a little restitution overlap).
 test("a hard-struck ball does not tunnel through the wall (CCD)", () => {
+  // FLAT_DOJO already has playerSpawns, so this uses the updated arena directly.
   const rw = new RapierWorld(DEFAULT_CONFIG, FLAT_DOJO);
   // Worst-case burst: clamped maxSpeed plus a full strike impulse toward the wall.
   const burst = DEFAULT_CONFIG.ball.maxSpeed + 32;

@@ -20,36 +20,49 @@ function frame(partial: Partial<InputFrame>): InputFrame {
  * Scripted session: move right, a held (full-height) Jump, settle, a tapped
  * (short) Jump, then move left into the wall. Edges (jumpPressed/jumpHeld) are
  * authored so the variable-jump path is exercised.
+ * Returns per-tick rows (slot 0 moves, slot 1 is idle).
  */
-function scriptedFrames(): InputFrame[] {
-  const frames: InputFrame[] = [];
+function scriptedFrames(): InputFrame[][] {
+  const frames: InputFrame[][] = [];
   // walk right for 15 ticks
-  for (let i = 0; i < 15; i++) frames.push(frame({ moveX: 1 }));
+  for (let i = 0; i < 15; i++) frames.push([frame({ moveX: 1 }), EMPTY_INPUT]);
   // full-height jump: press on tick 0, then keep holding while moving right
-  frames.push(frame({ moveX: 1, jumpPressed: true, jumpHeld: true }));
-  for (let i = 0; i < 25; i++) frames.push(frame({ moveX: 1, jumpHeld: true }));
+  frames.push([
+    frame({ moveX: 1, jumpPressed: true, jumpHeld: true }),
+    EMPTY_INPUT,
+  ]);
+  for (let i = 0; i < 25; i++)
+    frames.push([frame({ moveX: 1, jumpHeld: true }), EMPTY_INPUT]);
   // settle back on the ground
-  for (let i = 0; i < 20; i++) frames.push(frame({}));
+  for (let i = 0; i < 20; i++) frames.push([frame({}), EMPTY_INPUT]);
   // tapped jump: press for a single tick, release immediately (cut velocity)
-  frames.push(frame({ jumpPressed: true, jumpHeld: true }));
-  for (let i = 0; i < 25; i++) frames.push(frame({}));
+  frames.push([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+  for (let i = 0; i < 25; i++) frames.push([frame({}), EMPTY_INPUT]);
   // run left into the left wall
-  for (let i = 0; i < 40; i++) frames.push(frame({ moveX: -1 }));
+  for (let i = 0; i < 40; i++) frames.push([frame({ moveX: -1 }), EMPTY_INPUT]);
   return frames;
 }
 
-function run(frames: InputFrame[]): string {
+/** Create a sim already in "playing" phase (Start pressed). */
+function newSim(): ReturnType<typeof createSimulation> {
   const sim = createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 1234,
   });
+  // Advance past preRound so gameplay rules run.
+  sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+  return sim;
+}
+
+function run(frames: InputFrame[][]): string {
+  const sim = newSim();
   for (const f of frames) sim.step(f);
   return sim.hashState();
 }
 
 test("falling-ball sim is deterministic across runs", () => {
-  const frames = Array.from({ length: 120 }, () => EMPTY_INPUT);
+  const frames = Array.from({ length: 120 }, () => [EMPTY_INPUT, EMPTY_INPUT]);
   expect(run(frames)).toBe(run(frames));
 });
 
@@ -59,55 +72,46 @@ test("scripted move/jump session produces an equal composite hash across runs", 
 });
 
 test("ball falls from spawn under gravity", () => {
-  const sim = createSimulation({
-    config: DEFAULT_CONFIG,
-    arena: FLAT_DOJO,
-    seed: 1,
-  });
+  const sim = newSim();
   const startY = sim.getRenderState().ball.y;
-  for (let i = 0; i < 30; i++) sim.step(EMPTY_INPUT);
+  for (let i = 0; i < 30; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
   expect(sim.getRenderState().ball.y).toBeLessThan(startY);
 });
 
 test("player moves right and stops at the right wall", () => {
-  const sim = createSimulation({
-    config: DEFAULT_CONFIG,
-    arena: FLAT_DOJO,
-    seed: 1,
-  });
-  const startX = sim.getRenderState().player.x;
-  for (let i = 0; i < 120; i++) sim.step(frame({ moveX: 1 }));
-  const endX = sim.getRenderState().player.x;
+  const sim = newSim();
+  const startX = sim.getRenderState().players[0]?.x ?? 0;
+  for (let i = 0; i < 120; i++) sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
+  const endX = sim.getRenderState().players[0]?.x ?? 0;
   expect(endX).toBeGreaterThan(startX);
   // right wall inner face is at x = 11.5; player halfW 0.4 → cannot pass ~11.1
   expect(endX).toBeLessThan(11.2);
-  expect(sim.getRenderState().player.facing).toBe(1);
+  expect(sim.getRenderState().players[0]?.facing).toBe(1);
 });
 
 test("held jump rises higher than a tapped jump", () => {
-  const peak = (jumpFrames: InputFrame[]): number => {
-    const sim = createSimulation({
-      config: DEFAULT_CONFIG,
-      arena: FLAT_DOJO,
-      seed: 1,
-    });
+  const peak = (jumpFrames: InputFrame[][]): number => {
+    const sim = newSim();
     // let the player settle on the floor first
-    for (let i = 0; i < 10; i++) sim.step(EMPTY_INPUT);
-    let maxY = sim.getRenderState().player.y;
+    for (let i = 0; i < 10; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+    let maxY = sim.getRenderState().players[0]?.y ?? 0;
     for (const f of jumpFrames) {
       sim.step(f);
-      maxY = Math.max(maxY, sim.getRenderState().player.y);
+      maxY = Math.max(maxY, sim.getRenderState().players[0]?.y ?? 0);
     }
     return maxY;
   };
 
-  const held: InputFrame[] = [
-    frame({ jumpPressed: true, jumpHeld: true }),
-    ...Array.from({ length: 30 }, () => frame({ jumpHeld: true })),
+  const held: InputFrame[][] = [
+    [frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT],
+    ...Array.from({ length: 30 }, () => [
+      frame({ jumpHeld: true }),
+      EMPTY_INPUT,
+    ]),
   ];
-  const tapped: InputFrame[] = [
-    frame({ jumpPressed: true, jumpHeld: true }),
-    ...Array.from({ length: 30 }, () => EMPTY_INPUT),
+  const tapped: InputFrame[][] = [
+    [frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT],
+    ...Array.from({ length: 30 }, () => [EMPTY_INPUT, EMPTY_INPUT]),
   ];
 
   expect(peak(held)).toBeGreaterThan(peak(tapped));

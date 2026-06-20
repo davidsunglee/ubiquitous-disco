@@ -1,4 +1,4 @@
-import type { Actor } from "../actor";
+import { type Actor, controllable } from "../actor";
 import type { SimConfig } from "../config";
 import type { InputFrame } from "../input";
 
@@ -30,6 +30,9 @@ export function stepDash(
 ): DashBlink | null {
   // Cooldown always advances toward ready.
   if (actor.dashCooldown > 0) actor.dashCooldown -= 1;
+
+  // A knocked-down actor cannot initiate a dash.
+  if (!controllable(actor)) return null;
 
   if (!input.dashPressed) return null;
   if (actor.dashCooldown > 0) return null;

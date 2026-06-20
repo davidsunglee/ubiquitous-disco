@@ -6,9 +6,9 @@
  *  - simConfigVersion: the SIM_CONFIG_VERSION constant at capture time
  *  - arenaId: the arena's id string
  *  - rosterId: a string identifying the character roster (single character = 'default')
- *  - inputFrames: the ordered list of InputFrames driven each tick
+ *  - inputFrames: one row per tick; each row is [slot0Frame, slot1Frame, ...]
  *
- * playReplay() re-runs those frames through a fresh createSimulation() and returns
+ * playReplay() re-runs those rows through a fresh createSimulation() and returns
  * the final hashState(). Calling it twice with the same ReplayData must return the
  * same hash — and must equal the hash from the live capture session.
  */
@@ -23,16 +23,17 @@ export interface ReplayData {
   simConfigVersion: number;
   arenaId: string;
   rosterId: string;
-  inputFrames: InputFrame[];
+  /** One row per tick; each row is [slot0Frame, slot1Frame, ...]. */
+  inputFrames: InputFrame[][];
 }
 
 /**
- * Record a single frame into a ReplayData.inputFrames array (mutates the array).
- * Call this each tick BEFORE stepping the sim, using the same InputFrame
- * you are about to pass to sim.step().
+ * Record a single row of frames (one per slot) into a ReplayData.inputFrames
+ * array (mutates the array). Call this each tick BEFORE stepping the sim,
+ * using the same InputFrame[] you are about to pass to sim.step().
  */
-export function recordFrame(replay: ReplayData, frame: InputFrame): void {
-  replay.inputFrames.push({ ...frame }); // shallow copy so the caller can mutate safely
+export function recordFrame(replay: ReplayData, frames: InputFrame[]): void {
+  replay.inputFrames.push(frames.map((f) => ({ ...f }))); // deep copy each frame
 }
 
 /**
@@ -59,8 +60,8 @@ export function playReplay(replay: ReplayData): string {
     seed: replay.seed,
   });
 
-  for (const frame of replay.inputFrames) {
-    sim.step(frame);
+  for (const row of replay.inputFrames) {
+    sim.step(row);
   }
 
   return sim.hashState();

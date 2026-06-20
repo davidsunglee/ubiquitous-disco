@@ -16,6 +16,19 @@ export interface Actor {
   dashCooldown: number;
   // Whether the one-per-airtime air Dash is still available. Reset on landing.
   airDashAvailable: boolean;
+  // ── Combat (Phase 3) — appended after existing fields ──
+  // Stagger accumulator; decays each live tick. Crossing staggerThreshold → Knockdown.
+  stagger: number;
+  // Control-locked while > 0 (counts down each live tick).
+  knockdownTicks: number;
+  // Recovery Invulnerability ticks granted on stand-up (full i-frames while > 0).
+  invulnTicks: number;
+  // True while knocked down (ignores input).
+  controlLock: boolean;
+  // Grace window (ticks) during which stagger does NOT decay. Refreshed on every
+  // hit so a normal exchange reliably stacks to the Knockdown threshold; once it
+  // expires (no contact), stagger bleeds off again (anti-chip).
+  staggerDecayDelay: number;
 }
 
 export function createActor(facing: 1 | -1 = 1): Actor {
@@ -28,7 +41,21 @@ export function createActor(facing: 1 | -1 = 1): Actor {
     charge: 0,
     dashCooldown: 0,
     airDashAvailable: true,
+    stagger: 0,
+    knockdownTicks: 0,
+    invulnTicks: 0,
+    controlLock: false,
+    staggerDecayDelay: 0,
   };
+}
+
+/**
+ * Returns true when the actor can accept input (not knocked down).
+ * A knocked-down actor still integrates physics (gravity, knockback velocity)
+ * but ignores move/jump/dash/strike intent.
+ */
+export function controllable(actor: Actor): boolean {
+  return actor.knockdownTicks <= 0 && !actor.controlLock;
 }
 
 /**
@@ -38,9 +65,20 @@ export function createActor(facing: 1 | -1 = 1): Actor {
  * new fields are appended at the end so existing offsets never shift.
  */
 export function serializeActor(actor: Actor): Uint8Array {
-  const buf = new ArrayBuffer(8 + 8 + 1 + 1 + 4 + 8 + 4 + 1);
+  // Existing 35 bytes (8 writes, order frozen as the determinism contract):
+  //   vx f64 (8) + vy f64 (8) + grounded u8 (1) + facing i8 (1) +
+  //   ticksSinceGrounded i32 (4) + charge f64 (8) + dashCooldown i32 (4) +
+  //   airDashAvailable u8 (1) = 35
+  // Phase 3 appends 21 bytes:
+  //   stagger f64 (8) + knockdownTicks i32 (4) + invulnTicks i32 (4) +
+  //   controlLock u8 (1) + staggerDecayDelay i32 (4) = 21
+  // Total: 56 bytes.
+  const buf = new ArrayBuffer(
+    8 + 8 + 1 + 1 + 4 + 8 + 4 + 1 + 8 + 4 + 4 + 1 + 4,
+  );
   const view = new DataView(buf);
   let o = 0;
+  // ── Existing 8 writes — byte-identical to the pre-Phase-3 layout ──
   view.setFloat64(o, actor.vx);
   o += 8;
   view.setFloat64(o, actor.vy);
@@ -56,5 +94,16 @@ export function serializeActor(actor: Actor): Uint8Array {
   view.setInt32(o, actor.dashCooldown);
   o += 4;
   view.setUint8(o, actor.airDashAvailable ? 1 : 0);
+  o += 1; // advance past the last existing field (o = 35)
+  // ── Phase 3 appended fields (o starts at 35) ──
+  view.setFloat64(o, actor.stagger);
+  o += 8;
+  view.setInt32(o, actor.knockdownTicks);
+  o += 4;
+  view.setInt32(o, actor.invulnTicks);
+  o += 4;
+  view.setUint8(o, actor.controlLock ? 1 : 0);
+  o += 1;
+  view.setInt32(o, actor.staggerDecayDelay);
   return new Uint8Array(buf);
 }

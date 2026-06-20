@@ -1,4 +1,4 @@
-import type { Actor } from "../actor";
+import { type Actor, controllable } from "../actor";
 import type { SimConfig } from "../config";
 import type { InputFrame } from "../input";
 import type { RapierWorld } from "../rapier-world";
@@ -21,20 +21,27 @@ export function stepMovement(
   input: InputFrame,
   config: SimConfig,
   world: RapierWorld,
+  slot: number,
   blink: DashBlink | null = null,
 ): void {
   const dt = 1 / config.tickHz;
   const m = config.movement;
 
-  // Facing follows non-zero horizontal intent.
-  if (input.moveX > 0) actor.facing = 1;
-  else if (input.moveX < 0) actor.facing = -1;
+  const live = controllable(actor);
 
-  // Horizontal velocity is directly driven by analog input (snappy platformer feel).
-  actor.vx = input.moveX * m.moveSpeed;
+  if (live) {
+    // Facing follows non-zero horizontal intent.
+    if (input.moveX > 0) actor.facing = 1;
+    else if (input.moveX < 0) actor.facing = -1;
 
-  // Jump: allowed while grounded or within the coyote-time grace window.
-  const canJump = actor.grounded || actor.ticksSinceGrounded <= m.coyoteTicks;
+    // Horizontal velocity is directly driven by analog input (snappy platformer feel).
+    actor.vx = input.moveX * m.moveSpeed;
+  }
+  // else: keep actor.vx (knockback velocity) — friction/walls reconcile it below.
+
+  // Jump: only allowed when controllable (not knocked down).
+  const canJump =
+    live && (actor.grounded || actor.ticksSinceGrounded <= m.coyoteTicks);
   if (input.jumpPressed && canJump) {
     actor.vy = m.jumpSpeed;
     actor.grounded = false;
@@ -42,7 +49,8 @@ export function stepMovement(
   }
 
   // Variable height: releasing Jump early while still rising cuts upward velocity.
-  if (!input.jumpHeld && actor.vy > 0) {
+  // Only when controllable — a knocked-down actor's upward knockback isn't cut.
+  if (live && !input.jumpHeld && actor.vy > 0) {
     actor.vy *= m.jumpCutMultiplier;
   }
 
@@ -56,7 +64,7 @@ export function stepMovement(
   // excludes dynamic bodies so it passes the ball instead of shoving it.
   const dx = actor.vx * dt + (blink?.x ?? 0);
   const dy = actor.vy * dt + (blink?.y ?? 0);
-  const result = world.movePlayer(dx, dy, blink !== null);
+  const result = world.movePlayer(slot, dx, dy, blink !== null);
 
   // Reconcile velocity with what actually happened (walls/floor/ceiling stop us).
   // If blocked vertically (hit floor or ceiling) zero the vertical velocity so we
