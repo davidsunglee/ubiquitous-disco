@@ -36,8 +36,12 @@ const JOYSTICK_BASE_Y_FRAC = 0.78; // 78% from top
 /** A press anywhere in the left fraction of the screen spawns/drives the joystick. */
 const JOYSTICK_ZONE_X_FRAC = 0.5;
 
-/** Action buttons: an arc hugging the bottom-right corner. */
-const BTN_RADIUS = 34;
+/**
+ * Action buttons: an arc hugging the bottom-right corner. This radius is the
+ * single source of truth for both the drawn circle and the tap hit-test, so
+ * the tappable area always exactly matches the button you see.
+ */
+const BTN_RADIUS = 46;
 /** Arc pivot (the thumb's pivot point) = bottom-right corner. */
 const BTN_ARC_PIVOT_X_FRAC = 1.0;
 const BTN_ARC_PIVOT_Y_FRAC = 1.0;
@@ -176,7 +180,7 @@ export class TouchAdapter {
       (ptr: Phaser.Input.Pointer) => {
         this.touchDetected = true;
         this.gfx.setAlpha(1);
-        this.handlePointerDown(ptr, cw, ch);
+        this.handlePointerDown(ptr);
       },
       this,
     );
@@ -262,13 +266,15 @@ export class TouchAdapter {
 
   // ── Private helpers ───────────────────────────────────────────────────────
 
-  private handlePointerDown(
-    ptr: Phaser.Input.Pointer,
-    cw: number,
-    ch: number,
-  ): void {
+  private handlePointerDown(ptr: Phaser.Input.Pointer): void {
     const px = ptr.x;
     const py = ptr.y;
+
+    // Read the camera size live (same source drawUI uses) so the hit-test
+    // geometry can never drift from what's drawn on screen.
+    const cam = this.scene.cameras.main;
+    const cw = cam.width;
+    const ch = cam.height;
 
     // Check buttons first (arc in the lower-right).
     const c = this.buttonCenters(cw, ch);

@@ -16,11 +16,92 @@ export interface RoomErrorMsg {
   message: string;
 }
 
+// ── Gameplay messages (Phase 2) ───────────────────────────────────────────────
+
+import type { InputFrame, MatchState } from "@bb/sim";
+
+/** One sequenced input frame (seq is monotonically increasing per client). */
+export interface SeqInput {
+  seq: number;
+  input: InputFrame;
+}
+
+/**
+ * Client → Server: current input + last ~3 unacked for reliability under
+ * packet loss. `slot` is informational — the server uses session identity.
+ */
+export interface PlayerInput {
+  type: "PlayerInput";
+  slot: Slot;
+  frames: SeqInput[]; // current frame first, then unacked tail (up to 3)
+}
+
+/** Server → Client: per-slot acknowledgement of the last consumed seq. */
+export interface InputAck {
+  type: "InputAck";
+  lastAckedSeq: [number, number]; // [slot0LastAcked, slot1LastAcked]
+}
+
+/**
+ * Per-player authoritative state in a snapshot. Mirrors the actor + Rapier
+ * kinematic position at the server's authoritative tick.
+ */
+export interface AuthPlayer {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  facing: 1 | -1;
+  grounded: boolean;
+  charge: number;
+  knockdownTicks: number;
+  invulnTicks: number;
+}
+
+/**
+ * Server → Client: full authoritative world snapshot at 15 Hz.
+ *
+ * Phase-0 Decision 0b: ball MUST be restored via rapierBytesB64 (full Rapier
+ * snapshot) because the lightweight pos/vel path drifts 3.55 world units after
+ * wall contact (contact-solver warm-start impulses are not captured). The server
+ * always sends rapierBytesB64; client applies it via restoreSnapshot().
+ *
+ * Kinematic players are still captured via lightweight AuthPlayer fields (they
+ * are faithfully described by position alone). The rapierBytes restore then
+ * syncs the Rapier world (including the dynamic ball) and we overwrite kinematic
+ * player positions from AuthPlayer for determinism.
+ */
+export interface WorldSnapshot {
+  type: "WorldSnapshot";
+  serverTick: number;
+  players: AuthPlayer[];
+  ball: { x: number; y: number; vx: number; vy: number };
+  /** Base64-encoded Rapier world snapshot (rw.takeSnapshot()). Always present. */
+  rapierBytesB64: string;
+  match: MatchState;
+  lastAckedSeq: [number, number];
+}
+
 // grows in later phases
-export type ServerMessage = RoomReady | RoomErrorMsg;
+export type ServerMessage = RoomReady | RoomErrorMsg | InputAck | WorldSnapshot;
+export type ClientMessage = PlayerInput;
 
 // ── (De)serializers ───────────────────────────────────────────────────────────
 
 export const serializeRoomReady = (m: RoomReady): string => JSON.stringify(m);
 export const deserializeRoomReady = (s: string): RoomReady =>
   JSON.parse(s) as RoomReady;
+
+export const serializePlayerInput = (m: PlayerInput): string =>
+  JSON.stringify(m);
+export const deserializePlayerInput = (s: string): PlayerInput =>
+  JSON.parse(s) as PlayerInput;
+
+export const serializeInputAck = (m: InputAck): string => JSON.stringify(m);
+export const deserializeInputAck = (s: string): InputAck =>
+  JSON.parse(s) as InputAck;
+
+export const serializeWorldSnapshot = (m: WorldSnapshot): string =>
+  JSON.stringify(m);
+export const deserializeWorldSnapshot = (s: string): WorldSnapshot =>
+  JSON.parse(s) as WorldSnapshot;

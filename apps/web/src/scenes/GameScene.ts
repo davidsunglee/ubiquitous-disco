@@ -17,11 +17,13 @@ import {
 import Phaser from "phaser";
 import {
   KeyboardAdapter,
+  NET_KEYMAP,
   P1_KEYMAP,
   P2_KEYMAP,
 } from "../input/KeyboardAdapter";
 import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
 import { NetClient } from "../net/NetClient";
+import { NetLoop } from "../net/NetLoop";
 import { attemptLandscapeLock } from "../orientation";
 import {
   bellSubjectFromWorld,
@@ -49,6 +51,8 @@ export class GameScene extends Phaser.Scene {
   private gfx!: Phaser.GameObjects.Graphics;
   private kb1!: KeyboardAdapter;
   private kb2!: KeyboardAdapter;
+  /** Networked local-player keyboard (Arrows + Z/X/C); used in networked mode. */
+  private kbNet!: KeyboardAdapter;
   private touch!: TouchAdapter;
   private groupCamera!: GroupCamera;
   private orientationOverlay!: OrientationOverlay;
@@ -83,9 +87,11 @@ export class GameScene extends Phaser.Scene {
   // ── Phase 3: sim tick counter for deterministic i-frame blink ────────────────
   private simTick = 0;
 
-  // ── Networking (Phase 1) ──────────────────────────────────────────────────────
+  // ── Networking (Phase 1 + 2) ──────────────────────────────────────────────────
   private netClient!: NetClient;
   private connectionOverlay!: ConnectionOverlay;
+  /** Phase 2: set once the room is full (both players present). */
+  private netLoop: NetLoop | null = null;
 
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
   // hudOverlay is sized/positioned to exactly overlay the (scaled, centered)
@@ -110,6 +116,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.kb1 = new KeyboardAdapter(this.input.keyboard, P1_KEYMAP);
     this.kb2 = new KeyboardAdapter(this.input.keyboard, P2_KEYMAP);
+    this.kbNet = new KeyboardAdapter(this.input.keyboard, NET_KEYMAP);
 
     // Stop arrow keys (P2 movement) from scrolling the page/canvas.
     this.input.keyboard.addCapture([
@@ -171,7 +178,10 @@ export class GameScene extends Phaser.Scene {
     this.netClient = new NetClient();
     this.connectionOverlay = new ConnectionOverlay();
     this.connectionOverlay.mount();
-    this.connectionOverlay.wire(this.netClient, this.game.canvas);
+    this.connectionOverlay.wire(this.netClient, this.game.canvas, (slot) => {
+      // Phase 2: room is full — switch to networked mode.
+      this.startNetLoop(slot);
+    });
 
     // Launch the HUD in parallel (it renders on top without replacing GameScene).
     this.scene.launch("HudScene");
@@ -312,6 +322,25 @@ export class GameScene extends Phaser.Scene {
     Object.assign(hudBridge, bridge);
   }
 
+  // ── Phase 2: networked game loop ─────────────────────────────────────────────
+
+  private startNetLoop(slot: import("@bb/protocol").Slot): void {
+    this.netLoop = new NetLoop(this.netClient, slot, {
+      onRenderState: (prev, cur) => {
+        this.prev = prev;
+        this.cur = cur;
+      },
+      onMatchState: (m) => {
+        this.updateMatchHud(m);
+      },
+      onDisconnect: () => {
+        console.info("[net] disconnected");
+      },
+    });
+    this.netLoop.start();
+    console.info(`[net] NetLoop started (slot ${slot})`);
+  }
+
   // ── Sim lifecycle ────────────────────────────────────────────────────────────
 
   private buildSim(config: SimConfig): Simulation {
@@ -375,6 +404,51 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
+    // ── Phase 2: networked mode — drive NetLoop, render from snapshots ────────
+    if (this.netLoop !== null) {
+      // Collect local player input. Unlike hotseat (two keymaps on one
+      // keyboard), each networked client controls only its own player on its
+      // own machine, so BOTH slots use the same networked scheme (Arrows +
+      // Z/X/C, via kbNet) plus touch, regardless of which slot the server
+      // assigned.
+      const localSlot = this.netClient.slot;
+      const collectLocal = () => {
+        if (this.replayFrames !== null) {
+          const row = this.replayFrames[this.replayFrameCursor];
+          if (row !== undefined) {
+            this.replayFrameCursor++;
+            return row[localSlot] ?? this.kbNet.collect();
+          }
+          this.replayFrames = null;
+          this.replayFrameCursor = 0;
+        }
+        return mergeInputFrames(this.kbNet.collect(), this.touch.collect());
+      };
+
+      this.netLoop.tick(delta, collectLocal);
+
+      // Render uses whatever prev/cur the NetLoop last pushed via onRenderState.
+      // Use alpha=0 in Phase 2 (snap to latest; Phase 3 adds interpolation).
+      const alpha = this.netLoop.renderAlpha;
+
+      this.gfx.clear();
+      this.drawArena();
+      this.drawBells();
+      this.drawBall(alpha);
+      this.drawPlayers(alpha);
+      this.tickBellFeedback(delta);
+      this.touch.drawUI();
+      this.updateGroupCamera(alpha);
+
+      // Match HUD is updated by NetLoop's onMatchState callback, but keep
+      // canvas aligned every frame.
+      if (this.netLoop.latestMatchState) {
+        this.updateMatchHud(this.netLoop.latestMatchState);
+      }
+      return;
+    }
+
+    // ── Local hotseat mode (Phase 1 and earlier) ──────────────────────────────
     // Honor pause flag — don't advance the accumulator while paused (unless a
     // single-step was requested by the HUD).
     const shouldStep = !this.paused || this.doSingleStep;

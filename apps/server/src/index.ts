@@ -1,6 +1,11 @@
+import { initSim } from "@bb/sim";
 import { Server } from "@colyseus/core";
 import { MatchRoom } from "./MatchRoom";
 import { createTransport } from "./transport";
+
+// MatchRoom creates a @bb/sim simulation when a room is first created.
+// Rapier (WebAssembly) must be initialised before any simulation can be built.
+await initSim();
 
 const transport = createTransport();
 

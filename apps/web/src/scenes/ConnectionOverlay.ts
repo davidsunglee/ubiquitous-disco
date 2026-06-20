@@ -6,6 +6,7 @@
  * Playwright tests.
  */
 
+import type { Slot } from "@bb/protocol";
 import type { NetClient } from "../net/NetClient";
 
 type Status = "idle" | "connecting" | "connected" | "error";
@@ -98,9 +99,19 @@ export class ConnectionOverlay {
     parent.appendChild(this.root);
   }
 
-  /** Wire callbacks to a NetClient instance. Called by GameScene after mount(). */
-  wire(net: NetClient, canvas: HTMLCanvasElement): void {
+  /**
+   * Wire callbacks to a NetClient instance. Called by GameScene after mount().
+   *
+   * @param onRoomFull  Phase 2: called with the local slot once both players are
+   *                    present so GameScene can start the NetLoop.
+   */
+  wire(
+    net: NetClient,
+    canvas: HTMLCanvasElement,
+    onRoomFull?: (slot: Slot) => void,
+  ): void {
     this.net = net;
+    this.onRoomFull = onRoomFull ?? null;
 
     this.createBtn.addEventListener("click", () => {
       void this.handleCreate();
@@ -109,6 +120,14 @@ export class ConnectionOverlay {
     this.joinBtn.addEventListener("click", () => {
       const id = this.joinInput.value.trim();
       if (id) void this.handleJoin(id);
+    });
+
+    // B can also press Enter in the join input to join.
+    this.joinInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const id = this.joinInput.value.trim();
+        if (id) void this.handleJoin(id);
+      }
     });
 
     // Keep overlay aligned with canvas (mirrors GameScene.updateMatchHud pattern)
@@ -122,6 +141,8 @@ export class ConnectionOverlay {
     observer.observe(canvas);
     align();
   }
+
+  private onRoomFull: ((slot: Slot) => void) | null = null;
 
   private async handleCreate(): Promise<void> {
     if (!this.net) return;
@@ -140,7 +161,10 @@ export class ConnectionOverlay {
         const m = msg as { slot: number; full: boolean };
         net.slot = m.slot as 0 | 1;
         this.updateBadge(`connected (slot ${m.slot})`);
-        if (m.full) this.hidePanel();
+        if (m.full) {
+          this.hidePanel();
+          this.onRoomFull?.(m.slot as Slot);
+        }
       });
       net.onLeave((_code) => {
         this.setStatus("error");
@@ -164,6 +188,8 @@ export class ConnectionOverlay {
         const m = msg as { slot: number; full: boolean };
         net.slot = m.slot as 0 | 1;
         this.updateBadge(`connected (slot ${m.slot})`);
+        // When B joins, the room is immediately full from B's perspective.
+        this.onRoomFull?.(m.slot as Slot);
       });
       net.onLeave((_code) => {
         this.setStatus("error");

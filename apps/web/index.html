@@ -6,18 +6,13 @@
     <title>Bell Brawl — Local Feel Sandbox</title>
     <style>
       /*
-       * CSS fallback for the rotate-device prompt.
-       * The JS OrientationOverlay handles this at runtime, but this rule ensures
-       * the prompt is visible even before JS runs (e.g. iOS Safari slow start).
-       * The [data-testid="rotate-prompt"] element is injected by OrientationOverlay.
+       * The rotate-device prompt's visibility is controlled by the JS
+       * OrientationOverlay (it sets the element's inline `visibility` on mount
+       * and on every resize/orientationchange). This rule only adds a
+       * visual cue — de-emphasising the canvas while in portrait.
        */
       @media (orientation: portrait) {
-        [data-testid="rotate-prompt"] {
-          visibility: visible !important;
-          pointer-events: auto !important;
-        }
         #game-container canvas {
-          /* Visually de-emphasise the canvas when in portrait */
           opacity: 0.2;
         }
       }

@@ -26,6 +26,41 @@ import { stepStrike } from "./rules/strike";
 export type { InputFrame } from "./input";
 export type { MatchPhase, MatchState } from "./rules/match";
 
+// ── Authoritative state for networked play (Phase 2) ─────────────────────────
+
+/**
+ * Per-player authoritative state. Includes both the Rapier-side position (which
+ * the client reconstructs via rapierBytes restore or lightweight setPlayerPosition)
+ * and the JS-side actor fields that Rapier does not capture.
+ */
+export interface AuthPlayer {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  facing: 1 | -1;
+  grounded: boolean;
+  charge: number;
+  knockdownTicks: number;
+  invulnTicks: number;
+}
+
+/**
+ * Full authoritative world state at a given server tick.
+ * The server builds this via `toAuthoritativeState(sim)` and broadcasts it.
+ * The client applies it via `sim.applyAuthoritativeState(s)`.
+ *
+ * rapierBytes: the raw Rapier world snapshot (from rw.takeSnapshot()) used to
+ * faithfully restore the dynamic ball and all contact-solver state.
+ */
+export interface AuthoritativeState {
+  tick: number;
+  players: AuthPlayer[];
+  ball: { x: number; y: number; vx: number; vy: number };
+  rapierBytes: Uint8Array;
+  match: MatchState;
+}
+
 export interface RenderState {
   players: {
     x: number;
@@ -133,6 +168,22 @@ export interface Simulation {
   }): void;
 
   /**
+   * Apply a full authoritative state from the server.
+   *
+   * Ball path (Phase-0 Decision 0b): calls rw.restoreSnapshot(s.rapierBytes)
+   * to restore the full Rapier world including dynamic ball + contact-solver
+   * warm-start state. Kinematic player positions are then overwritten from
+   * s.players[i].{x,y} (lightweight, faithful for kinematic bodies).
+   *
+   * Actor JS fields (vx, vy, facing, grounded, charge, knockdownTicks,
+   * invulnTicks) are written from s.players[i] fields.
+   *
+   * Match state and tick counter are replaced from s.match / s.tick.
+   * The pending event queue is cleared (mirrors restoreSnapshot).
+   */
+  applyAuthoritativeState(s: AuthoritativeState): void;
+
+  /**
    * Return all physics/scoring shapes in world units so the debug overlay can
    * draw them without knowing about Rapier or pixel conversion. Includes:
    *  - arena collider boxes
@@ -166,6 +217,48 @@ export interface Simulation {
    * ignored in this implementation.
    */
   updateConfig(patch: Partial<SimConfig>): void;
+}
+
+/**
+ * Extract a full `AuthoritativeState` from a running simulation.
+ * Called by the server each time it broadcasts a WorldSnapshot.
+ *
+ * The rapierBytes field is taken via the Simulation's takeSnapshot() — the
+ * server accesses this through the public interface. However, to avoid exposing
+ * the full SimSnapshot internals in the network state, we take a fresh Rapier
+ * snapshot separately. Since Simulation exposes `takeSnapshot()` which includes
+ * rapierBytes, the server uses that path.
+ *
+ * NOTE: This function is a pure data extraction helper. It calls
+ * `sim.takeSnapshot()` for the Rapier bytes and `sim.getRenderState()` +
+ * `sim.getBallVel()` + `sim.getMatchState()` for the JS-side state.
+ */
+export function toAuthoritativeState(sim: Simulation): AuthoritativeState {
+  const snap = sim.takeSnapshot();
+  const render = sim.getRenderState();
+  const ballVel = sim.getBallVel();
+  const match = sim.getMatchState();
+
+  return {
+    tick: snap.tick,
+    players: render.players.map((p, i) => {
+      const actor = snap.actors[i];
+      return {
+        x: p.x,
+        y: p.y,
+        vx: actor?.vx ?? 0,
+        vy: actor?.vy ?? 0,
+        facing: p.facing,
+        grounded: p.grounded,
+        charge: p.charge,
+        knockdownTicks: actor?.knockdownTicks ?? 0,
+        invulnTicks: actor?.invulnTicks ?? 0,
+      };
+    }),
+    ball: { x: render.ball.x, y: render.ball.y, ...ballVel },
+    rapierBytes: snap.rapierBytes,
+    match,
+  };
 }
 
 export function createSimulation(opts: {
@@ -404,6 +497,40 @@ export function createSimulation(opts: {
       }
       rw.setBallPosition(state.ball.x, state.ball.y);
       rw.setBallVel(state.ball.vx, state.ball.vy);
+    },
+
+    applyAuthoritativeState(s: AuthoritativeState): void {
+      // 1. Restore full Rapier world (dynamic ball + contact-solver state).
+      //    Phase-0 Decision 0b: rapierBytes is required for ball fidelity.
+      rw.restoreSnapshot(s.rapierBytes);
+
+      // 2. Overwrite actor JS fields + kinematic player positions.
+      //    setPlayerPosition is needed because restoreSnapshot restores the
+      //    kinematic body transforms but we want explicit server-authoritative
+      //    positions (also handles the case where rapierBytes was from a
+      //    slightly different tick than the player JS fields).
+      for (let i = 0; i < actors.length; i++) {
+        const a = actors[i];
+        const p = s.players[i];
+        if (!a || !p) continue;
+        a.vx = p.vx;
+        a.vy = p.vy;
+        a.facing = p.facing;
+        a.grounded = p.grounded;
+        a.charge = p.charge;
+        a.knockdownTicks = p.knockdownTicks;
+        a.invulnTicks = p.invulnTicks;
+        // Sync kinematic player position (restoreSnapshot already did this via
+        // the Rapier snapshot, but write explicitly for clarity and safety).
+        rw.setPlayerPosition(i, p.x, p.y);
+      }
+
+      // 3. Replace match state and tick counter.
+      match = { ...s.match, scores: [...s.match.scores] };
+      tick = s.tick;
+
+      // 4. Clear any pending events (matches restoreSnapshot behavior).
+      events.splice(0, events.length);
     },
 
     getDebugColliders(): DebugCollider[] {

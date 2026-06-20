@@ -44,6 +44,21 @@ export const P2_KEYMAP: KeyMap = {
 };
 
 /**
+ * Networked play: each client controls only its own player on its own machine,
+ * so both slots use the same scheme — Arrow keys to move, Z=jump, X=strike,
+ * C=dash.
+ */
+export const NET_KEYMAP: KeyMap = {
+  left: K.LEFT,
+  right: K.RIGHT,
+  up: K.UP,
+  down: K.DOWN,
+  jump: K.Z,
+  dash: K.C,
+  strike: K.X,
+};
+
+/**
  * Gathers raw keyboard state and normalizes it into a sim-owned InputFrame using
  * the protected helpers. Accepts a KeyMap so the same adapter can be used for
  * either player.
