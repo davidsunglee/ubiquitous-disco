@@ -1,0 +1,17 @@
+{
+  "name": "@bb/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch run src/index.ts",
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@bb/sim": "workspace:*",
+    "@bb/protocol": "workspace:*",
+    "@colyseus/core": "^0.17.43",
+    "@colyseus/bun-websockets": "^0.17.13"
+  }
+}

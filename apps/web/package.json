@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "@bb/sim": "workspace:*",
-    "phaser": "^4.2.0"
+    "phaser": "^4.2.0",
+    "@bb/protocol": "workspace:*",
+    "@colyseus/sdk": "^0.17.43"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",

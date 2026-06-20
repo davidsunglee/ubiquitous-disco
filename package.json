@@ -6,8 +6,9 @@
   "type": "module",
   "packageManager": "pnpm@11.8.0",
   "scripts": {
-    "dev": "pnpm --filter @bb/web dev",
+    "dev": "concurrently -n web,server -c blue,green --kill-others \"pnpm dev:web\" \"pnpm dev:server\"",
     "dev:web": "pnpm --filter @bb/web dev",
+    "dev:server": "pnpm --filter @bb/server dev",
     "test": "vitest run",
     "test:e2e": "pnpm --filter @bb/web test:e2e",
     "typecheck": "pnpm -r typecheck",
@@ -30,6 +31,7 @@
     "@biomejs/biome": "^2.5.0",
     "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.2",
+    "concurrently": "^9.2.3",
     "husky": "^9.1.7",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"

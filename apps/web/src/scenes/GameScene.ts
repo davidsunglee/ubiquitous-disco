@@ -21,6 +21,7 @@ import {
   P2_KEYMAP,
 } from "../input/KeyboardAdapter";
 import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
+import { NetClient } from "../net/NetClient";
 import { attemptLandscapeLock } from "../orientation";
 import {
   bellSubjectFromWorld,
@@ -33,6 +34,7 @@ import {
   toScreenX,
   toScreenY,
 } from "../render/worldToScreen";
+import { ConnectionOverlay } from "./ConnectionOverlay";
 import { type HudBridge, hudBridge } from "./HudScene";
 import { OrientationOverlay } from "./OrientationOverlay";
 
@@ -80,6 +82,10 @@ export class GameScene extends Phaser.Scene {
 
   // ── Phase 3: sim tick counter for deterministic i-frame blink ────────────────
   private simTick = 0;
+
+  // ── Networking (Phase 1) ──────────────────────────────────────────────────────
+  private netClient!: NetClient;
+  private connectionOverlay!: ConnectionOverlay;
 
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
   // hudOverlay is sized/positioned to exactly overlay the (scaled, centered)
@@ -160,6 +166,12 @@ export class GameScene extends Phaser.Scene {
 
     // Phase 2: inject match HUD DOM nodes so Playwright can locate them.
     this.createMatchHudNodes();
+
+    // Phase 1: mount the connection/room overlay and wire it to a NetClient.
+    this.netClient = new NetClient();
+    this.connectionOverlay = new ConnectionOverlay();
+    this.connectionOverlay.mount();
+    this.connectionOverlay.wire(this.netClient, this.game.canvas);
 
     // Launch the HUD in parallel (it renders on top without replacing GameScene).
     this.scene.launch("HudScene");
@@ -633,6 +645,7 @@ export class GameScene extends Phaser.Scene {
 
   shutdown(): void {
     this.orientationOverlay?.destroy();
+    this.connectionOverlay?.destroy();
     // Removing the overlay removes all match HUD nodes (its children) with it.
     this.hudOverlay?.remove();
   }
