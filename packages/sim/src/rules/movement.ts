@@ -21,6 +21,7 @@ export function stepMovement(
   input: InputFrame,
   config: SimConfig,
   world: RapierWorld,
+  slot: number,
   blink: DashBlink | null = null,
 ): void {
   const dt = 1 / config.tickHz;
@@ -56,7 +57,7 @@ export function stepMovement(
   // excludes dynamic bodies so it passes the ball instead of shoving it.
   const dx = actor.vx * dt + (blink?.x ?? 0);
   const dy = actor.vy * dt + (blink?.y ?? 0);
-  const result = world.movePlayer(dx, dy, blink !== null);
+  const result = world.movePlayer(slot, dx, dy, blink !== null);
 
   // Reconcile velocity with what actually happened (walls/floor/ceiling stop us).
   // If blocked vertically (hit floor or ceiling) zero the vertical velocity so we

@@ -24,38 +24,43 @@ function newSim() {
   });
 }
 
+// Helper: step all slots with the given slot-0 frame, slot-1 idle.
+function step0(sim: ReturnType<typeof newSim>, f: InputFrame) {
+  return sim.step([f, EMPTY_INPUT]);
+}
+
 test("Tele-Dash blinks a fixed distance in the move direction", () => {
   const sim = newSim();
   // settle on the floor
-  for (let i = 0; i < 10; i++) sim.step(EMPTY_INPUT);
-  const startX = sim.getRenderState().player.x;
-  sim.step(frame({ moveX: 1, dashPressed: true, dashHeld: true }));
-  const afterX = sim.getRenderState().player.x;
+  for (let i = 0; i < 10; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+  const startX = sim.getRenderState().players[0]?.x ?? 0;
+  step0(sim, frame({ moveX: 1, dashPressed: true, dashHeld: true }));
+  const afterX = sim.getRenderState().players[0]?.x ?? 0;
   // moved roughly the configured dash distance to the right
   expect(afterX - startX).toBeGreaterThan(DEFAULT_CONFIG.dash.distance * 0.8);
 });
 
 test("Dash is gated by its cooldown", () => {
   const sim = newSim();
-  for (let i = 0; i < 10; i++) sim.step(EMPTY_INPUT);
+  for (let i = 0; i < 10; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
 
-  const x0 = sim.getRenderState().player.x;
-  sim.step(frame({ moveX: 1, dashPressed: true, dashHeld: true }));
-  const x1 = sim.getRenderState().player.x;
+  const x0 = sim.getRenderState().players[0]?.x ?? 0;
+  step0(sim, frame({ moveX: 1, dashPressed: true, dashHeld: true }));
+  const x1 = sim.getRenderState().players[0]?.x ?? 0;
   expect(x1 - x0).toBeGreaterThan(DEFAULT_CONFIG.dash.distance * 0.8);
 
   // Immediately attempting another Dash while on cooldown does nothing big.
-  sim.step(frame({ moveX: 1, dashPressed: true, dashHeld: true }));
-  const x2 = sim.getRenderState().player.x;
+  step0(sim, frame({ moveX: 1, dashPressed: true, dashHeld: true }));
+  const x2 = sim.getRenderState().players[0]?.x ?? 0;
   expect(x2 - x1).toBeLessThan(DEFAULT_CONFIG.dash.distance * 0.5);
 
   // After the cooldown elapses, a Dash works again.
   for (let i = 0; i < DEFAULT_CONFIG.dash.cooldownTicks; i++) {
-    sim.step(EMPTY_INPUT);
+    sim.step([EMPTY_INPUT, EMPTY_INPUT]);
   }
-  const x3 = sim.getRenderState().player.x;
-  sim.step(frame({ moveX: 1, dashPressed: true, dashHeld: true }));
-  const x4 = sim.getRenderState().player.x;
+  const x3 = sim.getRenderState().players[0]?.x ?? 0;
+  step0(sim, frame({ moveX: 1, dashPressed: true, dashHeld: true }));
+  const x4 = sim.getRenderState().players[0]?.x ?? 0;
   expect(x4 - x3).toBeGreaterThan(DEFAULT_CONFIG.dash.distance * 0.8);
 });
 
@@ -80,15 +85,15 @@ function worstPenetrationThrough(lead: InputFrame[], settle = 25): number {
   const sim = newSim();
   let worst = 0;
   const track = () => {
-    const p = sim.getRenderState().player;
-    worst = Math.max(worst, staticPenetration(p.x, p.y));
+    const p = sim.getRenderState().players[0];
+    if (p) worst = Math.max(worst, staticPenetration(p.x, p.y));
   };
   for (const f of lead) {
-    sim.step(f);
+    sim.step([f, EMPTY_INPUT]);
     track();
   }
   for (let i = 0; i < settle; i++) {
-    sim.step(EMPTY_INPUT);
+    sim.step([EMPTY_INPUT, EMPTY_INPUT]);
     track();
   }
   return worst;
@@ -134,46 +139,49 @@ test("an upward Tele-Dash is clamped by a suspended platform's underside", () =>
 
 test("exactly one air-dash per airtime, reset on landing", () => {
   const sim = newSim();
-  for (let i = 0; i < 10; i++) sim.step(EMPTY_INPUT);
+  for (let i = 0; i < 10; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
 
   // Jump straight up (full-height, ~33 ticks of airtime).
-  sim.step(frame({ jumpPressed: true, jumpHeld: true }));
-  sim.step(frame({ jumpHeld: true }));
-  expect(sim.getRenderState().player.grounded).toBe(false);
+  step0(sim, frame({ jumpPressed: true, jumpHeld: true }));
+  step0(sim, frame({ jumpHeld: true }));
+  expect(sim.getRenderState().players[0]?.grounded).toBe(false);
 
   // First air-dash connects (a horizontal blink preserves the jump arc).
-  const a0 = sim.getRenderState().player.x;
-  sim.step(
+  const a0 = sim.getRenderState().players[0]?.x ?? 0;
+  step0(
+    sim,
     frame({ moveX: 1, dashPressed: true, dashHeld: true, jumpHeld: true }),
   );
-  const a1 = sim.getRenderState().player.x;
+  const a1 = sim.getRenderState().players[0]?.x ?? 0;
   expect(a1 - a0).toBeGreaterThan(DEFAULT_CONFIG.dash.distance * 0.8);
 
   // Wait past the cooldown while staying airborne — the second air-dash must be
   // denied because the per-airtime budget is spent, even though cooldown is ready.
   for (let i = 0; i < DEFAULT_CONFIG.dash.cooldownTicks; i++) {
-    sim.step(frame({ jumpHeld: true }));
-    if (sim.getRenderState().player.grounded) break;
+    step0(sim, frame({ jumpHeld: true }));
+    if (sim.getRenderState().players[0]?.grounded) break;
   }
-  expect(sim.getRenderState().player.grounded).toBe(false);
-  const b0 = sim.getRenderState().player.x;
-  sim.step(
+  expect(sim.getRenderState().players[0]?.grounded).toBe(false);
+  const b0 = sim.getRenderState().players[0]?.x ?? 0;
+  step0(
+    sim,
     frame({ moveX: -1, dashPressed: true, dashHeld: true, jumpHeld: true }),
   );
-  const b1 = sim.getRenderState().player.x;
+  const b1 = sim.getRenderState().players[0]?.x ?? 0;
   expect(Math.abs(b1 - b0)).toBeLessThan(DEFAULT_CONFIG.dash.distance * 0.5);
 
   // Land, then the air-dash budget is available again.
-  for (let i = 0; i < 80; i++) sim.step(EMPTY_INPUT);
-  expect(sim.getRenderState().player.grounded).toBe(true);
+  for (let i = 0; i < 80; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+  expect(sim.getRenderState().players[0]?.grounded).toBe(true);
 
   // Jump and immediately air-dash to prove the budget reset on landing.
-  sim.step(frame({ jumpPressed: true, jumpHeld: true }));
-  sim.step(frame({ jumpHeld: true }));
-  const d0 = sim.getRenderState().player.x;
-  sim.step(
+  step0(sim, frame({ jumpPressed: true, jumpHeld: true }));
+  step0(sim, frame({ jumpHeld: true }));
+  const d0 = sim.getRenderState().players[0]?.x ?? 0;
+  step0(
+    sim,
     frame({ moveX: 1, dashPressed: true, dashHeld: true, jumpHeld: true }),
   );
-  const d1 = sim.getRenderState().player.x;
+  const d1 = sim.getRenderState().players[0]?.x ?? 0;
   expect(d1 - d0).toBeGreaterThan(DEFAULT_CONFIG.dash.distance * 0.8);
 });

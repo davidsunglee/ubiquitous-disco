@@ -11,6 +11,7 @@ import {
   serializeBellRingState,
   stepBellRing,
 } from "./rules/bellRing";
+import type { DashBlink } from "./rules/dash";
 import { resetDashOnLanding, stepDash } from "./rules/dash";
 import { stepMovement } from "./rules/movement";
 import { stepStrike } from "./rules/strike";
@@ -18,13 +19,13 @@ import { stepStrike } from "./rules/strike";
 export type { InputFrame } from "./input";
 
 export interface RenderState {
-  player: {
+  players: {
     x: number;
     y: number;
     facing: 1 | -1;
     grounded: boolean;
     charge: number;
-  };
+  }[];
   ball: { x: number; y: number; radius: number };
 }
 
@@ -59,13 +60,13 @@ export type DebugCollider = DebugBox | DebugCircle;
 
 export interface SimSnapshot {
   rapierBytes: Uint8Array;
-  actor: Actor;
+  actors: Actor[];
   bellRingArmed: boolean[];
   tick: number;
 }
 
 export interface Simulation {
-  step(input: InputFrame): void;
+  step(inputs: InputFrame[]): void;
   getRenderState(): RenderState;
   drainEvents(): SimEvent[];
   hashState(): string;
@@ -74,7 +75,7 @@ export interface Simulation {
    * Return all physics/scoring shapes in world units so the debug overlay can
    * draw them without knowing about Rapier or pixel conversion. Includes:
    *  - arena collider boxes
-   *  - player bounding box (current position)
+   *  - player bounding boxes (current position, one per slot)
    *  - ball circle (current position)
    *  - Bell art boxes
    *  - Bell hit-zone circles
@@ -116,7 +117,10 @@ export function createSimulation(opts: {
   let config: SimConfig = { ...opts.config };
   const { arena } = opts;
   const rw = new RapierWorld(config, arena);
-  let actor: Actor = createActor(1);
+  // Slot 0 faces right (+1), slot 1 faces left (-1) toward the centre.
+  let actors: Actor[] = arena.playerSpawns.map((_, s) =>
+    createActor(s === 0 ? 1 : -1),
+  );
   // seed reserved for Phase 3+ seeded RNG; deterministic w/o RNG this phase.
 
   // Authoritative tick counter (incremented per step) and the drainable event
@@ -126,21 +130,31 @@ export function createSimulation(opts: {
   let bellRing: BellRingState = createBellRingState(arena);
 
   return {
-    step(input) {
-      // Resolve any Tele-Dash this tick (ticks cooldown, gates air-dash) and get
-      // its blink displacement — applied inside movement's single sweep below.
-      const blink = stepDash(actor, input, config);
-      // Strike imparts impulse to the ball before the physics step integrates it.
-      stepStrike(actor, input, config, rw);
-      // Player movement: one collide-and-slide for walk + jump + blink, then
-      // grounded reconciliation.
-      stepMovement(actor, input, config, rw, blink);
-      // Restore the air-dash budget once the actor is grounded again.
-      resetDashOnLanding(actor);
-      // Advance Rapier (ball integrates, player commits its kinematic move).
+    step(inputs: InputFrame[]) {
+      // Per-slot pre-physics rules in fixed slot order.
+      const blinks: (DashBlink | null)[] = [];
+      for (let s = 0; s < actors.length; s++) {
+        const actor = actors[s];
+        const input = inputs[s];
+        if (!actor || !input) continue;
+        blinks[s] = stepDash(actor, input, config);
+        stepStrike(actor, input, config, rw, s);
+      }
+      for (let s = 0; s < actors.length; s++) {
+        const actor = actors[s];
+        const input = inputs[s];
+        if (!actor || !input) continue;
+        stepMovement(actor, input, config, rw, s, blinks[s] ?? null);
+        resetDashOnLanding(actor);
+      }
+      // One physics step commits both kinematic moves + integrates the ball.
       rw.step();
-      // Post-step ball maintenance: light contact push + speed clamp.
-      stepBall(actor, config, rw);
+      // Post-physics per-slot ball maintenance, then one bell-ring pass.
+      for (let s = 0; s < actors.length; s++) {
+        const actor = actors[s];
+        if (!actor) continue;
+        stepBall(actor, config, rw, s);
+      }
       // Bell Ring detection runs after the world step, when the ball position is
       // current for this tick. Pure geometry (ball circle vs. each hit-zone),
       // debounced once per contact; queue an event per Bell that rang.
@@ -159,12 +173,12 @@ export function createSimulation(opts: {
     },
     getRenderState() {
       return {
-        player: {
-          ...rw.playerPos(),
-          facing: actor.facing,
-          grounded: actor.grounded,
-          charge: actor.charge,
-        },
+        players: actors.map((a, s) => ({
+          ...rw.playerPos(s),
+          facing: a.facing,
+          grounded: a.grounded,
+          charge: a.charge,
+        })),
         ball: { ...rw.ballPos(), radius: config.ball.radius },
       };
     },
@@ -172,14 +186,13 @@ export function createSimulation(opts: {
       if (events.length === 0) return [];
       return events.splice(0, events.length);
     },
-    // Composite hash: Rapier snapshot bytes ‖ serialized actor state ‖ serialized
-    // Bell Ring debounce state. The actor struct, KinematicCharacterController,
-    // and the per-Bell armed flags are NOT captured by takeSnapshot(), so all
-    // halves are required to detect divergence.
+    // Composite hash: Rapier snapshot bytes ‖ serialized actor[0] ‖ serialized actor[1]
+    // ‖ serialized Bell Ring debounce state. Fixed concatenation order — any change
+    // in field count or type shape must be reflected here.
     hashState() {
       return hashBytes(
         rw.takeSnapshot(),
-        serializeActor(actor),
+        ...actors.map((a) => serializeActor(a)),
         serializeBellRingState(bellRing),
       );
     },
@@ -201,16 +214,18 @@ export function createSimulation(opts: {
         });
       }
 
-      // Player bounding box at current world position.
-      const pp = rw.playerPos();
-      shapes.push({
-        kind: "box",
-        label: "player",
-        x: pp.x,
-        y: pp.y,
-        halfW: config.player.halfW,
-        halfH: config.player.halfH,
-      });
+      // Player bounding boxes at current world positions (one per slot).
+      for (let s = 0; s < actors.length; s++) {
+        const pp = rw.playerPos(s);
+        shapes.push({
+          kind: "box",
+          label: `player[${s}]`,
+          x: pp.x,
+          y: pp.y,
+          halfW: config.player.halfW,
+          halfH: config.player.halfH,
+        });
+      }
 
       // Ball circle at current world position.
       const bp = rw.ballPos();
@@ -249,8 +264,8 @@ export function createSimulation(opts: {
     takeSnapshot(): SimSnapshot {
       return {
         rapierBytes: rw.takeSnapshot(),
-        // Deep-copy the actor so the snapshot is independent of future mutations.
-        actor: { ...actor },
+        // Deep-copy each actor so the snapshot is independent of future mutations.
+        actors: actors.map((a) => ({ ...a })),
         bellRingArmed: [...bellRing.armed],
         tick,
       };
@@ -259,8 +274,8 @@ export function createSimulation(opts: {
     restoreSnapshot(snap: SimSnapshot): void {
       // Restore Rapier world state.
       rw.restoreSnapshot(snap.rapierBytes);
-      // Restore JS-side actor.
-      actor = { ...snap.actor };
+      // Restore JS-side actors.
+      actors = snap.actors.map((a) => ({ ...a }));
       // Restore Bell Ring debounce state.
       bellRing = { armed: [...snap.bellRingArmed] };
       // Restore tick counter.

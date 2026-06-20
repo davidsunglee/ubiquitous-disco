@@ -21,6 +21,7 @@ export function stepStrike(
   input: InputFrame,
   config: SimConfig,
   world: RapierWorld,
+  slot: number,
 ): void {
   const s = config.strike;
 
@@ -36,7 +37,7 @@ export function stepStrike(
   const chargeTicks = Math.max(actor.charge, s.minChargeTicks);
   actor.charge = 0;
 
-  const player = world.playerPos();
+  const player = world.playerPos(slot);
   const ball = world.ballPos();
   const dx = ball.x - player.x;
   const dy = ball.y - player.y;

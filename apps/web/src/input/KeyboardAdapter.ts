@@ -7,36 +7,60 @@ import {
 import Phaser from "phaser";
 
 /**
+ * Key mapping for a single player. Each field is a Phaser KeyCode integer.
+ */
+export interface KeyMap {
+  left: number;
+  right: number;
+  up: number;
+  down: number;
+  jump: number;
+  dash: number;
+  strike: number;
+}
+
+const K = Phaser.Input.Keyboard.KeyCodes;
+
+/** P1 keyboard mapping: WASD movement, C=jump, V=dash, B=strike. */
+export const P1_KEYMAP: KeyMap = {
+  left: K.A,
+  right: K.D,
+  up: K.W,
+  down: K.S,
+  jump: K.C,
+  dash: K.V,
+  strike: K.B,
+};
+
+/** P2 keyboard mapping: Arrow keys movement, J=jump, K=dash, L=strike. */
+export const P2_KEYMAP: KeyMap = {
+  left: K.LEFT,
+  right: K.RIGHT,
+  up: K.UP,
+  down: K.DOWN,
+  jump: K.J,
+  dash: K.K,
+  strike: K.L,
+};
+
+/**
  * Gathers raw keyboard state and normalizes it into a sim-owned InputFrame using
- * the protected helpers:
- *  - movement: arrow keys,
- *  - Jump: Space / Up,
- *  - Tele-Dash: D,
- *  - Strike: S (held-to-charge, released to fire).
- * Edge flags (pressed/released) are derived from the previous frame's held state.
+ * the protected helpers. Accepts a KeyMap so the same adapter can be used for
+ * either player.
  */
 export class KeyboardAdapter {
-  private readonly keys: {
-    left: Phaser.Input.Keyboard.Key;
-    right: Phaser.Input.Keyboard.Key;
-    up: Phaser.Input.Keyboard.Key;
-    down: Phaser.Input.Keyboard.Key;
-    space: Phaser.Input.Keyboard.Key;
-    dash: Phaser.Input.Keyboard.Key;
-    strike: Phaser.Input.Keyboard.Key;
-  };
+  private readonly keys: Record<keyof KeyMap, Phaser.Input.Keyboard.Key>;
   private prevHeld: HeldState = { jump: false, dash: false, strike: false };
 
-  constructor(keyboard: Phaser.Input.Keyboard.KeyboardPlugin) {
-    const K = Phaser.Input.Keyboard.KeyCodes;
+  constructor(keyboard: Phaser.Input.Keyboard.KeyboardPlugin, keymap: KeyMap) {
     this.keys = {
-      left: keyboard.addKey(K.LEFT),
-      right: keyboard.addKey(K.RIGHT),
-      up: keyboard.addKey(K.UP),
-      down: keyboard.addKey(K.DOWN),
-      space: keyboard.addKey(K.SPACE),
-      dash: keyboard.addKey(K.D),
-      strike: keyboard.addKey(K.S),
+      left: keyboard.addKey(keymap.left),
+      right: keyboard.addKey(keymap.right),
+      up: keyboard.addKey(keymap.up),
+      down: keyboard.addKey(keymap.down),
+      jump: keyboard.addKey(keymap.jump),
+      dash: keyboard.addKey(keymap.dash),
+      strike: keyboard.addKey(keymap.strike),
     };
   }
 
@@ -49,7 +73,7 @@ export class KeyboardAdapter {
 
     const move = normalizeMove(rawX, rawY);
     const held: HeldState = {
-      jump: k.space.isDown || k.up.isDown,
+      jump: k.jump.isDown,
       dash: k.dash.isDown,
       strike: k.strike.isDown,
     };

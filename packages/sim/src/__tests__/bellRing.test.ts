@@ -68,6 +68,10 @@ const ONE_BELL: ArenaDef = {
       hitZone: { kind: "circle", x: 5, y: 5, radius: 1 },
     },
   ],
+  playerSpawns: [
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+  ],
   playerSpawn: { x: 0, y: 0 },
   ballSpawn: { x: 0, y: 0 },
 };
@@ -130,20 +134,23 @@ test("serializeBellRingState reflects per-Bell armed flags in order", () => {
 // Walk the player next to the (settled) ball so a Strike is within reach, then a
 // partial-charge up-right Strike pops it into the right Bell at (9, 5).
 function ringRightBell(sim: ReturnType<typeof newSim>): void {
-  for (let i = 0; i < 40; i++) sim.step(EMPTY_INPUT);
+  for (let i = 0; i < 40; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
   for (let i = 0; i < 40; i++) {
-    sim.step(frame({ moveX: 1 }));
+    sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
     const s = sim.getRenderState();
-    const d = Math.hypot(s.ball.x - s.player.x, s.ball.y - s.player.y);
+    const p = s.players[0];
+    if (!p) break;
+    const d = Math.hypot(s.ball.x - p.x, s.ball.y - p.y);
     if (d <= DEFAULT_CONFIG.strike.reach * 0.9) break;
   }
-  sim.step(
+  sim.step([
     frame({ strikeHeld: true, strikePressed: true, moveX: 1, moveY: 1 }),
-  );
+    EMPTY_INPUT,
+  ]);
   for (let i = 0; i < 8; i++) {
-    sim.step(frame({ strikeHeld: true, moveX: 1, moveY: 1 }));
+    sim.step([frame({ strikeHeld: true, moveX: 1, moveY: 1 }), EMPTY_INPUT]);
   }
-  sim.step(frame({ strikeReleased: true, moveX: 1, moveY: 1 }));
+  sim.step([frame({ strikeReleased: true, moveX: 1, moveY: 1 }), EMPTY_INPUT]);
 }
 
 test("an upward Strike into the elevated right Bell emits a bellRing event", () => {
@@ -152,7 +159,7 @@ test("an upward Strike into the elevated right Bell emits a bellRing event", () 
 
   let rang: { bell: "left" | "right"; tick: number } | null = null;
   for (let i = 0; i < 160; i++) {
-    sim.step(EMPTY_INPUT);
+    sim.step([EMPTY_INPUT, EMPTY_INPUT]);
     const events = sim.drainEvents();
     const hit = events.find((e) => e.type === "bellRing");
     if (hit) {
@@ -169,7 +176,7 @@ test("the scripted Bell-ring run is hash-equal across two runs", () => {
   const run = (): string => {
     const sim = newSim();
     ringRightBell(sim);
-    for (let i = 0; i < 160; i++) sim.step(EMPTY_INPUT);
+    for (let i = 0; i < 160; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
     return sim.hashState();
   };
   expect(run()).toBe(run());

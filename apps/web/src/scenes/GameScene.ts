@@ -14,7 +14,11 @@ import {
   serializeReplay,
 } from "@bb/sim";
 import Phaser from "phaser";
-import { KeyboardAdapter } from "../input/KeyboardAdapter";
+import {
+  KeyboardAdapter,
+  P1_KEYMAP,
+  P2_KEYMAP,
+} from "../input/KeyboardAdapter";
 import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
 import { attemptLandscapeLock } from "../orientation";
 import {
@@ -31,10 +35,17 @@ import {
 import { type HudBridge, hudBridge } from "./HudScene";
 import { OrientationOverlay } from "./OrientationOverlay";
 
+// Distinct colors for slot 0 and slot 1 (grounded / airborne variants).
+const SLOT_COLORS = [
+  { grounded: 0x33aaff, air: 0x55ccff }, // P1: blue
+  { grounded: 0xff7755, air: 0xff9977 }, // P2: orange
+];
+
 export class GameScene extends Phaser.Scene {
   private sim!: Simulation;
   private gfx!: Phaser.GameObjects.Graphics;
-  private keyboard!: KeyboardAdapter;
+  private kb1!: KeyboardAdapter;
+  private kb2!: KeyboardAdapter;
   private touch!: TouchAdapter;
   private groupCamera!: GroupCamera;
   private orientationOverlay!: OrientationOverlay;
@@ -58,7 +69,7 @@ export class GameScene extends Phaser.Scene {
   private lastCaptureJson: string | null = null;
 
   // Replay playback state (null when not replaying via startReplay).
-  private replayFrames: InputFrame[] | null = null;
+  private replayFrames: InputFrame[][] | null = null;
   private replayFrameCursor = 0;
 
   // ── Phase 6: static Bell screen positions ────────────────────────────────────
@@ -74,7 +85,16 @@ export class GameScene extends Phaser.Scene {
     if (!this.input.keyboard) {
       throw new Error("Keyboard input plugin unavailable");
     }
-    this.keyboard = new KeyboardAdapter(this.input.keyboard);
+    this.kb1 = new KeyboardAdapter(this.input.keyboard, P1_KEYMAP);
+    this.kb2 = new KeyboardAdapter(this.input.keyboard, P2_KEYMAP);
+
+    // Stop arrow keys (P2 movement) from scrolling the page/canvas.
+    this.input.keyboard.addCapture([
+      Phaser.Input.Keyboard.KeyCodes.UP,
+      Phaser.Input.Keyboard.KeyCodes.DOWN,
+      Phaser.Input.Keyboard.KeyCodes.LEFT,
+      Phaser.Input.Keyboard.KeyCodes.RIGHT,
+    ]);
 
     // Phase 6: touch adapter.
     this.touch = new TouchAdapter(this);
@@ -210,22 +230,22 @@ export class GameScene extends Phaser.Scene {
     this.replayFrameCursor = 0;
   }
 
-  private collectInputFrame(): InputFrame {
+  private collectInputFrames(): InputFrame[] {
     if (this.replayFrames !== null) {
-      const f = this.replayFrames[this.replayFrameCursor];
-      if (f !== undefined) {
+      const row = this.replayFrames[this.replayFrameCursor];
+      if (row !== undefined) {
         this.replayFrameCursor++;
-        return f;
+        return row;
       }
       // Replay finished.
       this.replayFrames = null;
       this.replayFrameCursor = 0;
       console.info("[replay] playback complete");
     }
-    // Merge keyboard + touch: both active simultaneously is fine (OR/add).
-    const kbFrame = this.keyboard.collect();
-    const touchFrame = this.touch.collect();
-    return mergeInputFrames(kbFrame, touchFrame);
+    // P1: merge keyboard + touch; P2: standalone keyboard.
+    const p1 = mergeInputFrames(this.kb1.collect(), this.touch.collect());
+    const p2 = this.kb2.collect();
+    return [p1, p2];
   }
 
   update(_time: number, delta: number): void {
@@ -240,14 +260,14 @@ export class GameScene extends Phaser.Scene {
 
     while (this.accumulator >= this.FIXED_STEP) {
       this.prev = this.cur;
-      const inputFrame = this.collectInputFrame();
+      const inputFrames = this.collectInputFrames();
 
-      // Record frame into capture data if capture is active.
+      // Record frames into capture data if capture is active.
       if (this.captureData) {
-        recordFrame(this.captureData, inputFrame);
+        recordFrame(this.captureData, inputFrames);
       }
 
-      this.sim.step(inputFrame);
+      this.sim.step(inputFrames);
       this.cur = structuredClone(this.sim.getRenderState());
       // Drain sim events each tick and surface Bell Ring feedback.
       for (const event of this.sim.drainEvents()) {
@@ -265,7 +285,7 @@ export class GameScene extends Phaser.Scene {
     this.drawArena();
     this.drawBells();
     this.drawBall(alpha);
-    this.drawPlayer(alpha);
+    this.drawPlayers(alpha);
     this.tickBellFeedback(delta);
 
     // Phase 6: draw touch UI on top of game graphics (pinned layer).
@@ -281,14 +301,19 @@ export class GameScene extends Phaser.Scene {
     const s = this.cur;
     const p = this.prev;
 
-    // Interpolated positions for smoother camera tracking.
-    const playerX = lerp(p.player.x, s.player.x, alpha);
-    const playerY = lerp(p.player.y, s.player.y, alpha);
+    // Interpolated ball position for smoother camera tracking.
     const ballX = lerp(p.ball.x, s.ball.x, alpha);
     const ballY = lerp(p.ball.y, s.ball.y, alpha);
 
     const subjects = [
-      subjectFromWorld(playerX, playerY),
+      // Both players as camera subjects (interpolated).
+      ...s.players.map((cp, i) => {
+        const pp = p.players[i] ?? cp;
+        return subjectFromWorld(
+          lerp(pp.x, cp.x, alpha),
+          lerp(pp.y, cp.y, alpha),
+        );
+      }),
       subjectFromWorld(ballX, ballY),
       ...this.bellSubjects,
     ];
@@ -376,33 +401,40 @@ export class GameScene extends Phaser.Scene {
       );
   }
 
-  private drawPlayer(alpha: number): void {
-    const x = lerp(this.prev.player.x, this.cur.player.x, alpha);
-    const y = lerp(this.prev.player.y, this.cur.player.y, alpha);
-    const halfW = DEFAULT_CONFIG.player.halfW;
-    const halfH = DEFAULT_CONFIG.player.halfH;
-    const color = this.cur.player.grounded ? 0x33aaff : 0x55ccff;
-    this.gfx
-      .fillStyle(color, 1)
-      .fillRect(
-        toScreenX(x - halfW),
-        toScreenY(y + halfH),
-        halfW * 2 * PX_PER_UNIT,
-        halfH * 2 * PX_PER_UNIT,
-      );
-    // facing indicator: a notch on the leading edge
-    const facing = this.cur.player.facing;
-    const noseX = toScreenX(x + facing * halfW);
-    this.gfx
-      .fillStyle(0xffffff, 1)
-      .fillCircle(noseX, toScreenY(y + halfH * 0.4), 4);
+  /** Render all player slots with distinct colors. */
+  private drawPlayers(alpha: number): void {
+    for (let s = 0; s < this.cur.players.length; s++) {
+      const cp = this.cur.players[s];
+      if (!cp) continue;
+      const pp = this.prev.players[s] ?? cp;
+      const x = lerp(pp.x, cp.x, alpha);
+      const y = lerp(pp.y, cp.y, alpha);
+      const halfW = DEFAULT_CONFIG.player.halfW;
+      const halfH = DEFAULT_CONFIG.player.halfH;
+      const colorsEntry = SLOT_COLORS[s] ?? SLOT_COLORS[0];
+      const colors = colorsEntry ?? { grounded: 0x33aaff, air: 0x55ccff };
+      const color = cp.grounded ? colors.grounded : colors.air;
+      this.gfx
+        .fillStyle(color, 1)
+        .fillRect(
+          toScreenX(x - halfW),
+          toScreenY(y + halfH),
+          halfW * 2 * PX_PER_UNIT,
+          halfH * 2 * PX_PER_UNIT,
+        );
+      // Facing indicator: a notch on the leading edge.
+      const noseX = toScreenX(x + cp.facing * halfW);
+      this.gfx
+        .fillStyle(0xffffff, 1)
+        .fillCircle(noseX, toScreenY(y + halfH * 0.4), 4);
 
-    this.drawChargeFeedback(x, y, halfW, halfH);
+      this.drawChargeFeedback(x, y, halfW, halfH, cp.charge);
+    }
   }
 
   /**
    * Strike charge feedback: a ring around the player whose radius and color
-   * intensity grow with RenderState.player.charge (ticks). charge is 0 when not
+   * intensity grow with the player's charge (ticks). charge is 0 when not
    * charging, so the ring only appears while holding Strike.
    */
   private drawChargeFeedback(
@@ -410,8 +442,8 @@ export class GameScene extends Phaser.Scene {
     y: number,
     halfW: number,
     halfH: number,
+    charge: number,
   ): void {
-    const charge = this.cur.player.charge;
     if (charge <= 0) return;
     const max = DEFAULT_CONFIG.strike.maxChargeTicks;
     const t = Math.min(1, charge / max);

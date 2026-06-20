@@ -10,11 +10,27 @@ type CharacterControllerInstance = InstanceType<
   typeof RAPIER_TYPE.KinematicCharacterController
 >;
 
+// Collision-group memberships (high 16 bits) and filters (low 16 bits).
+// Players pass through each other but collide with arena + ball.
+const GROUP_ARENA = 0x0001;
+const GROUP_PLAYER = 0x0002;
+const GROUP_BALL = 0x0004;
+function groups(membership: number, filter: number): number {
+  return ((membership & 0xffff) << 16) | (filter & 0xffff);
+}
+
+const ARENA_GROUPS = groups(
+  GROUP_ARENA,
+  GROUP_ARENA | GROUP_PLAYER | GROUP_BALL,
+);
+const PLAYER_GROUPS = groups(GROUP_PLAYER, GROUP_ARENA | GROUP_BALL); // excludes PLAYER
+const BALL_GROUPS = groups(GROUP_BALL, GROUP_ARENA | GROUP_PLAYER | GROUP_BALL);
+
 export class RapierWorld {
   readonly world: WorldInstance;
-  readonly player: RigidBodyInstance;
-  readonly playerCollider: ColliderInstance;
-  readonly controller: CharacterControllerInstance;
+  readonly players: RigidBodyInstance[];
+  readonly playerColliders: ColliderInstance[];
+  readonly controllers: CharacterControllerInstance[];
   readonly ball: RigidBodyInstance;
 
   constructor(config: SimConfig, arena: ArenaDef) {
@@ -25,23 +41,43 @@ export class RapierWorld {
     // 1) arena colliders — fixed order
     for (const c of arena.colliders) {
       this.world.createCollider(
-        R.ColliderDesc.cuboid(c.halfW, c.halfH).setTranslation(c.x, c.y),
+        R.ColliderDesc.cuboid(c.halfW, c.halfH)
+          .setTranslation(c.x, c.y)
+          .setCollisionGroups(ARENA_GROUPS),
       );
     }
 
-    // 2) player — kinematic-position body inserted AFTER arena colliders
-    this.player = this.world.createRigidBody(
-      R.RigidBodyDesc.kinematicPositionBased().setTranslation(
-        arena.playerSpawn.x,
-        arena.playerSpawn.y,
-      ),
-    );
-    this.playerCollider = this.world.createCollider(
-      R.ColliderDesc.cuboid(config.player.halfW, config.player.halfH),
-      this.player,
-    );
+    // 2) players — kinematic bodies inserted in fixed slot order, AFTER arena
+    //    colliders and BEFORE the ball. This order is the determinism contract.
+    this.players = [];
+    this.playerColliders = [];
+    this.controllers = [];
+    for (let s = 0; s < arena.playerSpawns.length; s++) {
+      const spawn = arena.playerSpawns[s];
+      if (!spawn) continue;
+      const body = this.world.createRigidBody(
+        R.RigidBodyDesc.kinematicPositionBased().setTranslation(
+          spawn.x,
+          spawn.y,
+        ),
+      );
+      const col = this.world.createCollider(
+        R.ColliderDesc.cuboid(
+          config.player.halfW,
+          config.player.halfH,
+        ).setCollisionGroups(PLAYER_GROUPS),
+        body,
+      );
+      const ctrl = this.world.createCharacterController(0.01);
+      ctrl.setUp({ x: 0, y: 1 });
+      ctrl.setApplyImpulsesToDynamicBodies(true);
+      ctrl.enableSnapToGround(0.1);
+      this.players.push(body);
+      this.playerColliders.push(col);
+      this.controllers.push(ctrl);
+    }
 
-    // 3) ball dynamic body — inserted AFTER the player, every run. CCD (swept
+    // 3) ball dynamic body — inserted AFTER both players, every run. CCD (swept
     // collision) is enabled: a hard Strike can drive the ball faster than a wall
     // is thick per tick, which a discrete solver would tunnel straight through.
     this.ball = this.world.createRigidBody(
@@ -54,18 +90,10 @@ export class RapierWorld {
     this.world.createCollider(
       R.ColliderDesc.ball(config.ball.radius)
         .setRestitution(config.ball.restitution)
-        .setMass(config.ball.mass),
+        .setMass(config.ball.mass)
+        .setCollisionGroups(BALL_GROUPS),
       this.ball,
     );
-
-    // Character controller (collide-and-slide). Up is +Y per the coordinate
-    // invariant. A small offset keeps the controller numerically stable. The
-    // controller applies impulses to dynamic bodies it slides into, which is how
-    // the player makes light body-contact with the ball while walking.
-    this.controller = this.world.createCharacterController(0.01);
-    this.controller.setUp({ x: 0, y: 1 });
-    this.controller.setApplyImpulsesToDynamicBodies(true);
-    this.controller.enableSnapToGround(0.1);
   }
 
   step(): void {
@@ -73,7 +101,7 @@ export class RapierWorld {
   }
 
   /**
-   * Move the player by `dx, dy` (world units) this tick using collide-and-slide,
+   * Move a player by `dx, dy` (world units) this tick using collide-and-slide,
    * then commit the resulting translation to the kinematic body. Returns the
    * actually-applied movement and whether the controller reports grounded.
    *
@@ -81,22 +109,36 @@ export class RapierWorld {
    * contacts and pushes the ball as it walks/jumps into it. On a Tele-Dash tick
    * the whole movement (walk + blink) is swept with `excludeDynamic` so the blink
    * passes the ball rather than shoving it.
+   *
+   * Players also pass through each other (PLAYER_GROUPS excludes PLAYER from its
+   * filter), so the excludeDynamic flag on dash is only needed for ball pass-through.
    */
   movePlayer(
+    slot: number,
     dx: number,
     dy: number,
     excludeDynamic = false,
   ): { movedX: number; movedY: number; grounded: boolean } {
     const R = getRapier();
-    this.controller.computeColliderMovement(
-      this.playerCollider,
+    const ctrl = this.controllers[slot];
+    const col = this.playerColliders[slot];
+    const body = this.players[slot];
+    if (!ctrl || !col || !body) {
+      throw new Error(`movePlayer: invalid slot ${slot}`);
+    }
+    // Pass the PLAYER_GROUPS filter so the character controller sweep respects
+    // the same collision group settings as the collider itself — in particular,
+    // players (GROUP_PLAYER) are excluded from each other's filter.
+    ctrl.computeColliderMovement(
+      col,
       { x: dx, y: dy },
       excludeDynamic ? R.QueryFilterFlags.EXCLUDE_DYNAMIC : undefined,
+      PLAYER_GROUPS,
     );
-    const corrected = this.controller.computedMovement();
-    const grounded = this.controller.computedGrounded();
-    const t = this.player.translation();
-    this.player.setNextKinematicTranslation({
+    const corrected = ctrl.computedMovement();
+    const grounded = ctrl.computedGrounded();
+    const t = body.translation();
+    body.setNextKinematicTranslation({
       x: t.x + corrected.x,
       y: t.y + corrected.y,
     });
@@ -117,8 +159,10 @@ export class RapierWorld {
     this.ball.setLinvel({ x: vx, y: vy }, true);
   }
 
-  playerPos(): { x: number; y: number } {
-    const t = this.player.translation();
+  playerPos(slot: number): { x: number; y: number } {
+    const body = this.players[slot];
+    if (!body) throw new Error(`playerPos: invalid slot ${slot}`);
+    const t = body.translation();
     return { x: t.x, y: t.y };
   }
 
@@ -127,15 +171,37 @@ export class RapierWorld {
     return { x: t.x, y: t.y };
   }
 
+  /**
+   * Teleport both players to their spawns and the ball to its spawn (zeroed vel).
+   * Called at the start of each round reset (Phase 2+).
+   */
+  resetPositions(arena: ArenaDef): void {
+    for (let s = 0; s < this.players.length; s++) {
+      const spawn = arena.playerSpawns[s];
+      if (!spawn) continue;
+      this.players[s]?.setNextKinematicTranslation({ x: spawn.x, y: spawn.y });
+      this.players[s]?.setTranslation({ x: spawn.x, y: spawn.y }, true);
+    }
+    this.ball.setTranslation(
+      { x: arena.ballSpawn.x, y: arena.ballSpawn.y },
+      true,
+    );
+    this.ball.setLinvel({ x: 0, y: 0 }, true);
+    this.ball.setAngvel(0, true);
+  }
+
   takeSnapshot(): Uint8Array {
     return this.world.takeSnapshot();
   }
 
   /**
    * Replace the current Rapier world with the state from a previously taken
-   * snapshot. JS-side objects (character controller, rigid body handles etc.)
+   * snapshot. JS-side objects (character controllers, rigid body handles etc.)
    * are re-bound from the restored world. The restored world has the same
    * body/collider insertion order as the original, so handles are stable.
+   *
+   * Insertion order: arena colliders (no body) → player0 → player1 → ball.
+   * restoreSnapshot rebinds N+1 rigid bodies and re-creates all N controllers.
    */
   restoreSnapshot(bytes: Uint8Array): void {
     const R = getRapier();
@@ -143,37 +209,47 @@ export class RapierWorld {
     const restored = R.World.restoreSnapshot(bytes);
     // Swap the world reference (type cast — the readonly is only for external callers).
     (this as { world: WorldInstance }).world = restored;
-    // Re-bind rigid body handles. Insertion order: arena colliders → player → ball.
-    // The player was the first dynamic/kinematic body inserted, ball was second.
+    // Re-bind rigid body handles. Insertion order: arena colliders → player0 → player1 → ball.
     const bodies: RigidBodyInstance[] = [];
     restored.forEachRigidBody((b) => bodies.push(b));
-    // Player is the first kinematic body (index 0), ball is the dynamic (index 1).
-    // We rely on the fact that arena colliders are all fixed (no rigid body), so
-    // the only rigid bodies are player + ball in insertion order.
-    const playerBody = bodies[0];
-    const ballBody = bodies[1];
-    if (!playerBody || !ballBody) {
+
+    const n = this.players.length; // number of player slots
+    if (bodies.length !== n + 1) {
       throw new Error(
-        "restoreSnapshot: expected 2 rigid bodies (player, ball)",
+        `restoreSnapshot: expected ${n + 1} rigid bodies (players + ball), got ${bodies.length}`,
       );
     }
-    (this as { player: RigidBodyInstance }).player = playerBody;
+
+    const newPlayers: RigidBodyInstance[] = [];
+    const newCols: ColliderInstance[] = [];
+    for (let s = 0; s < n; s++) {
+      const body = bodies[s];
+      if (!body)
+        throw new Error(`restoreSnapshot: body for slot ${s} not found`);
+      const col = body.collider(0);
+      if (!col)
+        throw new Error(`restoreSnapshot: player ${s} collider not found`);
+      newPlayers.push(body);
+      newCols.push(col);
+    }
+    const ballBody = bodies[n];
+    if (!ballBody) throw new Error("restoreSnapshot: ball body not found");
+
+    (this as { players: RigidBodyInstance[] }).players = newPlayers;
+    (this as { playerColliders: ColliderInstance[] }).playerColliders = newCols;
     (this as { ball: RigidBodyInstance }).ball = ballBody;
 
-    // Re-bind colliders. The player collider is the first collider attached to
-    // the player body; the ball collider is the first attached to the ball body.
-    const playerCol = playerBody.collider(0);
-    if (!playerCol) {
-      throw new Error("restoreSnapshot: player collider not found");
+    // Re-create all character controllers (not serialized by Rapier snapshot).
+    const newControllers: CharacterControllerInstance[] = [];
+    for (const c of this.controllers) restored.removeCharacterController(c);
+    for (let s = 0; s < n; s++) {
+      const ctrl = restored.createCharacterController(0.01);
+      ctrl.setUp({ x: 0, y: 1 });
+      ctrl.setApplyImpulsesToDynamicBodies(true);
+      ctrl.enableSnapToGround(0.1);
+      newControllers.push(ctrl);
     }
-    (this as { playerCollider: ColliderInstance }).playerCollider = playerCol;
-
-    // Re-create the character controller (not serialized by Rapier snapshot).
-    restored.removeCharacterController(this.controller);
-    const ctrl = restored.createCharacterController(0.01);
-    ctrl.setUp({ x: 0, y: 1 });
-    ctrl.setApplyImpulsesToDynamicBodies(true);
-    ctrl.enableSnapToGround(0.1);
-    (this as { controller: CharacterControllerInstance }).controller = ctrl;
+    (this as { controllers: CharacterControllerInstance[] }).controllers =
+      newControllers;
   }
 }
