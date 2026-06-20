@@ -32,6 +32,13 @@ export interface BallConfig {
   playerPush: number; // light player-body contact push speed (units/s)
 }
 
+export interface MatchConfig {
+  lengthTicks: number; // regulation length (default 5400 = 3:00 @ 30Hz)
+  scoringPauseTicks: number; // freeze after a Bell Ring before reset
+  resetTicks: number; // reset/respawn countdown before play resumes
+  goldenGoal: boolean; // tie at regulation → sudden-death next ring wins
+}
+
 export interface SimConfig {
   tickHz: number; // 30 — authoritative fixed step
   gravityY: number; // negative (−Y) per coordinate invariant
@@ -40,6 +47,7 @@ export interface SimConfig {
   movement: MovementConfig;
   dash: DashConfig;
   strike: StrikeConfig;
+  match: MatchConfig;
 }
 
 export const DEFAULT_CONFIG: SimConfig = {
@@ -73,5 +81,11 @@ export const DEFAULT_CONFIG: SimConfig = {
     maxImpulse: 16,
     upwardBias: 0.5,
     reach: 2,
+  },
+  match: {
+    lengthTicks: 5400, // 3:00 @ 30 Hz
+    scoringPauseTicks: 45, // ~1.5s celebration freeze
+    resetTicks: 30, // ~1.0s respawn settle
+    goldenGoal: true,
   },
 };

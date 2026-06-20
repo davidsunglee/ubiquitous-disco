@@ -9,7 +9,7 @@
  * The DOM root element carries data-testid="hud" so Playwright can locate it.
  */
 
-import type { DebugCollider, SimConfig } from "@bb/sim";
+import type { DebugCollider, MatchState, SimConfig } from "@bb/sim";
 import { DEFAULT_CONFIG } from "@bb/sim";
 import Phaser from "phaser";
 import { PX_PER_UNIT, toScreenX, toScreenY } from "../render/worldToScreen";
@@ -35,6 +35,8 @@ export interface HudBridge {
   /** Replay the last captured session (kicks off a fresh sim run). */
   replayCapture(): void;
   isCapturing(): boolean;
+  /** Returns the current match state (scores, phase, timer) for HUD display. */
+  getMatchState(): MatchState;
 }
 
 /** Singleton bridge. GameScene sets fields in create(); HudScene reads them. */
@@ -51,6 +53,15 @@ export const hudBridge: HudBridge = {
   stopCapture: () => null,
   replayCapture: () => {},
   isCapturing: () => false,
+  getMatchState: () => ({
+    phase: "preRound",
+    scores: [0, 0],
+    timer: DEFAULT_CONFIG.match.lengthTicks,
+    pauseTicks: 0,
+    resetTicks: 0,
+    winner: -1,
+    timerExpired: false,
+  }),
 };
 
 // ── Layout constants ─────────────────────────────────────────────────────────

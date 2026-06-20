@@ -25,11 +25,14 @@ function frame(partial: Partial<InputFrame>): InputFrame {
 }
 
 function newSim() {
-  return createSimulation({
+  const sim = createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 4242,
   });
+  // Advance past preRound so gameplay rules run.
+  sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+  return sim;
 }
 
 // ── Pure overlap geometry ────────────────────────────────────────────────────

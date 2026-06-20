@@ -5,6 +5,7 @@ import {
   deserializeReplay,
   FLAT_DOJO,
   type InputFrame,
+  type MatchState,
   playReplay,
   type RenderState,
   type ReplayData,
@@ -75,6 +76,13 @@ export class GameScene extends Phaser.Scene {
   // ── Phase 6: static Bell screen positions ────────────────────────────────────
   private bellSubjects!: Array<{ screenX: number; screenY: number }>;
 
+  // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
+  private scoreEl!: HTMLElement;
+  private timerEl!: HTMLElement;
+  private startPromptEl!: HTMLElement;
+  private goldenGoalEl!: HTMLElement;
+  private matchSummaryEl!: HTMLElement;
+
   constructor() {
     super("GameScene");
   }
@@ -141,8 +149,88 @@ export class GameScene extends Phaser.Scene {
     // Wire up the HUD bridge so HudScene can control us.
     this.wireHudBridge();
 
+    // Phase 2: inject match HUD DOM nodes so Playwright can locate them.
+    this.createMatchHudNodes();
+
     // Launch the HUD in parallel (it renders on top without replacing GameScene).
     this.scene.launch("HudScene");
+  }
+
+  // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
+
+  /** Create a DOM node (data-testid anchor + visible HUD element). */
+  private makeTestNode(testid: string, css: string): HTMLElement {
+    const el = document.createElement("div");
+    el.dataset.testid = testid;
+    el.style.cssText = `position:absolute;pointer-events:none;font-family:monospace;color:#fff;text-shadow:0 1px 3px #000,0 0 6px #000;${css}`;
+    const parent = document.getElementById("game-container") ?? document.body;
+    parent.appendChild(el);
+    return el;
+  }
+
+  private createMatchHudNodes(): void {
+    // Anchor the absolutely-positioned HUD nodes to the canvas wrapper so they
+    // line up with the 960x540 game area instead of the whole viewport.
+    const parent = document.getElementById("game-container");
+    if (parent) parent.style.position = "relative";
+
+    // Score: large, top-centre.
+    this.scoreEl = this.makeTestNode(
+      "score",
+      "top:8px;left:50%;transform:translateX(-50%);font-size:30px;font-weight:bold;letter-spacing:2px;",
+    );
+    // Timer: just below the score.
+    this.timerEl = this.makeTestNode(
+      "timer",
+      "top:46px;left:50%;transform:translateX(-50%);font-size:18px;color:#ffe;",
+    );
+    // Golden Goal banner: below the timer, only while in sudden death.
+    this.goldenGoalEl = this.makeTestNode(
+      "golden-goal",
+      "top:72px;left:50%;transform:translateX(-50%);font-size:18px;font-weight:bold;color:#ffcc00;",
+    );
+    // Start prompt: centred overlay during preRound.
+    this.startPromptEl = this.makeTestNode(
+      "start-prompt",
+      "top:50%;left:50%;transform:translate(-50%,-50%);font-size:22px;text-align:center;background:rgba(0,0,0,0.55);padding:14px 22px;border-radius:8px;",
+    );
+    // Match summary: centred overlay when complete.
+    this.matchSummaryEl = this.makeTestNode(
+      "match-summary",
+      "top:50%;left:50%;transform:translate(-50%,-50%);font-size:22px;text-align:center;background:rgba(0,0,0,0.7);padding:18px 26px;border-radius:8px;",
+    );
+
+    // Set initial values immediately so nodes are populated before first update.
+    this.scoreEl.textContent = "0 - 0";
+    this.timerEl.textContent = "3:00";
+    this.startPromptEl.textContent = "Press C (P1) or J (P2) to Start";
+    this.startPromptEl.style.display = "block";
+    this.goldenGoalEl.style.display = "none";
+    this.matchSummaryEl.style.display = "none";
+  }
+
+  private updateMatchHud(m: MatchState): void {
+    const ticks = m.timer;
+    const hz = DEFAULT_CONFIG.tickHz;
+    const totalSec = Math.max(0, Math.ceil(ticks / hz));
+    const min = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    this.timerEl.textContent = `${min}:${String(sec).padStart(2, "0")}`;
+    this.scoreEl.textContent = `${m.scores[0] ?? 0} - ${m.scores[1] ?? 0}`;
+    this.startPromptEl.style.display =
+      m.phase === "preRound" ? "block" : "none";
+    this.goldenGoalEl.style.display =
+      m.phase === "goldenGoal" ? "block" : "none";
+    if (m.phase === "goldenGoal") {
+      this.goldenGoalEl.textContent = "GOLDEN GOAL!";
+    }
+    if (m.phase === "complete") {
+      this.matchSummaryEl.style.display = "block";
+      const winnerText = m.winner === -1 ? "DRAW" : `P${m.winner + 1} WINS`;
+      this.matchSummaryEl.textContent = `${winnerText} — Press C (P1) or J (P2) to Rematch`;
+    } else {
+      this.matchSummaryEl.style.display = "none";
+    }
   }
 
   // ── HUD bridge wiring ────────────────────────────────────────────────────────
@@ -183,6 +271,7 @@ export class GameScene extends Phaser.Scene {
         this.startReplay(this.lastCaptureJson);
       },
       isCapturing: () => this.captureData !== null,
+      getMatchState: () => this.sim.getMatchState(),
     };
     // Overwrite all fields of the shared singleton bridge.
     Object.assign(hudBridge, bridge);
@@ -272,6 +361,9 @@ export class GameScene extends Phaser.Scene {
       // Drain sim events each tick and surface Bell Ring feedback.
       for (const event of this.sim.drainEvents()) {
         if (event.type === "bellRing") this.onBellRing(event.bell);
+        else if (event.type === "matchPhase") this.onMatchPhase(event.phase);
+        else if (event.type === "matchEnd")
+          this.onMatchEnd(event.winner, event.scores);
       }
       this.accumulator -= this.FIXED_STEP;
 
@@ -293,6 +385,9 @@ export class GameScene extends Phaser.Scene {
 
     // Phase 6: update group camera after rendering to frame all subjects.
     this.updateGroupCamera(alpha);
+
+    // Phase 2: update match HUD DOM nodes every render frame.
+    this.updateMatchHud(this.sim.getMatchState());
   }
 
   // ── Phase 6: group camera ────────────────────────────────────────────────────
@@ -334,6 +429,15 @@ export class GameScene extends Phaser.Scene {
       .setAlpha(1);
     // Sound stub — wire real SFX here in a later art/audio pass.
     console.info(`[bellRing] ${bell}`);
+  }
+
+  private onMatchPhase(phase: import("@bb/sim").MatchPhase): void {
+    console.info(`[match] phase → ${phase}`);
+  }
+
+  private onMatchEnd(winner: number | "tie", scores: number[]): void {
+    const label = winner === "tie" ? "TIE" : `P${(winner as number) + 1} WINS`;
+    console.info(`[match] END — ${label}  ${scores.join("-")}`);
   }
 
   /** Decay the banner alpha and per-Bell flash intensity over real time. */
@@ -460,5 +564,11 @@ export class GameScene extends Phaser.Scene {
 
   shutdown(): void {
     this.orientationOverlay?.destroy();
+    // Clean up match HUD DOM nodes.
+    this.scoreEl?.remove();
+    this.timerEl?.remove();
+    this.startPromptEl?.remove();
+    this.goldenGoalEl?.remove();
+    this.matchSummaryEl?.remove();
   }
 }

@@ -17,11 +17,14 @@ function frame(partial: Partial<InputFrame>): InputFrame {
 }
 
 function newSim() {
-  return createSimulation({
+  const sim = createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 1234,
   });
+  // Advance past preRound so gameplay rules run.
+  sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+  return sim;
 }
 
 // Helper: step all slots with the given slot-0 frame, slot-1 idle.

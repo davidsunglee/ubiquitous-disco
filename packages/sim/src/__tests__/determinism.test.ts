@@ -43,12 +43,20 @@ function scriptedFrames(): InputFrame[][] {
   return frames;
 }
 
-function run(frames: InputFrame[][]): string {
+/** Create a sim already in "playing" phase (Start pressed). */
+function newSim(): ReturnType<typeof createSimulation> {
   const sim = createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 1234,
   });
+  // Advance past preRound so gameplay rules run.
+  sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+  return sim;
+}
+
+function run(frames: InputFrame[][]): string {
+  const sim = newSim();
   for (const f of frames) sim.step(f);
   return sim.hashState();
 }
@@ -64,22 +72,14 @@ test("scripted move/jump session produces an equal composite hash across runs", 
 });
 
 test("ball falls from spawn under gravity", () => {
-  const sim = createSimulation({
-    config: DEFAULT_CONFIG,
-    arena: FLAT_DOJO,
-    seed: 1,
-  });
+  const sim = newSim();
   const startY = sim.getRenderState().ball.y;
   for (let i = 0; i < 30; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
   expect(sim.getRenderState().ball.y).toBeLessThan(startY);
 });
 
 test("player moves right and stops at the right wall", () => {
-  const sim = createSimulation({
-    config: DEFAULT_CONFIG,
-    arena: FLAT_DOJO,
-    seed: 1,
-  });
+  const sim = newSim();
   const startX = sim.getRenderState().players[0]?.x ?? 0;
   for (let i = 0; i < 120; i++) sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
   const endX = sim.getRenderState().players[0]?.x ?? 0;
@@ -91,11 +91,7 @@ test("player moves right and stops at the right wall", () => {
 
 test("held jump rises higher than a tapped jump", () => {
   const peak = (jumpFrames: InputFrame[][]): number => {
-    const sim = createSimulation({
-      config: DEFAULT_CONFIG,
-      arena: FLAT_DOJO,
-      seed: 1,
-    });
+    const sim = newSim();
     // let the player settle on the floor first
     for (let i = 0; i < 10; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
     let maxY = sim.getRenderState().players[0]?.y ?? 0;

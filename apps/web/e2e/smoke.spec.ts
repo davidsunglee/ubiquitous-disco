@@ -12,3 +12,20 @@ test("HUD element is present in the DOM", async ({ page }) => {
   // The HudScene injects a div[data-testid="hud"] into the game container.
   await expect(page.getByTestId("hud")).toBeAttached();
 });
+
+test("local 1v1 shows match UI and start prompt clears", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("canvas")).toBeVisible();
+  // Match HUD nodes must be attached.
+  await expect(page.getByTestId("score")).toBeAttached();
+  await expect(page.getByTestId("timer")).toBeAttached();
+  // Start prompt is visible before any input.
+  await expect(page.getByTestId("start-prompt")).toBeVisible();
+  // Press P1 jump (C) to start the match. Hold it briefly so the 30Hz sim
+  // accumulator has at least one tick to process the key press.
+  await page.keyboard.down("c");
+  await page.waitForTimeout(100); // ~3 sim ticks at 30Hz
+  await page.keyboard.up("c");
+  // After starting, the prompt should disappear.
+  await expect(page.getByTestId("start-prompt")).toBeHidden();
+});

@@ -17,11 +17,14 @@ function frame(p: Partial<InputFrame>): InputFrame {
 }
 
 function newSim() {
-  return createSimulation({
+  const sim = createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 77,
   });
+  // Advance past preRound so gameplay rules run.
+  sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+  return sim;
 }
 
 test("two scripted input streams are deterministic across two sims", () => {
