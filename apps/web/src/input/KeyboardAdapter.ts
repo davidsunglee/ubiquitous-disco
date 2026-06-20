@@ -45,17 +45,18 @@ export const P2_KEYMAP: KeyMap = {
 
 /**
  * Networked play: each client controls only its own player on its own machine,
- * so both slots use the same scheme — Arrow keys to move, Z=jump, X=strike,
- * C=dash.
+ * so both slots use the same scheme — Arrow keys to move, Z=strike, X=jump,
+ * C=dash. The Z/X/C order mirrors the touch action buttons' left→right layout
+ * (Strike, Jump, Dash) so keyboard and on-screen controls agree.
  */
 export const NET_KEYMAP: KeyMap = {
   left: K.LEFT,
   right: K.RIGHT,
   up: K.UP,
   down: K.DOWN,
-  jump: K.Z,
+  jump: K.X,
   dash: K.C,
-  strike: K.X,
+  strike: K.Z,
 };
 
 /**
