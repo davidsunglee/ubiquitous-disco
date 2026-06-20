@@ -24,6 +24,10 @@ import {
 import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
 import { NetClient } from "../net/NetClient";
 import { NetLoop } from "../net/NetLoop";
+import {
+  type NetSimPatch,
+  SimulatedTransport,
+} from "../net/SimulatedTransport";
 import { attemptLandscapeLock } from "../orientation";
 import {
   bellSubjectFromWorld,
@@ -92,6 +96,8 @@ export class GameScene extends Phaser.Scene {
   private connectionOverlay!: ConnectionOverlay;
   /** Phase 2: set once the room is full (both players present). */
   private netLoop: NetLoop | null = null;
+  /** Phase 4: dev network simulator (dev-only). */
+  private simTransport: SimulatedTransport | null = null;
 
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
   // hudOverlay is sized/positioned to exactly overlay the (scaled, centered)
@@ -317,6 +323,9 @@ export class GameScene extends Phaser.Scene {
       },
       isCapturing: () => this.captureData !== null,
       getMatchState: () => this.sim.getMatchState(),
+      // Phase 4: live closures over SimulatedTransport (null when no transport).
+      getNetSim: () => this.simTransport?.getParams() ?? null,
+      updateNetSim: (patch) => this.simTransport?.applyPatch(patch),
     };
     // Overwrite all fields of the shared singleton bridge.
     Object.assign(hudBridge, bridge);
@@ -325,18 +334,35 @@ export class GameScene extends Phaser.Scene {
   // ── Phase 2: networked game loop ─────────────────────────────────────────────
 
   private startNetLoop(slot: import("@bb/protocol").Slot): void {
-    this.netLoop = new NetLoop(this.netClient, slot, {
-      onRenderState: (prev, cur) => {
-        this.prev = prev;
-        this.cur = cur;
-      },
-      onMatchState: (m) => {
-        this.updateMatchHud(m);
-      },
-      onDisconnect: () => {
-        console.info("[net] disconnected");
-      },
+    // Phase 4: create a dev-only SimulatedTransport and register it on the
+    // hudBridge so HUD sliders can tune it live.
+    this.simTransport = new SimulatedTransport(this.netClient);
+
+    // Dev/e2e hook: let tests tune the simulator without driving Phaser-canvas
+    // sliders. `net-latency.spec.ts` dispatches this CustomEvent to apply
+    // latency in each tab; the HUD sliders are the manual equivalent.
+    document.addEventListener("net-sim-config", (e) => {
+      const detail = (e as CustomEvent<NetSimPatch>).detail;
+      if (detail) this.simTransport?.applyPatch(detail);
     });
+
+    this.netLoop = new NetLoop(
+      this.netClient,
+      slot,
+      {
+        onRenderState: (prev, cur) => {
+          this.prev = prev;
+          this.cur = cur;
+        },
+        onMatchState: (m) => {
+          this.updateMatchHud(m);
+        },
+        onDisconnect: () => {
+          console.info("[net] disconnected");
+        },
+      },
+      this.simTransport,
+    );
     this.netLoop.start();
     console.info(`[net] NetLoop started (slot ${slot})`);
   }

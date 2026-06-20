@@ -40,6 +40,8 @@ import { FIXED_STEP_MS, INTERP_DELAY_TICKS } from "./config";
 import { InterpolationBuffer } from "./InterpolationBuffer";
 import type { NetClient } from "./NetClient";
 import { type PendingInput, Reconciler } from "./Reconciler";
+import type { SimulatedTransport } from "./SimulatedTransport";
+import { SnapshotQueue } from "./snapshotQueue";
 
 // Max unacked tail frames to send for reliability.
 const MAX_REDUNDANT = 3;
@@ -74,6 +76,12 @@ export class NetLoop {
   private slot: Slot;
   private cb: NetLoopCallbacks;
 
+  /** Optional network simulator. When set, all send/receive is routed through it. */
+  readonly transport: SimulatedTransport | null;
+
+  /** Snapshot queue: drops obsolete snapshots before applying. */
+  private snapshotQueue = new SnapshotQueue();
+
   // Client-side prediction sim.
   private sim = createSimulation({
     config: DEFAULT_CONFIG,
@@ -88,10 +96,16 @@ export class NetLoop {
   // Reconciler: handles snapshot → replay → smooth/snap.
   private reconciler: Reconciler;
 
-  constructor(net: NetClient, slot: Slot, cb: NetLoopCallbacks) {
+  constructor(
+    net: NetClient,
+    slot: Slot,
+    cb: NetLoopCallbacks,
+    transport: SimulatedTransport | null = null,
+  ) {
     this.net = net;
     this.slot = slot;
     this.cb = cb;
+    this.transport = transport;
 
     const remoteSlot: Slot = slot === 0 ? 1 : 0;
 
@@ -120,15 +134,31 @@ export class NetLoop {
 
   /** Start listening to server messages. Call after the room is joined. */
   start(): void {
-    this.net.onMessage("WorldSnapshot", (msg) => {
-      this.applySnapshot(msg as WorldSnapshot);
-    });
+    if (this.transport) {
+      // WorldSnapshot goes through the downlink simulator (drop/delay/reorder),
+      // then into the snapshot queue (drop obsolete by serverTick).
+      this.transport.onMessage("WorldSnapshot", (msg) => {
+        this.snapshotQueue.push(msg as WorldSnapshot);
+      });
 
-    this.net.onMessage("InputAck", (msg) => {
-      const ack = msg as { lastAckedSeq: [number, number] };
-      const ackedForSlot = ack.lastAckedSeq[this.slot] ?? 0;
-      this.trimPending(ackedForSlot);
-    });
+      this.transport.onMessage("InputAck", (msg) => {
+        const ack = msg as { lastAckedSeq: [number, number] };
+        const ackedForSlot = ack.lastAckedSeq[this.slot] ?? 0;
+        this.trimPending(ackedForSlot);
+      });
+    } else {
+      // No simulator: snapshots still go through the queue to enforce the
+      // "drop obsolete by serverTick" policy even without simulated latency.
+      this.net.onMessage("WorldSnapshot", (msg) => {
+        this.snapshotQueue.push(msg as WorldSnapshot);
+      });
+
+      this.net.onMessage("InputAck", (msg) => {
+        const ack = msg as { lastAckedSeq: [number, number] };
+        const ackedForSlot = ack.lastAckedSeq[this.slot] ?? 0;
+        this.trimPending(ackedForSlot);
+      });
+    }
 
     this.net.onLeave((_code) => {
       this.cb.onDisconnect();
@@ -142,6 +172,16 @@ export class NetLoop {
    */
   tick(delta: number, collectLocalInput: () => InputFrame): void {
     if (!this.simReady) return;
+
+    // Tick the network simulator to fire any due delayed deliveries.
+    this.transport?.tick();
+
+    // Drain one pending snapshot (if any) per outer tick call to apply the
+    // latest authoritative state before advancing local prediction ticks.
+    const snap = this.snapshotQueue.drain();
+    if (snap) {
+      this.applySnapshot(snap);
+    }
 
     this.accumulator += delta;
     while (this.accumulator >= FIXED_STEP_MS) {
@@ -173,7 +213,12 @@ export class NetLoop {
       slot: this.slot,
       frames: [seqEntry, ...tail.filter((f) => f.seq !== seqEntry.seq)],
     };
-    this.net.send("PlayerInput", msg);
+    // Route through uplink simulator if present, otherwise send directly.
+    if (this.transport) {
+      this.transport.send("PlayerInput", msg);
+    } else {
+      this.net.send("PlayerInput", msg);
+    }
 
     // Drive the remote slot from the interpolation buffer at
     // serverTick - INTERP_DELAY_TICKS (Q4 + Design 0c).

@@ -12,6 +12,7 @@
 import type { DebugCollider, MatchState, SimConfig } from "@bb/sim";
 import { DEFAULT_CONFIG } from "@bb/sim";
 import Phaser from "phaser";
+import type { NetSimPatch } from "../net/SimulatedTransport";
 import { PX_PER_UNIT, toScreenX, toScreenY } from "../render/worldToScreen";
 
 // ── Bridge interface — populated by GameScene ────────────────────────────────
@@ -37,6 +38,16 @@ export interface HudBridge {
   isCapturing(): boolean;
   /** Returns the current match state (scores, phase, timer) for HUD display. */
   getMatchState(): MatchState;
+  /**
+   * Returns the current network simulator params as a flat patch object.
+   * Returns null when no SimulatedTransport is active (local or prod mode).
+   */
+  getNetSim(): Required<NetSimPatch> | null;
+  /**
+   * Apply a patch to the network simulator link params.
+   * No-op when no SimulatedTransport is active.
+   */
+  updateNetSim(patch: NetSimPatch): void;
 }
 
 /** Singleton bridge. GameScene sets fields in create(); HudScene reads them. */
@@ -62,6 +73,8 @@ export const hudBridge: HudBridge = {
     winner: -1,
     timerExpired: false,
   }),
+  getNetSim: () => null,
+  updateNetSim: (_patch: NetSimPatch) => {},
 };
 
 // ── Layout constants ─────────────────────────────────────────────────────────
@@ -86,6 +99,70 @@ interface SliderDef {
   max: number;
   step: number;
 }
+
+// Net-sim sliders: each entry maps to a NetSimPatch field.
+interface NetSimSliderDef {
+  /** Short label shown next to the slider. */
+  label: string;
+  /** data-testid for the DOM anchor element. */
+  testid: string;
+  /** Which field of NetSimPatch this slider controls. */
+  field: keyof Required<NetSimPatch>;
+  min: number;
+  max: number;
+  step: number;
+}
+
+const NET_SIM_SLIDER_DEFS: NetSimSliderDef[] = [
+  {
+    label: "up.delay",
+    testid: "net-sim-uplink-delay",
+    field: "uplinkDelayMs",
+    min: 0,
+    max: 300,
+    step: 5,
+  },
+  {
+    label: "up.jitter",
+    testid: "net-sim-uplink-jitter",
+    field: "uplinkJitterMs",
+    min: 0,
+    max: 100,
+    step: 5,
+  },
+  {
+    label: "up.drop",
+    testid: "net-sim-uplink-drop",
+    field: "uplinkDropRate",
+    min: 0,
+    max: 0.5,
+    step: 0.01,
+  },
+  {
+    label: "dn.delay",
+    testid: "net-sim-downlink-delay",
+    field: "downlinkDelayMs",
+    min: 0,
+    max: 300,
+    step: 5,
+  },
+  {
+    label: "dn.jitter",
+    testid: "net-sim-downlink-jitter",
+    field: "downlinkJitterMs",
+    min: 0,
+    max: 100,
+    step: 5,
+  },
+  {
+    label: "dn.drop",
+    testid: "net-sim-downlink-drop",
+    field: "downlinkDropRate",
+    min: 0,
+    max: 0.5,
+    step: 0.01,
+  },
+];
 
 const SLIDER_DEFS: SliderDef[] = [
   {
@@ -147,6 +224,15 @@ export class HudScene extends Phaser.Scene {
     trackX: number;
   }> = [];
 
+  // Net-sim slider state.
+  private netSimSliders: Array<{
+    def: NetSimSliderDef;
+    knob: Phaser.GameObjects.Rectangle;
+    valueText: Phaser.GameObjects.Text;
+    domAnchor: HTMLElement;
+    trackX: number;
+  }> = [];
+
   // Status label (pause/play state, capture).
   private statusText!: Phaser.GameObjects.Text;
 
@@ -169,6 +255,7 @@ export class HudScene extends Phaser.Scene {
     this.buildButtons();
     this.buildSliders();
     this.buildStatusText();
+    this.buildNetSimSliders();
   }
 
   // ── Construction helpers ────────────────────────────────────────────────────
@@ -322,6 +409,111 @@ export class HudScene extends Phaser.Scene {
       .setDepth(10);
   }
 
+  /**
+   * Build net-simulator sliders (uplink/downlink delay/jitter/drop).
+   * These are placed in a second column (right side of the HUD) so they don't
+   * overlap the sim-config sliders on the left.
+   *
+   * The section is hidden when no SimulatedTransport is wired
+   * (getNetSim() returns null).
+   */
+  private buildNetSimSliders(): void {
+    // Placed in the right column at x=220 to avoid overlapping sim-config sliders.
+    const startX = 220;
+    const startY = 44;
+
+    // Section header.
+    this.add
+      .text(startX, startY - 16, "NET SIM", {
+        fontFamily: "monospace",
+        fontSize: "9px",
+        color: "#ffcc66",
+      })
+      .setScrollFactor(0)
+      .setDepth(10);
+
+    const params = hudBridge.getNetSim();
+
+    for (let i = 0; i < NET_SIM_SLIDER_DEFS.length; i++) {
+      const def = NET_SIM_SLIDER_DEFS[i];
+      if (!def) continue;
+      const y = startY + i * ROW_H;
+
+      // Label.
+      this.add
+        .text(startX, y, def.label, {
+          fontFamily: "monospace",
+          fontSize: "10px",
+          color: LABEL_COLOR,
+        })
+        .setScrollFactor(0)
+        .setDepth(10);
+
+      // DOM anchor element for Playwright / data-testid.
+      const anchor = document.createElement("div");
+      anchor.dataset.testid = def.testid;
+      anchor.style.cssText =
+        "position:absolute;width:0;height:0;overflow:visible;";
+      this.hudRoot.appendChild(anchor);
+
+      // Track.
+      const trackX = startX + 56;
+      const trackY = y + 8;
+      const currentVal = params ? (params[def.field] ?? 0) : 0;
+
+      this.add
+        .rectangle(trackX + SLIDER_W / 2, trackY, SLIDER_W, TRACK_H, 0x554444)
+        .setScrollFactor(0)
+        .setDepth(10)
+        .setInteractive({ useHandCursor: true })
+        .on("pointerup", (ptr: Phaser.Input.Pointer) => {
+          const fraction = Phaser.Math.Clamp((ptr.x - trackX) / SLIDER_W, 0, 1);
+          const raw = def.min + fraction * (def.max - def.min);
+          const value = this.snapVal(raw, def.min, def.max, def.step);
+          hudBridge.updateNetSim({ [def.field]: value } as NetSimPatch);
+        });
+
+      // Knob.
+      const t =
+        def.max > def.min ? (currentVal - def.min) / (def.max - def.min) : 0;
+      const knob = this.add
+        .rectangle(trackX + t * SLIDER_W, trackY, KNOB_W, 14, 0xcc8844)
+        .setScrollFactor(0)
+        .setInteractive({ useHandCursor: true, draggable: true })
+        .setDepth(11);
+
+      // Value text.
+      const valueText = this.add
+        .text(trackX + SLIDER_W + 8, trackY - 4, String(currentVal), {
+          fontFamily: "monospace",
+          fontSize: "10px",
+          color: TEXT_COLOR,
+        })
+        .setScrollFactor(0)
+        .setDepth(10);
+
+      // Drag handler.
+      this.input.setDraggable(knob);
+      knob.on("drag", (_ptr: Phaser.Input.Pointer, dragX: number) => {
+        const clamped = Phaser.Math.Clamp(dragX, trackX, trackX + SLIDER_W);
+        knob.x = clamped;
+        const fraction = (clamped - trackX) / SLIDER_W;
+        const raw = def.min + fraction * (def.max - def.min);
+        const value = this.snapVal(raw, def.min, def.max, def.step);
+        hudBridge.updateNetSim({ [def.field]: value } as NetSimPatch);
+        valueText.setText(value.toFixed(2));
+      });
+
+      this.netSimSliders.push({
+        def,
+        knob,
+        valueText,
+        domAnchor: anchor,
+        trackX,
+      });
+    }
+  }
+
   // ── Per-frame update ────────────────────────────────────────────────────────
 
   update(): void {
@@ -338,6 +530,20 @@ export class HudScene extends Phaser.Scene {
       const t = this.sliderT(sl.def, cfg);
       sl.knob.x = sl.trackX + t * SLIDER_W;
       sl.valueText.setText(sl.def.get(cfg).toFixed(2));
+    }
+
+    // Sync net-sim slider knob positions to the live transport params.
+    const netParams = hudBridge.getNetSim();
+    if (netParams !== null) {
+      for (const sl of this.netSimSliders) {
+        const v = netParams[sl.def.field] ?? 0;
+        const t =
+          sl.def.max > sl.def.min
+            ? (v - sl.def.min) / (sl.def.max - sl.def.min)
+            : 0;
+        sl.knob.x = sl.trackX + Phaser.Math.Clamp(t, 0, 1) * SLIDER_W;
+        sl.valueText.setText(v.toFixed(2));
+      }
     }
 
     // Draw debug collider overlay.
@@ -392,6 +598,12 @@ export class HudScene extends Phaser.Scene {
   private snap(raw: number, def: SliderDef): number {
     const stepped = Math.round(raw / def.step) * def.step;
     return Phaser.Math.Clamp(stepped, def.min, def.max);
+  }
+
+  /** Generic snap for arbitrary [min, max, step] (used by net-sim sliders). */
+  private snapVal(raw: number, min: number, max: number, step: number): number {
+    const stepped = Math.round(raw / step) * step;
+    return Phaser.Math.Clamp(stepped, min, max);
   }
 
   /** Map a config value to a [0,1] fraction for the slider knob. */
