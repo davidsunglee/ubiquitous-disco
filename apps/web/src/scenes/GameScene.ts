@@ -96,6 +96,12 @@ export class GameScene extends Phaser.Scene {
   private connectionOverlay!: ConnectionOverlay;
   /** Phase 2: set once the room is full (both players present). */
   private netLoop: NetLoop | null = null;
+  /**
+   * True once we've created/joined a room but the opponent hasn't arrived yet.
+   * While awaiting, the local hotseat sim is frozen so stray input can't start a
+   * phantom local match behind the connection panel.
+   */
+  private awaitingOpponent = false;
   /** Phase 4: dev network simulator (dev-only). */
   private simTransport: SimulatedTransport | null = null;
 
@@ -184,10 +190,20 @@ export class GameScene extends Phaser.Scene {
     this.netClient = new NetClient();
     this.connectionOverlay = new ConnectionOverlay();
     this.connectionOverlay.mount();
-    this.connectionOverlay.wire(this.netClient, this.game.canvas, (slot) => {
-      // Phase 2: room is full — switch to networked mode.
-      this.startNetLoop(slot);
-    });
+    this.connectionOverlay.wire(
+      this.netClient,
+      this.game.canvas,
+      (slot) => {
+        // Phase 2: room is full — switch to networked mode.
+        this.startNetLoop(slot);
+      },
+      () => {
+        // Created/joined a room; freeze the local sim until the match begins so
+        // stray input can't kick off a phantom local match behind the panel.
+        this.awaitingOpponent = true;
+        this.startPromptEl.style.display = "none";
+      },
+    );
 
     // Launch the HUD in parallel (it renders on top without replacing GameScene).
     this.scene.launch("HudScene");
@@ -244,7 +260,7 @@ export class GameScene extends Phaser.Scene {
     // Set initial values immediately so nodes are populated before first update.
     this.scoreEl.textContent = "0 - 0";
     this.timerEl.textContent = "3:00";
-    this.startPromptEl.textContent = "Press C (P1) or J (P2) to Start";
+    this.startPromptEl.textContent = "Press Jump to Start";
     this.startPromptEl.style.display = "block";
     this.goldenGoalEl.style.display = "none";
     this.matchSummaryEl.style.display = "none";
@@ -277,8 +293,16 @@ export class GameScene extends Phaser.Scene {
     }
     if (m.phase === "complete") {
       this.matchSummaryEl.style.display = "block";
-      const winnerText = m.winner === -1 ? "DRAW" : `P${m.winner + 1} WINS`;
-      this.matchSummaryEl.textContent = `${winnerText} — Press C (P1) or J (P2) to Rematch`;
+      let winnerText: string;
+      if (m.winner === -1) {
+        winnerText = "DRAW";
+      } else if (this.netLoop !== null) {
+        // Networked: each screen shows its own outcome (one player per client).
+        winnerText = m.winner === this.netClient.slot ? "YOU WIN" : "YOU LOSE";
+      } else {
+        winnerText = `P${m.winner + 1} WINS`;
+      }
+      this.matchSummaryEl.textContent = `${winnerText} — Press Jump to Rematch`;
     } else {
       this.matchSummaryEl.style.display = "none";
     }
@@ -334,6 +358,9 @@ export class GameScene extends Phaser.Scene {
   // ── Phase 2: networked game loop ─────────────────────────────────────────────
 
   private startNetLoop(slot: import("@bb/protocol").Slot): void {
+    // The match is starting — leave the awaiting-opponent freeze state.
+    this.awaitingOpponent = false;
+
     // Phase 4: create a dev-only SimulatedTransport and register it on the
     // hudBridge so HUD sliders can tune it live.
     this.simTransport = new SimulatedTransport(this.netClient);
@@ -512,6 +539,21 @@ export class GameScene extends Phaser.Scene {
       if (this.netLoop.latestMatchState) {
         this.updateMatchHud(this.netLoop.latestMatchState);
       }
+      return;
+    }
+
+    // ── Awaiting opponent: freeze the scene as a static background ─────────────
+    // We've created/joined a room but the match hasn't started. Render the
+    // current frame but don't step the sim or collect input, so the connection
+    // panel's "waiting for opponent" message is the only thing in play.
+    if (this.awaitingOpponent) {
+      this.gfx.clear();
+      this.drawArena();
+      this.drawBells();
+      this.drawBall(1);
+      this.drawPlayers(1);
+      this.touch.drawUI();
+      this.updateGroupCamera(1);
       return;
     }
 

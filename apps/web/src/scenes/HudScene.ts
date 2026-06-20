@@ -418,11 +418,13 @@ export class HudScene extends Phaser.Scene {
    * (getNetSim() returns null).
    */
   private buildNetSimSliders(): void {
-    // Placed in the right column at x=220 to avoid overlapping sim-config sliders.
-    const startX = 220;
-    const startY = 44;
+    // Single column stacked BELOW the sim-config sliders + status line. A second
+    // top-row column doesn't fit at 960px without crowding the centered
+    // score/timer HUD, so we go vertical here instead.
+    const startX = 8;
+    const startY = 252;
 
-    // Section header.
+    // Section header above the first net-sim row.
     this.add
       .text(startX, startY - 16, "NET SIM", {
         fontFamily: "monospace",
@@ -456,8 +458,9 @@ export class HudScene extends Phaser.Scene {
         "position:absolute;width:0;height:0;overflow:visible;";
       this.hudRoot.appendChild(anchor);
 
-      // Track.
-      const trackX = startX + 56;
+      // Track. 64px label gutter (matches the sim-config column) so the longest
+      // labels ("up.jitter"/"dn.jitter") clear the track start.
+      const trackX = startX + 64;
       const trackY = y + 8;
       const currentVal = params ? (params[def.field] ?? 0) : 0;
 

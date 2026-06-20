@@ -102,16 +102,21 @@ export class ConnectionOverlay {
   /**
    * Wire callbacks to a NetClient instance. Called by GameScene after mount().
    *
-   * @param onRoomFull  Phase 2: called with the local slot once both players are
-   *                    present so GameScene can start the NetLoop.
+   * @param onRoomFull     Phase 2: called with the local slot once both players
+   *                       are present so GameScene can start the NetLoop.
+   * @param onSessionStart Called once create/join succeeds (room connected, but
+   *                       possibly awaiting an opponent) so GameScene can freeze
+   *                       the local background sim.
    */
   wire(
     net: NetClient,
     canvas: HTMLCanvasElement,
     onRoomFull?: (slot: Slot) => void,
+    onSessionStart?: () => void,
   ): void {
     this.net = net;
     this.onRoomFull = onRoomFull ?? null;
+    this.onSessionStart = onSessionStart ?? null;
 
     this.createBtn.addEventListener("click", () => {
       void this.handleCreate();
@@ -143,6 +148,7 @@ export class ConnectionOverlay {
   }
 
   private onRoomFull: ((slot: Slot) => void) | null = null;
+  private onSessionStart: (() => void) | null = null;
 
   private async handleCreate(): Promise<void> {
     if (!this.net) return;
@@ -150,13 +156,16 @@ export class ConnectionOverlay {
     this.setStatus("connecting");
     try {
       const roomId = await net.create();
+      this.onSessionStart?.();
       this.roomIdEl.textContent = roomId;
       this.setStatus("connected");
       // Collapse the controls but keep the Room ID visible so the creator
       // can share it. Hide the whole panel only once the opponent joins.
       this.createBtn.style.display = "none";
       this.joinRow.style.display = "none";
-      this.hintEl.textContent = "Share this Room ID — waiting for opponent…";
+      this.hintEl.textContent = "Waiting for opponent to join…";
+      this.hintEl.style.color = "#ffe066";
+      this.hintEl.style.fontSize = "13px";
       net.onMessage("RoomReady", (msg) => {
         const m = msg as { slot: number; full: boolean };
         net.slot = m.slot as 0 | 1;
@@ -182,6 +191,7 @@ export class ConnectionOverlay {
     this.setStatus("connecting");
     try {
       await net.joinById(id);
+      this.onSessionStart?.();
       this.setStatus("connected");
       this.hidePanel();
       net.onMessage("RoomReady", (msg) => {
