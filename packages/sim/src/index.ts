@@ -10,6 +10,7 @@ export type {
 export { FLAT_DOJO } from "./arena";
 export type {
   BallConfig,
+  CombatConfig,
   DashConfig,
   MatchConfig,
   MovementConfig,

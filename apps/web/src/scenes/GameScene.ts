@@ -57,6 +57,8 @@ export class GameScene extends Phaser.Scene {
   // Bell Ring feedback: a banner that fades out, plus a per-Bell flash timer.
   private bellText!: Phaser.GameObjects.Text;
   private bellFlash: { left: number; right: number } = { left: 0, right: 0 };
+  // Phase 3: per-player hit flash (1 → 0), one entry per slot. Cosmetic only.
+  private hitFlash: number[] = [];
 
   // ── Phase 5: pause/step/replay state ────────────────────────────────────────
   private paused = false;
@@ -75,6 +77,9 @@ export class GameScene extends Phaser.Scene {
 
   // ── Phase 6: static Bell screen positions ────────────────────────────────────
   private bellSubjects!: Array<{ screenX: number; screenY: number }>;
+
+  // ── Phase 3: sim tick counter for deterministic i-frame blink ────────────────
+  private simTick = 0;
 
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
   private scoreEl!: HTMLElement;
@@ -290,6 +295,7 @@ export class GameScene extends Phaser.Scene {
     this.replayFrames = null;
     this.replayFrameCursor = 0;
     this.accumulator = 0;
+    this.simTick = 0;
     this.liveConfig = { ...DEFAULT_CONFIG };
     this.sim = this.buildSim(this.liveConfig);
     const s = this.sim.getRenderState();
@@ -302,6 +308,7 @@ export class GameScene extends Phaser.Scene {
   private startReplay(json: string): void {
     this.captureData = null;
     this.accumulator = 0;
+    this.simTick = 0;
     this.liveConfig = { ...DEFAULT_CONFIG };
     this.sim = this.buildSim(this.liveConfig);
     const s = this.sim.getRenderState();
@@ -357,6 +364,7 @@ export class GameScene extends Phaser.Scene {
       }
 
       this.sim.step(inputFrames);
+      this.simTick += 1;
       this.cur = structuredClone(this.sim.getRenderState());
       // Drain sim events each tick and surface Bell Ring feedback.
       for (const event of this.sim.drainEvents()) {
@@ -364,6 +372,9 @@ export class GameScene extends Phaser.Scene {
         else if (event.type === "matchPhase") this.onMatchPhase(event.phase);
         else if (event.type === "matchEnd")
           this.onMatchEnd(event.winner, event.scores);
+        else if (event.type === "playerHit")
+          this.onPlayerHit(event.slot, event.knockdown);
+        else if (event.type === "knockdown") this.onKnockdown(event.slot);
       }
       this.accumulator -= this.FIXED_STEP;
 
@@ -440,11 +451,25 @@ export class GameScene extends Phaser.Scene {
     console.info(`[match] END — ${label}  ${scores.join("-")}`);
   }
 
+  private onKnockdown(slot: number): void {
+    console.info(`[combat] P${slot + 1} knocked down`);
+  }
+
+  /** Per-hit feedback: flash the struck player so every connecting strike reads. */
+  private onPlayerHit(slot: number, knockdown: boolean): void {
+    this.hitFlash[slot] = 1; // full intensity, decays in tickBellFeedback
+    console.info(`[combat] P${slot + 1} hit${knockdown ? " (KNOCKDOWN)" : ""}`);
+  }
+
   /** Decay the banner alpha and per-Bell flash intensity over real time. */
   private tickBellFeedback(delta: number): void {
     const decay = delta / 1000; // ~1s fade
     this.bellFlash.left = Math.max(0, this.bellFlash.left - decay);
     this.bellFlash.right = Math.max(0, this.bellFlash.right - decay);
+    // Hit flashes fade faster (~0.25s) so rapid exchanges stay readable.
+    for (let s = 0; s < this.hitFlash.length; s++) {
+      this.hitFlash[s] = Math.max(0, (this.hitFlash[s] ?? 0) - decay * 4);
+    }
     if (this.bellText.alpha > 0) {
       this.bellText.setAlpha(Math.max(0, this.bellText.alpha - decay * 0.8));
     }
@@ -517,20 +542,46 @@ export class GameScene extends Phaser.Scene {
       const halfH = DEFAULT_CONFIG.player.halfH;
       const colorsEntry = SLOT_COLORS[s] ?? SLOT_COLORS[0];
       const colors = colorsEntry ?? { grounded: 0x33aaff, air: 0x55ccff };
-      const color = cp.grounded ? colors.grounded : colors.air;
+
+      // Phase 3: combat state overrides base color and alpha.
+      let color = cp.grounded ? colors.grounded : colors.air;
+      let fillAlpha = 1;
+      if (cp.knockedDown) {
+        color = 0x888888; // greyed out while knocked down
+      }
+      if (cp.invulnerable) {
+        // Deterministic blink tied to sim tick (not wall clock) — 3 on / 3 off pattern.
+        fillAlpha = this.simTick % 6 < 3 ? 0.35 : 1;
+      }
+      // Per-hit flash: blend toward white so every connecting strike is obvious.
+      const flash = this.hitFlash[s] ?? 0;
+      if (flash > 0) color = flash > 0.5 ? 0xffffff : 0xffdddd;
+
       this.gfx
-        .fillStyle(color, 1)
+        .fillStyle(color, fillAlpha)
         .fillRect(
           toScreenX(x - halfW),
           toScreenY(y + halfH),
           halfW * 2 * PX_PER_UNIT,
           halfH * 2 * PX_PER_UNIT,
         );
-      // Facing indicator: a notch on the leading edge.
-      const noseX = toScreenX(x + cp.facing * halfW);
-      this.gfx
-        .fillStyle(0xffffff, 1)
-        .fillCircle(noseX, toScreenY(y + halfH * 0.4), 4);
+      // Expanding ring on hit for an extra pop of feedback.
+      if (flash > 0) {
+        this.gfx
+          .lineStyle(3, 0xffffff, flash)
+          .strokeCircle(
+            toScreenX(x),
+            toScreenY(y + halfH * 0.25),
+            (Math.max(halfW, halfH) + 0.2 + (1 - flash) * 0.6) * PX_PER_UNIT,
+          );
+      }
+      // Facing indicator: a notch on the leading edge (hidden while invisible in blink).
+      if (fillAlpha > 0.5) {
+        const noseX = toScreenX(x + cp.facing * halfW);
+        this.gfx
+          .fillStyle(0xffffff, 1)
+          .fillCircle(noseX, toScreenY(y + halfH * 0.4), 4);
+      }
 
       this.drawChargeFeedback(x, y, halfW, halfH, cp.charge);
     }

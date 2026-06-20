@@ -39,6 +39,17 @@ export interface MatchConfig {
   goldenGoal: boolean; // tie at regulation → sudden-death next ring wins
 }
 
+export interface CombatConfig {
+  staggerThreshold: number; // stagger >= this → Knockdown
+  staggerPerHit: number; // stagger added per connecting strike
+  staggerDecayPerTick: number; // stagger removed each live tick once grace expires
+  staggerGraceTicks: number; // ticks after a hit during which stagger does NOT decay
+  knockdownDurationTicks: number; // control-locked duration (~30–45 = 1.0–1.5s)
+  recoveryInvulnTicks: number; // i-frames granted on stand-up
+  strikePlayerImpulse: number; // knockback speed (units/s) applied to vx/vy
+  playerHitRadius: number; // target body radius for the overlap test
+}
+
 export interface SimConfig {
   tickHz: number; // 30 — authoritative fixed step
   gravityY: number; // negative (−Y) per coordinate invariant
@@ -48,6 +59,7 @@ export interface SimConfig {
   dash: DashConfig;
   strike: StrikeConfig;
   match: MatchConfig;
+  combat: CombatConfig;
 }
 
 export const DEFAULT_CONFIG: SimConfig = {
@@ -87,5 +99,15 @@ export const DEFAULT_CONFIG: SimConfig = {
     scoringPauseTicks: 45, // ~1.5s celebration freeze
     resetTicks: 30, // ~1.0s respawn settle
     goldenGoal: true,
+  },
+  combat: {
+    staggerThreshold: 3,
+    staggerPerHit: 1,
+    staggerDecayPerTick: 0.05, // ~1.5/s bleed-off once the grace window lapses
+    staggerGraceTicks: 45, // 1.5s hold after a hit → 3 hits in an exchange reliably KD
+    knockdownDurationTicks: 36, // 1.2s @ 30Hz
+    recoveryInvulnTicks: 30, // 1.0s i-frames
+    strikePlayerImpulse: 9,
+    playerHitRadius: 0.6,
   },
 };

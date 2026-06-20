@@ -1,4 +1,4 @@
-import { type Actor, createActor, serializeActor } from "./actor";
+import { type Actor, controllable, createActor, serializeActor } from "./actor";
 import type { ArenaDef } from "./arena";
 import type { SimConfig } from "./config";
 import { hashBytes } from "./hash";
@@ -33,6 +33,8 @@ export interface RenderState {
     facing: 1 | -1;
     grounded: boolean;
     charge: number;
+    knockedDown: boolean; // knockdownTicks > 0
+    invulnerable: boolean; // invulnTicks > 0
   }[];
   ball: { x: number; y: number; radius: number };
 }
@@ -53,6 +55,19 @@ export type SimEvent =
       type: "matchEnd";
       winner: number | "tie";
       scores: number[];
+      tick: number;
+    }
+  | {
+      type: "knockdown";
+      slot: number;
+      tick: number;
+    }
+  | {
+      // Emitted whenever a strike connects with a player (every connecting hit,
+      // not just knockdowns) so the renderer can give clear per-hit feedback.
+      type: "playerHit";
+      slot: number; // the target slot that got hit
+      knockdown: boolean; // true if this hit caused a knockdown
       tick: number;
     };
 
@@ -162,13 +177,60 @@ export function createSimulation(opts: {
       if (isLivePhase(match) && match.pauseTicks === 0) {
         // ── Gameplay rules run ONLY in live phases ──
         const blinks: (DashBlink | null)[] = [];
+
+        // Snapshot start-of-tick state for each slot before any strikes resolve.
+        // This ensures:
+        //  (a) A slot that was already knocked down before this tick cannot
+        //      initiate a strike (wasControllable[s] = false).
+        //  (b) A slot that BECOMES knocked down by an earlier slot's strike this
+        //      tick can still resolve its own strike (mutual trades land for both).
+        //  (c) The knockdown event is emitted only for slots that were NOT already
+        //      knocked down at tick start (wasDown).
+        const wasDown = actors.map((a) => a.knockdownTicks > 0);
+        // Capture start-of-tick controllable state for each slot so that:
+        //  (a) Already-knocked-down actors cannot initiate strikes this tick.
+        //  (b) An actor knocked DOWN by an earlier slot's strike this tick can
+        //      still resolve its own strike (mutual trades land for both).
+        const wasControllable = actors.map((a) => controllable(a));
+        // Start-of-tick stagger per slot, so we can detect non-knockdown hits
+        // (stagger is reset to 0 by the hit that causes a knockdown).
+        const staggerBefore = actors.map((a) => a.stagger);
+
         for (let s = 0; s < actors.length; s++) {
           const actor = actors[s];
           const input = inputs[s];
           if (!actor || !input) continue;
           blinks[s] = stepDash(actor, input, config);
-          stepStrike(actor, input, config, rw, s);
+          // Only initiate a strike if the actor was controllable at tick START.
+          if (wasControllable[s]) {
+            stepStrike(actor, input, config, rw, s, actors);
+          } else {
+            // Clear charge so it doesn't linger while knocked down.
+            actor.charge = 0;
+          }
         }
+
+        // Emit per-hit + knockdown events for any target struck this tick.
+        for (let t = 0; t < actors.length; t++) {
+          const a = actors[t];
+          if (!a) continue;
+          const newlyDown = !wasDown[t] && a.knockdownTicks > 0;
+          // A hit landed if stagger went up, or if this hit caused a knockdown
+          // (which resets stagger to 0, hiding it from the stagger comparison).
+          const struck = newlyDown || a.stagger > (staggerBefore[t] ?? 0);
+          if (struck) {
+            events.push({
+              type: "playerHit",
+              slot: t,
+              knockdown: newlyDown,
+              tick,
+            });
+          }
+          if (newlyDown) {
+            events.push({ type: "knockdown", slot: t, tick });
+          }
+        }
+
         for (let s = 0; s < actors.length; s++) {
           const actor = actors[s];
           const input = inputs[s];
@@ -183,6 +245,32 @@ export function createSimulation(opts: {
           const actor = actors[s];
           if (!actor) continue;
           stepBall(actor, config, rw, s);
+        }
+
+        // ── Combat timers advance each live tick (anti-stunlock) ──
+        for (let s = 0; s < actors.length; s++) {
+          const a = actors[s];
+          if (!a) continue;
+          // Stagger holds during the post-hit grace window, then bleeds off so
+          // a paused exchange doesn't keep stale stagger (anti-chip).
+          if (a.staggerDecayDelay > 0) {
+            a.staggerDecayDelay -= 1;
+          } else if (a.stagger > 0) {
+            a.stagger = Math.max(
+              0,
+              a.stagger - config.combat.staggerDecayPerTick,
+            );
+          }
+          // Knockdown countdown; stand-up edge grants i-frames and returns control.
+          if (a.knockdownTicks > 0) {
+            a.knockdownTicks -= 1;
+            if (a.knockdownTicks === 0) {
+              a.controlLock = false;
+              a.invulnTicks = config.combat.recoveryInvulnTicks;
+            }
+          } else if (a.invulnTicks > 0) {
+            a.invulnTicks -= 1;
+          }
         }
         // Bell Ring detection runs after the world step, when the ball position is
         // current for this tick.
@@ -252,6 +340,8 @@ export function createSimulation(opts: {
           facing: a.facing,
           grounded: a.grounded,
           charge: a.charge,
+          knockedDown: a.knockdownTicks > 0,
+          invulnerable: a.invulnTicks > 0,
         })),
         ball: { ...rw.ballPos(), radius: config.ball.radius },
       };
