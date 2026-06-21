@@ -46,6 +46,20 @@ import { SnapshotQueue } from "./snapshotQueue";
 // Max unacked tail frames to send for reliability.
 const MAX_REDUNDANT = 3;
 
+/**
+ * Build the PlayerInput frame list: the current frame plus the last
+ * `maxRedundant` unacked frames, so a short uplink-loss burst is recoverable.
+ * That is the trailing `maxRedundant + 1` entries of the pending queue (the
+ * current frame is the last entry), returned in ascending seq order — the
+ * server's InputBuffer re-sorts by seq, so order here is immaterial.
+ */
+export function buildRedundantFrames(
+  pending: SeqInput[],
+  maxRedundant: number,
+): SeqInput[] {
+  return pending.slice(-(maxRedundant + 1));
+}
+
 export interface NetLoopCallbacks {
   /** Called when the local render state updates (predicted or reconciled). */
   onRenderState(prev: RenderState, cur: RenderState): void;
@@ -57,8 +71,6 @@ export interface NetLoopCallbacks {
 
 export class NetLoop {
   private seq = 0;
-  /** Next local tick counter (advances each predicted step). */
-  private localTick = 0;
   private pending: SeqInput[] = [];
   private accumulator = 0;
 
@@ -192,26 +204,24 @@ export class NetLoop {
 
   private tickOnce(localInput: InputFrame): void {
     this.seq += 1;
-    this.localTick += 1;
 
     const seqEntry: SeqInput = { seq: this.seq, input: localInput };
     this.pending.push(seqEntry);
 
-    // Track this input in the reconciler's pending queue (with local tick for
-    // interpolation buffer lookup during replay — Design 0d).
+    // Track this input in the reconciler's pending queue (keyed by seq). Replay
+    // derives the remote interpolation tick from the snapshot's serverTick, so
+    // no client-local tick is stored here (Design 0d).
     const pendingEntry: PendingInput = {
       seq: this.seq,
-      tick: this.localTick,
       input: localInput,
     };
     this.reconciler.addPending(pendingEntry);
 
     // Send current + last MAX_REDUNDANT unacked for reliability (Q6).
-    const tail = this.pending.slice(-MAX_REDUNDANT);
     const msg: PlayerInput = {
       type: "PlayerInput",
       slot: this.slot,
-      frames: [seqEntry, ...tail.filter((f) => f.seq !== seqEntry.seq)],
+      frames: buildRedundantFrames(this.pending, MAX_REDUNDANT),
     };
     // Route through uplink simulator if present, otherwise send directly.
     if (this.transport) {

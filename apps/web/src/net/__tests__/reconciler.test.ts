@@ -101,7 +101,6 @@ describe("Reconciler: pending input management", () => {
     for (let i = 1; i <= 5; i++) {
       const entry: PendingInput = {
         seq: i,
-        tick: i,
         input: frame({ moveX: 1 }),
       };
       reconciler.addPending(entry);
@@ -131,7 +130,7 @@ describe("Reconciler: pending input management", () => {
     const reconciler = new Reconciler(sim, 0, 1, interp, () => {});
 
     for (let i = 1; i <= 4; i++) {
-      reconciler.addPending({ seq: i, tick: i, input: EMPTY_INPUT });
+      reconciler.addPending({ seq: i, input: EMPTY_INPUT });
     }
 
     const serverSim = newSim();
@@ -152,7 +151,7 @@ describe("Reconciler: pending input management", () => {
     const reconciler = new Reconciler(sim, 0, 1, interp, () => {});
 
     for (let i = 1; i <= 3; i++) {
-      reconciler.addPending({ seq: i, tick: i, input: EMPTY_INPUT });
+      reconciler.addPending({ seq: i, input: EMPTY_INPUT });
     }
 
     const serverSim = newSim();
@@ -199,7 +198,7 @@ describe("Reconciler: replay produces server-consistent state", () => {
 
     // Pending inputs: seqs 3, 4, 5 (not yet acked).
     for (let s = 3; s <= 5; s++) {
-      reconciler.addPending({ seq: s, tick: s, input: frame({ moveX: 1 }) });
+      reconciler.addPending({ seq: s, input: frame({ moveX: 1 }) });
     }
     reconciler.setDisplayedRender(clientSim.getRenderState());
 
@@ -224,6 +223,49 @@ describe("Reconciler: replay produces server-consistent state", () => {
     // converge within tolerance).
     expect(p0Client.x).toBeCloseTo(p0Ref.x, 2);
     expect(p0Client.y).toBeCloseTo(p0Ref.y, 2);
+  });
+});
+
+describe("Reconciler: remote interpolation uses server-tick clock during replay", () => {
+  test("positionAtTick is queried by serverTick-aligned ticks, not client localTick", () => {
+    const sim = newSim();
+    sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+
+    const interp = new InterpolationBuffer();
+    // Two authoritative remote poses at distinct server ticks.
+    interp.push({ serverTick: 10, x: 3, y: 0, vx: 0, vy: 0, facing: 1 });
+    interp.push({ serverTick: 14, x: 8, y: 0, vx: 0, vy: 0, facing: 1 });
+
+    // Record every tick the replay loop samples the remote at.
+    const queried: number[] = [];
+    const realPositionAtTick = interp.positionAtTick.bind(interp);
+    interp.positionAtTick = (t: number) => {
+      queried.push(t);
+      return realPositionAtTick(t);
+    };
+
+    const reconciler = new Reconciler(sim, 0, 1, interp, () => {}, {
+      interpDelayTicks: 3,
+      smoothFactor: 1,
+      snapThreshold: 100,
+    });
+    reconciler.setDisplayedRender(sim.getRenderState());
+
+    // Two unacked pending inputs. The bug keyed the remote lookup off a free-
+    // running client localTick; the fix derives it from snap.serverTick instead,
+    // so these inputs carry only their seq.
+    reconciler.addPending({ seq: 50, input: frame({ moveX: 1 }) });
+    reconciler.addPending({ seq: 51, input: frame({ moveX: 1 }) });
+
+    const serverSim = newSim();
+    serverSim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+    const snap = snapshotFromSim(serverSim, 14, [49, 0]);
+
+    reconciler.reconcile(snap);
+
+    // Replay produces ticks serverTick+1, serverTick+2 (15, 16); the remote is
+    // sampled INTERP_DELAY_TICKS behind each → 12, 13. NOT the localTicks 1, 2.
+    expect(queried).toEqual([12, 13]);
   });
 });
 
@@ -276,6 +318,46 @@ describe("Reconciler: smooth vs snap correction", () => {
         Math.abs(replayedX - displayedX),
       );
     }
+  });
+
+  test("small error eases displayed toward authoritative by exactly smoothFactor", () => {
+    // Both sims start identically so displayed.y == replayed.y (isolate the x error).
+    const clientSim = newSim();
+    clientSim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+    const serverSim = newSim();
+    serverSim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+
+    const replayedX = serverSim.getRenderState().players[0]?.x ?? 0;
+    const snap = snapshotFromSim(serverSim, 2, [0, 0]);
+
+    // Displayed player 0 sits exactly 1.0 unit left of authoritative.
+    const base = clientSim.getRenderState();
+    const displayed: RenderState = {
+      ...base,
+      players: base.players.map((p, i) =>
+        i === 0 && p ? { ...p, x: replayedX - 1.0 } : p,
+      ),
+    };
+
+    const interp = new InterpolationBuffer();
+    let correctedX: number | undefined;
+    const reconciler = new Reconciler(
+      clientSim,
+      0,
+      1,
+      interp,
+      (_prev, cur) => {
+        correctedX = cur.players[0]?.x;
+      },
+      { snapThreshold: 2.0, smoothFactor: 0.25 },
+    );
+    reconciler.setDisplayedRender(displayed);
+
+    reconciler.reconcile(snap);
+
+    // corrected = displayed + smoothFactor * (replayed - displayed)
+    //           = (replayedX - 1.0) + 0.25 * 1.0 = replayedX - 0.75
+    expect(correctedX).toBeCloseTo(replayedX - 0.75, 5);
   });
 
   test("large position error is snapped (correctedX equals replayed x)", () => {

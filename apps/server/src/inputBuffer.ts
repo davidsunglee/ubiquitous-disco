@@ -6,17 +6,29 @@
  *    keeps sorted ascending by seq.
  *  - take(): returns the next input (seq = lastConsumed + 1) and advances
  *    lastConsumed. If no input is available, repeats the last-seen input or
- *    falls back to EMPTY_INPUT (neutral state — the Phase-0 0c model).
+ *    falls back to EMPTY_INPUT (neutral state — the Phase-0 0c model). If a seq
+ *    is permanently lost, take() skips it after a bounded hold (see below).
  *  - lastAckedSeq: the seq most recently consumed.
  */
 
 import type { SeqInput } from "@bb/protocol";
 import { EMPTY_INPUT, type InputFrame } from "@bb/sim";
 
+// How many ticks to hold (repeat-last) on a gap before skipping a missing seq.
+// A few ticks of slack tolerates brief reordering/jitter and gives the client's
+// redundant retransmits time to land. Beyond it we MUST advance: the client only
+// resends a short tail, so a seq lost past that window never arrives — without a
+// skip-ahead, lastConsumed would stick forever, the client's pending list would
+// grow without bound, and reconciliation would replay an ever-longer tail.
+// 5 ticks ≈ 166ms at 30Hz.
+const MAX_HOLD_TICKS = 5;
+
 export class InputBuffer {
   private pending: SeqInput[] = [];
   private lastConsumed = 0;
   private lastInput: InputFrame = { ...EMPTY_INPUT };
+  // Consecutive take() calls spent holding on a gap that has buffered data ahead.
+  private holdTicks = 0;
 
   /**
    * Insert new SeqInput frames into the buffer.
@@ -46,14 +58,30 @@ export class InputBuffer {
   take(): { input: InputFrame; seq: number } {
     const next = this.pending[0];
     if (next && next.seq === this.lastConsumed + 1) {
-      this.pending.shift();
-      this.lastConsumed = next.seq;
-      this.lastInput = next.input;
+      this.consume(next);
       return { input: next.input, seq: next.seq };
     }
-    // Gap or empty: repeat-last (seq stays unchanged, no ack advance).
+    // A gap with buffered data ahead (a missing seq, later seqs already queued):
+    // hold briefly for reordering/retransmits, then skip the missing seq so the
+    // buffer never deadlocks on a permanently-lost input.
+    if (next) {
+      this.holdTicks += 1;
+      if (this.holdTicks > MAX_HOLD_TICKS) {
+        this.consume(next);
+        return { input: next.input, seq: next.seq };
+      }
+    }
+    // Gap (no data ahead) or within the hold window: repeat-last, no ack advance.
     // We return lastConsumed so the client knows we haven't moved forward.
     return { input: { ...this.lastInput }, seq: this.lastConsumed };
+  }
+
+  /** Advance lastConsumed to a buffered entry and reset the hold counter. */
+  private consume(entry: SeqInput): void {
+    this.pending.shift();
+    this.lastConsumed = entry.seq;
+    this.lastInput = entry.input;
+    this.holdTicks = 0;
   }
 
   /** The seq most recently consumed (forwarded to client as lastAckedSeq). */

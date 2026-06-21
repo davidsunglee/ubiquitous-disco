@@ -279,6 +279,36 @@ test("InputBuffer: take() with gap repeats last known input", () => {
   expect(r2.input.jumpHeld).toBe(true);
 });
 
+test("InputBuffer: a permanently-missing seq does not stall the buffer forever", () => {
+  const buf = new InputBuffer();
+  buf.push([{ seq: 1, input: f({ moveX: 1 }) }]);
+  expect(buf.take().seq).toBe(1); // consume seq 1, lastConsumed = 1
+
+  // seq 2 is permanently lost; later seqs keep arriving and pile up.
+  buf.push([
+    { seq: 3, input: f({ moveX: 1 }) },
+    { seq: 4, input: f({ moveX: 1 }) },
+  ]);
+
+  // The first hold still repeats-last so brief reordering/jitter is tolerated.
+  expect(buf.take().seq).toBe(1);
+
+  // But the buffer must not deadlock: within a bounded number of ticks it skips
+  // the missing seq 2 and advances to the buffered seq 3, then seq 4. Without a
+  // skip-ahead policy, take() repeats seq 1 forever and lastAckedSeq never moves.
+  let advanced = -1;
+  for (let i = 0; i < 30; i++) {
+    const r = buf.take();
+    if (r.seq >= 3) {
+      advanced = r.seq;
+      break;
+    }
+  }
+  expect(advanced).toBe(3);
+  expect(buf.lastAckedSeq).toBe(3);
+  expect(buf.take().seq).toBe(4);
+});
+
 test("InputBuffer: lastAckedSeq advances correctly", () => {
   const buf = new InputBuffer();
   expect(buf.lastAckedSeq).toBe(0);

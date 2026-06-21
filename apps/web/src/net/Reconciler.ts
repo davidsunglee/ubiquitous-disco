@@ -29,11 +29,9 @@ import {
 } from "./correctionConfig";
 import type { InterpolationBuffer } from "./InterpolationBuffer";
 
-/** One pending (unacked) local input with its local tick and seq. */
+/** One pending (unacked) local input, identified by its seq. */
 export interface PendingInput {
   seq: number;
-  /** The server tick this input corresponds to (for interp buffer lookup). */
-  tick: number;
   input: InputFrame;
 }
 
@@ -51,13 +49,6 @@ export class Reconciler {
 
   /** The currently displayed (possibly smoothed) render state. */
   private displayedRender: RenderState | null = null;
-
-  /**
-   * Per-player smooth-correction offset. When a small correction arrives,
-   * this offset absorbs the delta and decays toward zero over frames.
-   * Index = slot, value = { dx, dy } remaining error still being smoothed.
-   */
-  private smoothOffset: Array<{ dx: number; dy: number }> = [];
 
   constructor(
     private readonly sim: Simulation,
@@ -128,8 +119,20 @@ export class Reconciler {
 
     // 3. Replay unacked pending inputs in seq order, driving the remote slot
     //    from the tick-indexed interpolation buffer (Design 0d).
+    //
+    //    The interp buffer is keyed by the server's tick clock, so the sample
+    //    tick MUST be derived from snap.serverTick — NOT from the input's
+    //    free-running client localTick (which shares no origin or rate with
+    //    serverTick and would clamp every lookup to the buffer's oldest/newest
+    //    entry). After applying authoritative state at snap.serverTick, the i-th
+    //    replayed input advances the sim to serverTick + i, and the remote is
+    //    rendered interpDelayTicks behind that, exactly as live prediction does.
+    let replayTick = snap.serverTick;
     for (const p of this.pending) {
-      const remotePose = this.interp.positionAtTick(p.tick);
+      replayTick += 1;
+      const remotePose = this.interp.positionAtTick(
+        replayTick - this.cfg.interpDelayTicks,
+      );
       if (remotePose) {
         this.sim.setSlotKinematicPosition(
           this.remoteSlot,
@@ -164,12 +167,13 @@ export class Reconciler {
   /**
    * Apply smooth-or-snap correction for each player slot.
    *
-   * For positions within `snapThreshold`: blend the remaining smooth offset
-   * toward zero (gradual correction), returning a position between displayed
-   * and replayed.
+   * Within `snapThreshold`: ease the displayed position a `smoothFactor`
+   * fraction toward the authoritative (replayed) position. The displayed render
+   * is reused as the next frame's baseline, so repeated snapshots converge
+   * geometrically; the render loop lerps prev→cur between snapshots, so the
+   * visible motion stays smooth without per-frame state here.
    *
-   * For positions beyond `snapThreshold`: teleport directly to the replayed
-   * position (snap), resetting the smooth offset.
+   * Beyond `snapThreshold`: teleport directly to the replayed position (snap).
    *
    * Ball and facing are always taken directly from the replayed state (snapped)
    * since smoothing the ball would create visible disagreement with physics.
@@ -183,47 +187,19 @@ export class Reconciler {
       const dp = this.displayedRender?.players[s];
       if (!dp) return rp;
 
-      // Initialize smooth offset for this slot if needed.
-      if (!this.smoothOffset[s]) {
-        this.smoothOffset[s] = { dx: 0, dy: 0 };
-      }
-      const offset = this.smoothOffset[s] ?? { dx: 0, dy: 0 };
-
-      // The raw error is (replayed - displayed).
+      // Error from displayed (what's on screen) to replayed (server truth).
       const errX = rp.x - dp.x;
       const errY = rp.y - dp.y;
       const dist = Math.sqrt(errX * errX + errY * errY);
 
-      if (dist > this.cfg.snapThreshold) {
-        // Large error: snap immediately and clear the smooth offset.
-        this.smoothOffset[s] = { dx: 0, dy: 0 };
-        return { ...rp };
-      }
+      // Large error: snap straight to the authoritative position.
+      if (dist > this.cfg.snapThreshold) return { ...rp };
 
-      // Small error: accumulate into smooth offset and blend.
-      // The displayed position already absorbed previous offsets, so the
-      // new total error relative to the replayed position is errX/errY.
-      // We move `smoothFactor` of the remaining error each frame.
-      offset.dx = errX;
-      offset.dy = errY;
-
-      // Decay: the displayed position lags behind replayed by (1-smoothFactor).
-      const correctedX = rp.x - offset.dx * (1 - this.cfg.smoothFactor);
-      const correctedY = rp.y - offset.dy * (1 - this.cfg.smoothFactor);
-
-      // Decay the offset for next frame.
-      offset.dx *= 1 - this.cfg.smoothFactor;
-      offset.dy *= 1 - this.cfg.smoothFactor;
-
-      // Clear offset when it's negligible.
-      if (Math.abs(offset.dx) < 0.001 && Math.abs(offset.dy) < 0.001) {
-        this.smoothOffset[s] = { dx: 0, dy: 0 };
-      }
-
+      // Small error: move `smoothFactor` of the way toward authoritative.
       return {
         ...rp,
-        x: correctedX,
-        y: correctedY,
+        x: dp.x + errX * this.cfg.smoothFactor,
+        y: dp.y + errY * this.cfg.smoothFactor,
       };
     });
 
