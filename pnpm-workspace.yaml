@@ -3,5 +3,6 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: true
+  msgpackr-extract: true
 minimumReleaseAgeExclude:
   - phaser@4.2.0

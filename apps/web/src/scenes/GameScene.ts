@@ -17,10 +17,17 @@ import {
 import Phaser from "phaser";
 import {
   KeyboardAdapter,
+  NET_KEYMAP,
   P1_KEYMAP,
   P2_KEYMAP,
 } from "../input/KeyboardAdapter";
 import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
+import { NetClient } from "../net/NetClient";
+import { NetLoop } from "../net/NetLoop";
+import {
+  type NetSimPatch,
+  SimulatedTransport,
+} from "../net/SimulatedTransport";
 import { attemptLandscapeLock } from "../orientation";
 import {
   bellSubjectFromWorld,
@@ -33,6 +40,7 @@ import {
   toScreenX,
   toScreenY,
 } from "../render/worldToScreen";
+import { ConnectionOverlay } from "./ConnectionOverlay";
 import { type HudBridge, hudBridge } from "./HudScene";
 import { OrientationOverlay } from "./OrientationOverlay";
 
@@ -47,6 +55,8 @@ export class GameScene extends Phaser.Scene {
   private gfx!: Phaser.GameObjects.Graphics;
   private kb1!: KeyboardAdapter;
   private kb2!: KeyboardAdapter;
+  /** Networked local-player keyboard (Arrows + Z/X/C); used in networked mode. */
+  private kbNet!: KeyboardAdapter;
   private touch!: TouchAdapter;
   private groupCamera!: GroupCamera;
   private orientationOverlay!: OrientationOverlay;
@@ -81,6 +91,35 @@ export class GameScene extends Phaser.Scene {
   // ── Phase 3: sim tick counter for deterministic i-frame blink ────────────────
   private simTick = 0;
 
+  // ── Networking (Phase 1 + 2) ──────────────────────────────────────────────────
+  private netClient!: NetClient;
+  private connectionOverlay!: ConnectionOverlay;
+  /** Phase 2: set once the room is full (both players present). */
+  private netLoop: NetLoop | null = null;
+  /**
+   * True once we've created/joined a room but the opponent hasn't arrived yet.
+   * While awaiting, the local hotseat sim is frozen so stray input can't start a
+   * phantom local match behind the connection panel.
+   */
+  private awaitingOpponent = false;
+  /**
+   * Phase 5: set when the match ends fail-closed (peer disconnect / server
+   * shutdown). Input is frozen and the fail-closed banner is shown.
+   */
+  private matchFailClosed = false;
+  /** Phase 4: dev network simulator (dev-only). */
+  private simTransport: SimulatedTransport | null = null;
+
+  /** Phase 5: telemetry interval handle (clearInterval on shutdown). */
+  private telemetryTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Phase 4: the `net-sim-config` document listener added in startNetLoop.
+   * Stored so shutdown() can removeEventListener it — an inline arrow can't be
+   * removed and would leak across scene restarts.
+   */
+  private netSimConfigHandler: ((e: Event) => void) | null = null;
+
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
   // hudOverlay is sized/positioned to exactly overlay the (scaled, centered)
   // canvas each frame, so the %/px-positioned HUD children stay aligned with the
@@ -104,6 +143,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.kb1 = new KeyboardAdapter(this.input.keyboard, P1_KEYMAP);
     this.kb2 = new KeyboardAdapter(this.input.keyboard, P2_KEYMAP);
+    this.kbNet = new KeyboardAdapter(this.input.keyboard, NET_KEYMAP);
 
     // Stop arrow keys (P2 movement) from scrolling the page/canvas.
     this.input.keyboard.addCapture([
@@ -138,9 +178,10 @@ export class GameScene extends Phaser.Scene {
     });
     this.orientationOverlay.mount();
 
-    const s = this.sim.getRenderState();
-    this.prev = structuredClone(s);
-    this.cur = structuredClone(s);
+    // getRenderState() returns a fresh, independent snapshot each call, so two
+    // calls give independent prev/cur without structuredClone.
+    this.prev = this.sim.getRenderState();
+    this.cur = this.sim.getRenderState();
 
     // Bell Ring banner (hidden until a Bell rings). Drawn above the canvas-center.
     this.bellText = this.add
@@ -160,6 +201,25 @@ export class GameScene extends Phaser.Scene {
 
     // Phase 2: inject match HUD DOM nodes so Playwright can locate them.
     this.createMatchHudNodes();
+
+    // Phase 1: mount the connection/room overlay and wire it to a NetClient.
+    this.netClient = new NetClient();
+    this.connectionOverlay = new ConnectionOverlay();
+    this.connectionOverlay.mount();
+    this.connectionOverlay.wire(
+      this.netClient,
+      this.game.canvas,
+      (slot) => {
+        // Phase 2: room is full — switch to networked mode.
+        this.startNetLoop(slot);
+      },
+      () => {
+        // Created/joined a room; freeze the local sim until the match begins so
+        // stray input can't kick off a phantom local match behind the panel.
+        this.awaitingOpponent = true;
+        this.startPromptEl.style.display = "none";
+      },
+    );
 
     // Launch the HUD in parallel (it renders on top without replacing GameScene).
     this.scene.launch("HudScene");
@@ -216,7 +276,7 @@ export class GameScene extends Phaser.Scene {
     // Set initial values immediately so nodes are populated before first update.
     this.scoreEl.textContent = "0 - 0";
     this.timerEl.textContent = "3:00";
-    this.startPromptEl.textContent = "Press C (P1) or J (P2) to Start";
+    this.startPromptEl.textContent = "Press Jump to Start";
     this.startPromptEl.style.display = "block";
     this.goldenGoalEl.style.display = "none";
     this.matchSummaryEl.style.display = "none";
@@ -249,8 +309,16 @@ export class GameScene extends Phaser.Scene {
     }
     if (m.phase === "complete") {
       this.matchSummaryEl.style.display = "block";
-      const winnerText = m.winner === -1 ? "DRAW" : `P${m.winner + 1} WINS`;
-      this.matchSummaryEl.textContent = `${winnerText} — Press C (P1) or J (P2) to Rematch`;
+      let winnerText: string;
+      if (m.winner === -1) {
+        winnerText = "DRAW";
+      } else if (this.netLoop !== null) {
+        // Networked: each screen shows its own outcome (one player per client).
+        winnerText = m.winner === this.netClient.slot ? "YOU WIN" : "YOU LOSE";
+      } else {
+        winnerText = `P${m.winner + 1} WINS`;
+      }
+      this.matchSummaryEl.textContent = `${winnerText} — Press Jump to Rematch`;
     } else {
       this.matchSummaryEl.style.display = "none";
     }
@@ -295,9 +363,102 @@ export class GameScene extends Phaser.Scene {
       },
       isCapturing: () => this.captureData !== null,
       getMatchState: () => this.sim.getMatchState(),
+      // Phase 4: live closures over SimulatedTransport (null when no transport).
+      getNetSim: () => this.simTransport?.getParams() ?? null,
+      updateNetSim: (patch) => this.simTransport?.applyPatch(patch),
     };
     // Overwrite all fields of the shared singleton bridge.
     Object.assign(hudBridge, bridge);
+  }
+
+  // ── Phase 2: networked game loop ─────────────────────────────────────────────
+
+  private startNetLoop(slot: import("@bb/protocol").Slot): void {
+    // The match is starting — leave the awaiting-opponent freeze state.
+    this.awaitingOpponent = false;
+
+    // Phase 4: create a dev-only SimulatedTransport and register it on the
+    // hudBridge so HUD sliders can tune it live.
+    this.simTransport = new SimulatedTransport(this.netClient);
+
+    // Dev/e2e hook: let tests tune the simulator without driving Phaser-canvas
+    // sliders. `net-latency.spec.ts` dispatches this CustomEvent to apply
+    // latency in each tab; the HUD sliders are the manual equivalent. Store the
+    // handler so shutdown() can remove it (avoids a listener leak on restart).
+    this.netSimConfigHandler = (e: Event) => {
+      const detail = (e as CustomEvent<NetSimPatch>).detail;
+      if (detail) this.simTransport?.applyPatch(detail);
+    };
+    document.addEventListener("net-sim-config", this.netSimConfigHandler);
+
+    this.netLoop = new NetLoop(
+      this.netClient,
+      slot,
+      {
+        onRenderState: (prev, cur) => {
+          this.prev = prev;
+          this.cur = cur;
+        },
+        onMatchState: (m) => {
+          // Networked HUD is driven by authoritative MatchState from snapshots.
+          this.updateMatchHud(m);
+        },
+        onDisconnect: () => {
+          console.info("[net] disconnected");
+        },
+      },
+      this.simTransport,
+    );
+    this.netLoop.start();
+    console.info(`[net] NetLoop started (slot ${slot})`);
+
+    // Phase 5: fail-closed — stop the net loop and show the banner on any
+    // peer disconnect, server shutdown, or WebSocket error.
+    this.netClient.onFailClosed((reason) => {
+      console.info(`[net] fail-closed: ${reason}`);
+      // Stop the net loop so no more predicted ticks or sends happen.
+      this.netLoop = null;
+      // Freeze the scene so stray input can't interact with the frozen state.
+      this.matchFailClosed = true;
+      // Show the fail-closed banner and update the status badge.
+      this.connectionOverlay.showFailClosed(reason);
+    });
+
+    // Phase 5: periodic RTT telemetry (every 2 seconds).
+    this.startTelemetry();
+  }
+
+  // ── Phase 5: telemetry ───────────────────────────────────────────────────────
+
+  /**
+   * Start a periodic RTT telemetry sample. Fires every 2 seconds while the
+   * match is live (netLoop not null). Stops automatically on fail-closed
+   * (netLoop becomes null). Shows the telemetry readout in the overlay.
+   */
+  private startTelemetry(): void {
+    if (this.telemetryTimer !== null) return; // already running
+    this.connectionOverlay.updateTelemetry(0); // show the element with initial value
+    this.telemetryTimer = setInterval(() => {
+      if (this.netLoop === null) {
+        // Match ended — hide telemetry and stop sampling.
+        this.connectionOverlay.updateTelemetry(null);
+        if (this.telemetryTimer !== null) {
+          clearInterval(this.telemetryTimer);
+          this.telemetryTimer = null;
+        }
+        return;
+      }
+      // Sample RTT from the Colyseus room. ping() is fire-and-forget;
+      // the callback updates the overlay with the measured value.
+      this.netClient
+        .ping()
+        .then((rtt) => {
+          this.connectionOverlay.updateTelemetry(rtt);
+        })
+        .catch(() => {
+          // Ignore ping errors (room may have closed between the call and reply).
+        });
+    }, 2000);
   }
 
   // ── Sim lifecycle ────────────────────────────────────────────────────────────
@@ -316,9 +477,10 @@ export class GameScene extends Phaser.Scene {
     this.simTick = 0;
     this.liveConfig = { ...DEFAULT_CONFIG };
     this.sim = this.buildSim(this.liveConfig);
-    const s = this.sim.getRenderState();
-    this.prev = structuredClone(s);
-    this.cur = structuredClone(s);
+    // getRenderState() returns a fresh, independent snapshot each call, so two
+    // calls give independent prev/cur without structuredClone.
+    this.prev = this.sim.getRenderState();
+    this.cur = this.sim.getRenderState();
     this.bellFlash = { left: 0, right: 0 };
     this.bellText.setAlpha(0).setText("");
   }
@@ -329,9 +491,10 @@ export class GameScene extends Phaser.Scene {
     this.simTick = 0;
     this.liveConfig = { ...DEFAULT_CONFIG };
     this.sim = this.buildSim(this.liveConfig);
-    const s = this.sim.getRenderState();
-    this.prev = structuredClone(s);
-    this.cur = structuredClone(s);
+    // getRenderState() returns a fresh, independent snapshot each call, so two
+    // calls give independent prev/cur without structuredClone.
+    this.prev = this.sim.getRenderState();
+    this.cur = this.sim.getRenderState();
     this.bellFlash = { left: 0, right: 0 };
 
     const replayData = deserializeReplay(json);
@@ -363,6 +526,121 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
+    // ── Phase 3: networked mode — predicted loop + reconciliation ─────────────
+    if (this.netLoop !== null) {
+      // Collect local player input. Unlike hotseat (two keymaps on one
+      // keyboard), each networked client controls only its own player on its
+      // own machine, so BOTH slots use the same networked scheme (Arrows +
+      // Z/X/C, via kbNet) plus touch, regardless of which slot the server
+      // assigned.
+      const localSlot = this.netClient.slot;
+      const collectLocal = () => {
+        if (this.replayFrames !== null) {
+          const row = this.replayFrames[this.replayFrameCursor];
+          if (row !== undefined) {
+            this.replayFrameCursor++;
+            return row[localSlot] ?? this.kbNet.collect();
+          }
+          this.replayFrames = null;
+          this.replayFrameCursor = 0;
+        }
+        return mergeInputFrames(this.kbNet.collect(), this.touch.collect());
+      };
+
+      // Advance the predicted loop (prediction + sends). NetLoop updates
+      // this.prev/this.cur via onRenderState callback.
+      this.netLoop.tick(delta, collectLocal);
+
+      // Phase 3: use predicted render state with smooth interpolation.
+      const alpha = this.netLoop.renderAlpha;
+
+      // Override the remote player's render position from the interpolation
+      // buffer so it moves smoothly independent of the prediction sim.
+      // We do this by patching prev/cur just before drawing.
+      const remoteSample = this.netLoop.sampleRemoteRender();
+      if (remoteSample !== null) {
+        const remoteSlot = localSlot === 0 ? 1 : 0;
+        // Patch the current render state for the remote slot.
+        if (this.cur.players[remoteSlot]) {
+          this.cur = {
+            ...this.cur,
+            players: this.cur.players.map((p, s) =>
+              s === remoteSlot && p
+                ? {
+                    ...p,
+                    x: remoteSample.x,
+                    y: remoteSample.y,
+                    facing: remoteSample.facing,
+                  }
+                : p,
+            ),
+          };
+        }
+        // Also patch prev so lerp doesn't jump from wrong prev position.
+        if (this.prev.players[remoteSlot]) {
+          this.prev = {
+            ...this.prev,
+            players: this.prev.players.map((p, s) =>
+              s === remoteSlot && p
+                ? {
+                    ...p,
+                    x: remoteSample.x,
+                    y: remoteSample.y,
+                    facing: remoteSample.facing,
+                  }
+                : p,
+            ),
+          };
+        }
+      }
+
+      this.gfx.clear();
+      this.drawArena();
+      this.drawBells();
+      this.drawBall(alpha);
+      this.drawPlayers(alpha);
+      this.tickBellFeedback(delta);
+      this.touch.drawUI();
+      this.updateGroupCamera(alpha);
+
+      // Match HUD is updated by NetLoop's onMatchState callback, but keep
+      // canvas aligned every frame.
+      if (this.netLoop.latestMatchState) {
+        this.updateMatchHud(this.netLoop.latestMatchState);
+      }
+      return;
+    }
+
+    // ── Awaiting opponent: freeze the scene as a static background ─────────────
+    // We've created/joined a room but the match hasn't started. Render the
+    // current frame but don't step the sim or collect input, so the connection
+    // panel's "waiting for opponent" message is the only thing in play.
+    if (this.awaitingOpponent) {
+      this.gfx.clear();
+      this.drawArena();
+      this.drawBells();
+      this.drawBall(1);
+      this.drawPlayers(1);
+      this.touch.drawUI();
+      this.updateGroupCamera(1);
+      return;
+    }
+
+    // ── Fail-closed: freeze the scene as a static background ─────────────────
+    // The match ended via peer disconnect or server shutdown. Render the last
+    // known frame but accept no input — the fail-closed banner covers the scene.
+    if (this.matchFailClosed) {
+      this.gfx.clear();
+      this.drawArena();
+      this.drawBells();
+      this.drawBall(1);
+      this.drawPlayers(1);
+      this.touch.drawUI();
+      this.updateGroupCamera(1);
+      return;
+    }
+
+    // ── Local hotseat mode (Phase 1 and earlier) ──────────────────────────────
     // Honor pause flag — don't advance the accumulator while paused (unless a
     // single-step was requested by the HUD).
     const shouldStep = !this.paused || this.doSingleStep;
@@ -383,7 +661,8 @@ export class GameScene extends Phaser.Scene {
 
       this.sim.step(inputFrames);
       this.simTick += 1;
-      this.cur = structuredClone(this.sim.getRenderState());
+      // getRenderState() already returns a fresh object — no clone needed.
+      this.cur = this.sim.getRenderState();
       // Drain sim events each tick and surface Bell Ring feedback.
       for (const event of this.sim.drainEvents()) {
         if (event.type === "bellRing") this.onBellRing(event.bell);
@@ -633,7 +912,18 @@ export class GameScene extends Phaser.Scene {
 
   shutdown(): void {
     this.orientationOverlay?.destroy();
+    this.connectionOverlay?.destroy();
     // Removing the overlay removes all match HUD nodes (its children) with it.
     this.hudOverlay?.remove();
+    // Phase 5: stop telemetry timer if running.
+    if (this.telemetryTimer !== null) {
+      clearInterval(this.telemetryTimer);
+      this.telemetryTimer = null;
+    }
+    // Phase 4: remove the net-sim-config listener if one was registered.
+    if (this.netSimConfigHandler !== null) {
+      document.removeEventListener("net-sim-config", this.netSimConfigHandler);
+      this.netSimConfigHandler = null;
+    }
   }
 }

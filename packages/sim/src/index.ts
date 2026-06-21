@@ -36,6 +36,8 @@ export {
   serializeReplay,
 } from "./replay";
 export type {
+  AuthoritativeState,
+  AuthPlayer,
   DebugBox,
   DebugCircle,
   DebugCollider,
@@ -46,4 +48,4 @@ export type {
   SimSnapshot,
   Simulation,
 } from "./simulation";
-export { createSimulation } from "./simulation";
+export { createSimulation, toAuthoritativeState } from "./simulation";

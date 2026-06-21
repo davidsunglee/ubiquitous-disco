@@ -159,6 +159,27 @@ export class RapierWorld {
     this.ball.setLinvel({ x: vx, y: vy }, true);
   }
 
+  /**
+   * Teleport the ball to (x, y) and optionally zero its velocity.
+   * Used by the lightweight authoritative-state apply path (Phase 2+).
+   */
+  setBallPosition(x: number, y: number): void {
+    this.ball.setTranslation({ x, y }, true);
+  }
+
+  /**
+   * Teleport a kinematic player body to (x, y).
+   * Used by the lightweight authoritative-state apply path (Phase 2+).
+   * Both setTranslation (committed) and setNextKinematicTranslation (next-step
+   * target) are written so the controller and physics both agree on the new pose.
+   */
+  setPlayerPosition(slot: number, x: number, y: number): void {
+    const body = this.players[slot];
+    if (!body) throw new Error(`setPlayerPosition: invalid slot ${slot}`);
+    body.setTranslation({ x, y }, true);
+    body.setNextKinematicTranslation({ x, y });
+  }
+
   playerPos(slot: number): { x: number; y: number } {
     const body = this.players[slot];
     if (!body) throw new Error(`playerPos: invalid slot ${slot}`);
