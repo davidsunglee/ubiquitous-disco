@@ -39,10 +39,13 @@ function frame(p: Partial<InputFrame>): InputFrame {
 }
 
 function newSim() {
+  // Use activeSlots [0, 1] for reconciler unit tests — these tests verify
+  // reconciler mechanics (replay, correction) not the 1v1 slot model.
   return createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 9999,
+    activeSlots: [0, 1],
   });
 }
 
@@ -50,7 +53,7 @@ function newSim() {
 function snapshotFromSim(
   sim: ReturnType<typeof newSim>,
   serverTick: number,
-  lastAckedSeq: [number, number] = [0, 0],
+  lastAckedSeq: [number, number, number, number] = [0, 0, 0, 0],
 ): WorldSnapshot {
   const auth = toAuthoritativeState(sim);
   return {
@@ -103,7 +106,7 @@ describe("Reconciler: pending input management", () => {
     for (let i = 0; i < 3; i++)
       serverSim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
 
-    const snap = snapshotFromSim(serverSim, 5, [3, 0]);
+    const snap = snapshotFromSim(serverSim, 5, [3, 0, 0, 0]);
     reconciler.reconcile(snap);
 
     // After reconciliation: seqs 1–3 should be discarded, seqs 4–5 remain.
@@ -128,7 +131,7 @@ describe("Reconciler: pending input management", () => {
     serverSim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
     for (let i = 0; i < 4; i++) serverSim.step([EMPTY_INPUT, EMPTY_INPUT]);
 
-    const snap = snapshotFromSim(serverSim, 4, [4, 0]);
+    const snap = snapshotFromSim(serverSim, 4, [4, 0, 0, 0]);
     reconciler.reconcile(snap);
 
     expect(reconciler.getPending().length).toBe(0);
@@ -148,7 +151,7 @@ describe("Reconciler: pending input management", () => {
     const serverSim = newSim();
     serverSim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
 
-    const snap = snapshotFromSim(serverSim, 1, [0, 0]);
+    const snap = snapshotFromSim(serverSim, 1, [0, 0, 0, 0]);
     reconciler.reconcile(snap);
 
     expect(reconciler.getPending().length).toBe(3);
@@ -165,7 +168,7 @@ describe("Reconciler: replay produces server-consistent state", () => {
     serverSim.step([frame({ moveX: 1 }), EMPTY_INPUT]); // seq 2
     // Snapshot here (server has consumed seqs 1-2, acks 2).
     const snapTick = 3; // server tick
-    const snap = snapshotFromSim(serverSim, snapTick, [2, 0]);
+    const snap = snapshotFromSim(serverSim, snapTick, [2, 0, 0, 0]);
 
     // Client sim: starts identically, then has pending seqs 3-5.
     const clientSim = newSim();
@@ -250,7 +253,7 @@ describe("Reconciler: remote interpolation uses server-tick clock during replay"
 
     const serverSim = newSim();
     serverSim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
-    const snap = snapshotFromSim(serverSim, 14, [49, 0]);
+    const snap = snapshotFromSim(serverSim, 14, [49, 0, 0, 0]);
 
     reconciler.reconcile(snap);
 
@@ -289,7 +292,7 @@ describe("Reconciler: smooth vs snap correction", () => {
     serverSim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
     // Move the server's player 0 very slightly by stepping one extra frame.
     serverSim.step([frame({ moveX: 0.05 }), EMPTY_INPUT]);
-    const snap = snapshotFromSim(serverSim, 2, [0, 0]);
+    const snap = snapshotFromSim(serverSim, 2, [0, 0, 0, 0]);
 
     reconciler.reconcile(snap);
 
@@ -319,7 +322,7 @@ describe("Reconciler: smooth vs snap correction", () => {
     serverSim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
 
     const replayedX = serverSim.getRenderState().players[0]?.x ?? 0;
-    const snap = snapshotFromSim(serverSim, 2, [0, 0]);
+    const snap = snapshotFromSim(serverSim, 2, [0, 0, 0, 0]);
 
     // Displayed player 0 sits exactly 1.0 unit left of authoritative.
     const base = clientSim.getRenderState();
@@ -379,7 +382,7 @@ describe("Reconciler: smooth vs snap correction", () => {
     // Walk the server player far to the right.
     for (let i = 0; i < 30; i++)
       serverSim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
-    const snap = snapshotFromSim(serverSim, 31, [0, 0]);
+    const snap = snapshotFromSim(serverSim, 31, [0, 0, 0, 0]);
 
     reconciler.reconcile(snap);
 

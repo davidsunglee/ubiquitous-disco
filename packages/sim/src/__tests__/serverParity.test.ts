@@ -8,6 +8,10 @@
  * This is the baseline invariant the Phase 2 authoritative server relies on:
  * if the client ever steps its local sim with the same inputs the server used,
  * the two should converge to the same state.
+ *
+ * These tests use activeSlots [0, 1] (legacy compact layout) so all 2-element
+ * input rows and players[1] references remain valid. The 1v1 production model
+ * uses [0, 2]; see twoPlayer.test.ts for those tests.
  */
 
 import { beforeAll, expect, test } from "vitest";
@@ -80,6 +84,7 @@ test("server sim and client sim produce identical hashState() given the same inp
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 1234,
+    activeSlots: [0, 1],
   });
   for (const row of inputs) serverSim.step(row);
 
@@ -88,6 +93,7 @@ test("server sim and client sim produce identical hashState() given the same inp
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 1234,
+    activeSlots: [0, 1],
   });
   for (const row of inputs) clientSim.step(row);
 
@@ -101,11 +107,13 @@ test("two server sims produce identical hashState() (determinism self-check)", (
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 1234,
+    activeSlots: [0, 1],
   });
   const sim2 = createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 1234,
+    activeSlots: [0, 1],
   });
 
   for (const row of inputs) {
@@ -125,6 +133,7 @@ test("render states match between server sim and client sim after apply+step", (
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 1234,
+    activeSlots: [0, 1],
   });
   for (let i = 0; i < midpoint; i++)
     serverSim.step(inputs[i] ?? [EMPTY_INPUT, EMPTY_INPUT]);
@@ -135,6 +144,7 @@ test("render states match between server sim and client sim after apply+step", (
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 1234,
+    activeSlots: [0, 1],
   });
   for (let i = 0; i < midpoint; i++)
     clientSim.step(inputs[i] ?? [EMPTY_INPUT, EMPTY_INPUT]);

@@ -49,3 +49,5 @@ export type {
   Simulation,
 } from "./simulation";
 export { createSimulation, toAuthoritativeState } from "./simulation";
+export type { AckBySlot, PlayerSlotId, TeamId } from "./team";
+export { TEAM_0_SLOTS, TEAM_1_SLOTS, teamForPlayerSlot } from "./team";

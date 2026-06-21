@@ -6,6 +6,7 @@ import {
   FLAT_DOJO,
   type InputFrame,
   type MatchState,
+  type PlayerSlotId,
   playReplay,
   type RenderState,
   type ReplayData,
@@ -13,6 +14,7 @@ import {
   type SimConfig,
   type Simulation,
   serializeReplay,
+  teamForPlayerSlot,
 } from "@bb/sim";
 import Phaser from "phaser";
 import {
@@ -32,6 +34,7 @@ import { attemptLandscapeLock } from "../orientation";
 import {
   bellSubjectFromWorld,
   GroupCamera,
+  type GroupSubject,
   subjectFromWorld,
 } from "../render/GroupCamera";
 import {
@@ -43,6 +46,7 @@ import {
 import { ConnectionOverlay } from "./ConnectionOverlay";
 import { type HudBridge, hudBridge } from "./HudScene";
 import { OrientationOverlay } from "./OrientationOverlay";
+import { bellFromScoreDelta } from "./scoreFeedback";
 
 // Distinct colors for slot 0 and slot 1 (grounded / airborne variants).
 const SLOT_COLORS = [
@@ -69,6 +73,12 @@ export class GameScene extends Phaser.Scene {
   private bellFlash: { left: number; right: number } = { left: 0, right: 0 };
   // Phase 3: per-player hit flash (1 → 0), one entry per slot. Cosmetic only.
   private hitFlash: number[] = [];
+  /**
+   * Last authoritative Team scores seen by the HUD. In networked mode the
+   * predicted sim's Bell Ring events are discarded, so the Bell banner is
+   * driven from authoritative score increments instead (see updateMatchHud).
+   */
+  private prevScores: number[] = [];
 
   // ── Phase 5: pause/step/replay state ────────────────────────────────────────
   private paused = false;
@@ -209,9 +219,12 @@ export class GameScene extends Phaser.Scene {
     this.connectionOverlay.wire(
       this.netClient,
       this.game.canvas,
-      (slot) => {
+      (slot, slots) => {
         // Phase 2: room is full — switch to networked mode.
-        this.startNetLoop(slot);
+        this.startNetLoop(
+          slot as PlayerSlotId,
+          (slots ?? [0, 2]) as PlayerSlotId[],
+        );
       },
       () => {
         // Created/joined a room; freeze the local sim until the match begins so
@@ -300,6 +313,15 @@ export class GameScene extends Phaser.Scene {
     const sec = totalSec % 60;
     this.timerEl.textContent = `${min}:${String(sec).padStart(2, "0")}`;
     this.scoreEl.textContent = `${m.scores[0] ?? 0} - ${m.scores[1] ?? 0}`;
+    // Networked play discards the predicted sim's Bell Ring events, so surface
+    // the Bell banner from authoritative score increments instead. (The local
+    // hotseat fires onBellRing directly from sim events, so guard to avoid a
+    // double trigger there.)
+    if (this.netLoop !== null) {
+      const bell = bellFromScoreDelta(this.prevScores, m.scores);
+      if (bell) this.onBellRing(bell);
+    }
+    this.prevScores = [...m.scores];
     this.startPromptEl.style.display =
       m.phase === "preRound" ? "block" : "none";
     this.goldenGoalEl.style.display =
@@ -313,8 +335,9 @@ export class GameScene extends Phaser.Scene {
       if (m.winner === -1) {
         winnerText = "DRAW";
       } else if (this.netLoop !== null) {
-        // Networked: each screen shows its own outcome (one player per client).
-        winnerText = m.winner === this.netClient.slot ? "YOU WIN" : "YOU LOSE";
+        // Networked: compare winner (Team index) against this client's team.
+        const myTeam = teamForPlayerSlot(this.netClient.slot as PlayerSlotId);
+        winnerText = m.winner === myTeam ? "YOU WIN" : "YOU LOSE";
       } else {
         winnerText = `P${m.winner + 1} WINS`;
       }
@@ -373,7 +396,10 @@ export class GameScene extends Phaser.Scene {
 
   // ── Phase 2: networked game loop ─────────────────────────────────────────────
 
-  private startNetLoop(slot: import("@bb/protocol").Slot): void {
+  private startNetLoop(
+    slot: PlayerSlotId,
+    activeSlots: PlayerSlotId[] = [0, 2],
+  ): void {
     // The match is starting — leave the awaiting-opponent freeze state.
     this.awaitingOpponent = false;
 
@@ -394,6 +420,7 @@ export class GameScene extends Phaser.Scene {
     this.netLoop = new NetLoop(
       this.netClient,
       slot,
+      activeSlots,
       {
         onRenderState: (prev, cur) => {
           this.prev = prev;
@@ -557,40 +584,44 @@ export class GameScene extends Phaser.Scene {
       // Override the remote player's render position from the interpolation
       // buffer so it moves smoothly independent of the prediction sim.
       // We do this by patching prev/cur just before drawing.
+      // Phase 1: single shared buffer for the one remote in 1v1.
       const remoteSample = this.netLoop.sampleRemoteRender();
       if (remoteSample !== null) {
-        const remoteSlot = localSlot === 0 ? 1 : 0;
-        // Patch the current render state for the remote slot.
-        if (this.cur.players[remoteSlot]) {
-          this.cur = {
-            ...this.cur,
-            players: this.cur.players.map((p, s) =>
-              s === remoteSlot && p
-                ? {
-                    ...p,
-                    x: remoteSample.x,
-                    y: remoteSample.y,
-                    facing: remoteSample.facing,
-                  }
-                : p,
-            ),
-          };
-        }
-        // Also patch prev so lerp doesn't jump from wrong prev position.
-        if (this.prev.players[remoteSlot]) {
-          this.prev = {
-            ...this.prev,
-            players: this.prev.players.map((p, s) =>
-              s === remoteSlot && p
-                ? {
-                    ...p,
-                    x: remoteSample.x,
-                    y: remoteSample.y,
-                    facing: remoteSample.facing,
-                  }
-                : p,
-            ),
-          };
+        // For each remote slot, patch its position from the interp buffer.
+        // Phase 1: all remotes share the single interpBuffer sample.
+        for (const remoteSlot of this.netLoop.getRemoteSlots()) {
+          // Patch the current render state for the remote slot.
+          if (this.cur.players[remoteSlot]) {
+            this.cur = {
+              ...this.cur,
+              players: this.cur.players.map((p, s) =>
+                s === remoteSlot && p
+                  ? {
+                      ...p,
+                      x: remoteSample.x,
+                      y: remoteSample.y,
+                      facing: remoteSample.facing,
+                    }
+                  : p,
+              ),
+            };
+          }
+          // Also patch prev so lerp doesn't jump from wrong prev position.
+          if (this.prev.players[remoteSlot]) {
+            this.prev = {
+              ...this.prev,
+              players: this.prev.players.map((p, s) =>
+                s === remoteSlot && p
+                  ? {
+                      ...p,
+                      x: remoteSample.x,
+                      y: remoteSample.y,
+                      facing: remoteSample.facing,
+                    }
+                  : p,
+              ),
+            };
+          }
         }
       }
 
@@ -708,18 +739,19 @@ export class GameScene extends Phaser.Scene {
     const ballX = lerp(p.ball.x, s.ball.x, alpha);
     const ballY = lerp(p.ball.y, s.ball.y, alpha);
 
-    const subjects = [
-      // Both players as camera subjects (interpolated).
-      ...s.players.map((cp, i) => {
-        const pp = p.players[i] ?? cp;
-        return subjectFromWorld(
-          lerp(pp.x, cp.x, alpha),
-          lerp(pp.y, cp.y, alpha),
-        );
-      }),
-      subjectFromWorld(ballX, ballY),
-      ...this.bellSubjects,
-    ];
+    // Every active player as a camera subject (interpolated). players[] is
+    // slot-indexed and SPARSE (e.g. 1v1 template [0, 2] leaves a hole at slot
+    // 1); skip holes so we never pass an undefined subject to GroupCamera.
+    const subjects: GroupSubject[] = [];
+    s.players.forEach((cp, i) => {
+      if (!cp) return;
+      const pp = p.players[i] ?? cp;
+      subjects.push(
+        subjectFromWorld(lerp(pp.x, cp.x, alpha), lerp(pp.y, cp.y, alpha)),
+      );
+    });
+    subjects.push(subjectFromWorld(ballX, ballY));
+    subjects.push(...this.bellSubjects);
 
     this.groupCamera.update(subjects);
   }

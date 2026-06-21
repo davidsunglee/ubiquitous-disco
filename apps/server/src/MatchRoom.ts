@@ -1,14 +1,17 @@
 import {
+  type AckBySlot,
   type MatchClosed,
   type PlayerInput,
-  type Slot,
+  type PlayerSlotId,
   uint8ArrayToBase64,
   type WorldSnapshot,
 } from "@bb/protocol";
 import {
   createSimulation,
   DEFAULT_CONFIG,
+  EMPTY_INPUT,
   FLAT_DOJO,
+  type InputFrame,
   toAuthoritativeState,
 } from "@bb/sim";
 import { type Client, Room } from "@colyseus/core";
@@ -19,19 +22,23 @@ import { InputBuffer } from "./inputBuffer";
 const SNAPSHOT_EVERY = 2;
 const FIXED_STEP_MS = 1000 / DEFAULT_CONFIG.tickHz; // 33.33ms
 
+const MODE_1V1: PlayerSlotId[] = [0, 2];
+
 export class MatchRoom extends Room {
   maxClients = 2;
   // patchRate is set to 0 inside onCreate(), AFTER setSimulationInterval — not
   // as a class field. See the comment at that assignment for why the ordering
   // matters (it avoids an orphaned 60Hz clock.tick() interval).
 
-  private slotOf = new Map<string, Slot>();
+  private slotOf = new Map<string, PlayerSlotId>();
+  private activeSlots: PlayerSlotId[] = MODE_1V1;
   /** Set to true once disconnect() has been called so double-dispose is avoided. */
   private roomDisposed = false;
 
   // Authoritative sim + buffers (initialised in onCreate after initSim() is awaited)
   private sim!: ReturnType<typeof createSimulation>;
-  private buffers!: [InputBuffer, InputBuffer];
+  /** Input buffer per ACTIVE human slot, keyed by Player Slot id. */
+  private buffers = new Map<PlayerSlotId, InputBuffer>();
   private stepClock = new FixedStepAccumulator(FIXED_STEP_MS);
   private serverTick = 0;
 
@@ -43,13 +50,14 @@ export class MatchRoom extends Room {
       config: DEFAULT_CONFIG,
       arena: FLAT_DOJO,
       seed: 1234,
+      activeSlots: this.activeSlots,
     });
-    this.buffers = [new InputBuffer(), new InputBuffer()];
+    for (const s of this.activeSlots) this.buffers.set(s, new InputBuffer());
 
     // Register PlayerInput handler.
     this.onMessage("PlayerInput", (client, msg: PlayerInput) => {
       const s = this.slot(client);
-      this.buffers[s].push(msg.frames);
+      this.buffers.get(s)?.push(msg.frames);
     });
 
     // Fixed-step authoritative loop at 30Hz.
@@ -74,15 +82,17 @@ export class MatchRoom extends Room {
   }
 
   private tickOnce(): void {
-    const a = this.buffers[0].take();
-    const b = this.buffers[1].take();
-    this.sim.step([a.input, b.input]);
+    // Build the per-slot input row from active-slot sources. Inactive slots are
+    // holes; the sim guards them. (Phase 3 swaps buffer.take() for SlotInputSource.)
+    const inputRow: InputFrame[] = [];
+    const lastAckedSeq: AckBySlot = [0, 0, 0, 0];
+    for (const s of this.activeSlots) {
+      const taken = this.buffers.get(s)?.take();
+      inputRow[s] = taken?.input ?? EMPTY_INPUT;
+      lastAckedSeq[s] = this.buffers.get(s)?.lastAckedSeq ?? 0;
+    }
+    this.sim.step(inputRow);
     this.serverTick += 1;
-
-    const lastAckedSeq: [number, number] = [
-      this.buffers[0].lastAckedSeq,
-      this.buffers[1].lastAckedSeq,
-    ];
 
     if (this.serverTick % SNAPSHOT_EVERY === 0) {
       const auth = toAuthoritativeState(this.sim);
@@ -108,15 +118,25 @@ export class MatchRoom extends Room {
   }
 
   onJoin(client: Client): void {
-    const slot: Slot = this.slotOf.size === 0 ? 0 : 1;
+    // Assign the next unoccupied active slot in template order.
+    const taken = new Set(this.slotOf.values());
+    const unoccupied = this.activeSlots.find((s) => !taken.has(s));
+    // biome-ignore lint/style/noNonNullAssertion: activeSlots is always non-empty (MODE_1V1 has 2 entries)
+    const slot: PlayerSlotId = unoccupied ?? this.activeSlots[0]!;
     this.slotOf.set(client.sessionId, slot);
 
+    const full = this.slotOf.size === this.activeSlots.length;
     // Tell this client its own slot assignment.
     // Phase 1 note: each client gets its OWN slot — per-recipient send, not broadcast.
-    client.send("RoomReady", { type: "RoomReady", slot, full: false });
+    client.send("RoomReady", {
+      type: "RoomReady",
+      slot,
+      full: false,
+      slots: this.activeSlots,
+    });
 
-    if (this.slotOf.size === 2) {
-      // Both players present — send each client their own "full=true" with correct slot.
+    if (full) {
+      // All players present — send each client their own "full=true" with correct slot.
       for (const [sessionId, s] of this.slotOf) {
         const target = this.clients.find((c) => c.sessionId === sessionId);
         if (target) {
@@ -124,6 +144,7 @@ export class MatchRoom extends Room {
             type: "RoomReady",
             slot: s,
             full: true,
+            slots: this.activeSlots,
           });
         }
       }
@@ -145,7 +166,7 @@ export class MatchRoom extends Room {
     void this.disconnect();
   }
 
-  slot(client: Client): Slot {
+  slot(client: Client): PlayerSlotId {
     return this.slotOf.get(client.sessionId) ?? 0;
   }
 
@@ -155,7 +176,7 @@ export class MatchRoom extends Room {
   }
 
   /** Expose slot for a given sessionId for testing. */
-  slotForSession(sessionId: string): Slot | undefined {
+  slotForSession(sessionId: string): PlayerSlotId | undefined {
     return this.slotOf.get(sessionId);
   }
 
@@ -165,7 +186,7 @@ export class MatchRoom extends Room {
   }
 
   /** Expose buffers for testing. */
-  get inputBuffers(): [InputBuffer, InputBuffer] {
+  get inputBuffers(): Map<PlayerSlotId, InputBuffer> {
     return this.buffers;
   }
 

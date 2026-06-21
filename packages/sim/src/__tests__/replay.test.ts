@@ -46,45 +46,47 @@ function newSim() {
 /**
  * A scripted session: settle, walk right, jump, walk back, do a Tele-Dash, then
  * Strike the ball. This exercises the composite hash path thoroughly.
- * Returns per-tick rows [slot0Frame, slot1Frame].
+ * Returns per-tick rows using the 1v1 [0, 2] active-slot template.
  */
 function scriptedFrameList(): InputFrame[][] {
   const frames: InputFrame[][] = [];
-  // Settle on the ground.
-  for (let i = 0; i < 20; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
-  // Walk right.
-  for (let i = 0; i < 20; i++) frames.push([frame({ moveX: 1 }), EMPTY_INPUT]);
-  // Full held jump.
-  frames.push([
-    frame({ moveX: 1, jumpPressed: true, jumpHeld: true }),
-    EMPTY_INPUT,
-  ]);
-  for (let i = 0; i < 20; i++)
-    frames.push([frame({ moveX: 1, jumpHeld: true }), EMPTY_INPUT]);
-  // Settle again.
-  for (let i = 0; i < 20; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
-  // Tele-Dash right.
-  frames.push([
-    frame({ moveX: 1, dashPressed: true, dashHeld: true }),
-    EMPTY_INPUT,
-  ]);
-  for (let i = 0; i < 5; i++) frames.push([frame({ moveX: 1 }), EMPTY_INPUT]);
-  // Walk right until near ball.
-  for (let i = 0; i < 20; i++) frames.push([frame({ moveX: 1 }), EMPTY_INPUT]);
-  // Charged upward Strike.
-  frames.push([
-    frame({ moveX: 1, moveY: 1, strikeHeld: true, strikePressed: true }),
-    EMPTY_INPUT,
-  ]);
-  for (let i = 0; i < 10; i++) {
-    frames.push([frame({ moveX: 1, moveY: 1, strikeHeld: true }), EMPTY_INPUT]);
+
+  // Helper: sparse row for the 1v1 [0, 2] template.
+  // Slot 0 = left player (driven), slot 2 = right player (idle with gravity applied).
+  // Providing EMPTY_INPUT at index 2 ensures gravity is applied to slot 2's body
+  // (stepMovement is called), keeping it grounded — identical to old [0,1] behavior.
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
   }
-  frames.push([
-    frame({ moveX: 1, moveY: 1, strikeReleased: true }),
-    EMPTY_INPUT,
-  ]);
+
+  // Settle on the ground.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk right.
+  for (let i = 0; i < 20; i++) frames.push(row(frame({ moveX: 1 })));
+  // Full held jump.
+  frames.push(row(frame({ moveX: 1, jumpPressed: true, jumpHeld: true })));
+  for (let i = 0; i < 20; i++)
+    frames.push(row(frame({ moveX: 1, jumpHeld: true })));
+  // Settle again.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Tele-Dash right.
+  frames.push(row(frame({ moveX: 1, dashPressed: true, dashHeld: true })));
+  for (let i = 0; i < 5; i++) frames.push(row(frame({ moveX: 1 })));
+  // Walk right until near ball.
+  for (let i = 0; i < 20; i++) frames.push(row(frame({ moveX: 1 })));
+  // Charged upward Strike.
+  frames.push(
+    row(frame({ moveX: 1, moveY: 1, strikeHeld: true, strikePressed: true })),
+  );
+  for (let i = 0; i < 10; i++) {
+    frames.push(row(frame({ moveX: 1, moveY: 1, strikeHeld: true })));
+  }
+  frames.push(row(frame({ moveX: 1, moveY: 1, strikeReleased: true })));
   // Let the ball fly.
-  for (let i = 0; i < 40; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
   return frames;
 }
 
@@ -272,11 +274,12 @@ test("getDebugColliders() returns arena boxes + player/ball + Bell art and hit-z
   const arenaBoxes = shapes.filter((s) => s.label.startsWith("arena"));
   expect(arenaBoxes).toHaveLength(FLAT_DOJO.colliders.length);
 
-  // Player boxes — one per slot.
+  // Player boxes — one per active slot. newSim() uses the default 1v1 template
+  // [0, 2] (2 active slots), not all 4 spawns in FLAT_DOJO.playerSpawns.
   const playerBoxes = shapes.filter(
     (s) => s.label.startsWith("player[") && s.kind === "box",
   );
-  expect(playerBoxes).toHaveLength(FLAT_DOJO.playerSpawns.length);
+  expect(playerBoxes).toHaveLength(2); // activeSlots [0, 2] → 2 active players
 
   // Ball circle.
   expect(shapes.some((s) => s.label === "ball" && s.kind === "circle")).toBe(

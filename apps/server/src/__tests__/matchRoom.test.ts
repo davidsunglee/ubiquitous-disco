@@ -105,7 +105,7 @@ test("first client joins as slot 0", () => {
   expect((ready?.payload as { slot: number }).slot).toBe(0);
 });
 
-test("second client joins as slot 1", () => {
+test("second client joins as slot 2 (1v1 [0,2] template)", () => {
   const room = makeRoom();
   const clientA = makeClient("session-a");
   const clientB = makeClient("session-b");
@@ -115,7 +115,7 @@ test("second client joins as slot 1", () => {
   room.onJoin(clientB as never);
 
   expect(room.slotForSession("session-a")).toBe(0);
-  expect(room.slotForSession("session-b")).toBe(1);
+  expect(room.slotForSession("session-b")).toBe(2);
 });
 
 test("both clients receive full=true when second joins", () => {
@@ -147,7 +147,7 @@ test("both clients receive their OWN slot in full=true RoomReady", () => {
   room.onJoin(clientA as never);
   room.onJoin(clientB as never);
 
-  // A should receive slot 0 in the full RoomReady, B should receive slot 1.
+  // A should receive slot 0 in the full RoomReady, B should receive slot 2 (1v1 [0,2] template).
   const aFullMsgs = clientA.messages.filter(
     (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
   );
@@ -155,7 +155,7 @@ test("both clients receive their OWN slot in full=true RoomReady", () => {
     (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
   );
   expect((aFullMsgs[0]?.payload as { slot: number })?.slot).toBe(0);
-  expect((bFullMsgs[0]?.payload as { slot: number })?.slot).toBe(1);
+  expect((bFullMsgs[0]?.payload as { slot: number })?.slot).toBe(2);
 });
 
 test("slot count reflects connected clients", () => {
@@ -182,13 +182,40 @@ test("slot removed on leave", () => {
   room.onLeave(clientA as never);
 
   expect(room.slotForSession("session-a")).toBeUndefined();
-  expect(room.slotForSession("session-b")).toBe(1);
+  expect(room.slotForSession("session-b")).toBe(2);
   expect(room.slotCount).toBe(1);
 });
 
 test("maxClients is 2", () => {
   const room = makeRoom();
   expect(room.maxClients).toBe(2);
+});
+
+test("RoomReady includes slots=[0,2] (1v1 template)", () => {
+  const room = makeRoom();
+  const clientA = makeClient("session-a");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA);
+
+  room.onJoin(clientA as never);
+
+  const ready = clientA.messages.find((m) => m.type === "RoomReady");
+  expect(ready).toBeDefined();
+  expect((ready?.payload as { slots: number[] }).slots).toEqual([0, 2]);
+});
+
+test("full=true RoomReady includes slots=[0,2]", () => {
+  const room = makeRoom();
+  const clientA = makeClient("session-a");
+  const clientB = makeClient("session-b");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+
+  room.onJoin(clientA as never);
+  room.onJoin(clientB as never);
+
+  const aFull = clientA.messages.filter(
+    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
+  );
+  expect((aFull[0]?.payload as { slots: number[] })?.slots).toEqual([0, 2]);
 });
 
 // ── Phase 2: InputBuffer ──────────────────────────────────────────────────────
@@ -330,10 +357,17 @@ test("authoritative sim: sim steps produce valid authoritative state", () => {
   const room = makeRoom();
   const sim = room.simulation;
 
-  // Step the sim forward (past preRound start).
+  // Step the sim forward (past preRound start). The 1v1 [0,2] template uses
+  // slot 0 and slot 2; use a sparse array so slot 0 gets jumpPressed.
   const startFrame = f({ jumpPressed: true, jumpHeld: true });
-  sim.step([startFrame, EMPTY_INPUT]);
-  for (let i = 0; i < 5; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+  const inputRow: (typeof EMPTY_INPUT)[] = [];
+  inputRow[0] = startFrame;
+  inputRow[2] = EMPTY_INPUT;
+  sim.step(inputRow);
+  const emptyRow: (typeof EMPTY_INPUT)[] = [];
+  emptyRow[0] = EMPTY_INPUT;
+  emptyRow[2] = EMPTY_INPUT;
+  for (let i = 0; i < 5; i++) sim.step(emptyRow);
 
   const match = sim.getMatchState();
   expect(match.phase).toBe("playing");
@@ -346,7 +380,7 @@ function DEFAULT_CONFIG_TIMER() {
   return 5400;
 }
 
-test("snapshot cadence: WorldSnapshot broadcast every SNAPSHOT_EVERY ticks carries lastAckedSeq", () => {
+test("snapshot cadence: WorldSnapshot broadcast every SNAPSHOT_EVERY ticks carries four-entry lastAckedSeq", () => {
   const room = makeRoom();
   const drive = room as unknown as { tickOnce(): void };
 
@@ -358,8 +392,11 @@ test("snapshot cadence: WorldSnapshot broadcast every SNAPSHOT_EVERY ticks carri
     (m) => m.type === "WorldSnapshot",
   );
   expect(snapshots.length).toBe(1);
-  const payload = snapshots[0]?.payload as { lastAckedSeq: [number, number] };
-  expect(payload.lastAckedSeq).toEqual([0, 0]);
+  const payload = snapshots[0]?.payload as {
+    lastAckedSeq: [number, number, number, number];
+  };
+  // 1v1 [0,2] template: slots 0 and 2 have buffers; slots 1 and 3 carry 0.
+  expect(payload.lastAckedSeq).toEqual([0, 0, 0, 0]);
 });
 
 test("snapshot cadence: no standalone InputAck broadcast (snapshot carries the ack)", () => {

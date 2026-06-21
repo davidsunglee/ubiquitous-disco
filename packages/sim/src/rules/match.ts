@@ -34,7 +34,10 @@ export type MatchPhase =
 
 export interface MatchState {
   phase: MatchPhase;
-  /** Per-team score; index == team id (== slot id for 1v1). */
+  /**
+   * Per-team score; index == TeamId (0 or 1). Always length 2 for official
+   * modes. Independent of the number of occupied Player Slots.
+   */
   scores: number[];
   /** Regulation ticks remaining (counts down while in "playing"). */
   timer: number;

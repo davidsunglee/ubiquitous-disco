@@ -96,17 +96,24 @@ export class Reconciler {
     const rapierBytes = base64ToUint8Array(snap.rapierBytesB64);
     const authState: AuthoritativeState = {
       tick: snap.serverTick,
-      players: snap.players.map((p) => ({
-        x: p.x,
-        y: p.y,
-        vx: p.vx,
-        vy: p.vy,
-        facing: p.facing,
-        grounded: p.grounded,
-        charge: p.charge,
-        knockdownTicks: p.knockdownTicks,
-        invulnTicks: p.invulnTicks,
-      })),
+      // snap.players is slot-indexed and may be sparse: an inactive slot
+      // serializes to `null` (JSON.stringify of a sparse array). Preserve the
+      // null so slot indexing is kept; applyAuthoritativeState() skips it.
+      players: snap.players.map((p) =>
+        p
+          ? {
+              x: p.x,
+              y: p.y,
+              vx: p.vx,
+              vy: p.vy,
+              facing: p.facing,
+              grounded: p.grounded,
+              charge: p.charge,
+              knockdownTicks: p.knockdownTicks,
+              invulnTicks: p.invulnTicks,
+            }
+          : p,
+      ),
       ball: snap.ball,
       rapierBytes,
       match: snap.match,

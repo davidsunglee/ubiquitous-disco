@@ -94,6 +94,9 @@ export function stepStrike(
   }
 
   // ── Player connection: deterministic geometry overlap vs each OTHER slot ──
+  // INVARIANT (2v2 Friendly Fire): the target set is every non-self slot with
+  // NO team filter — teammate Strikes connect at full strength by design.
+  // Do not add same-team exclusion here (see match.test.ts FF coverage).
   // Resolved from start-of-tick positions (world.playerPos reads the current
   // kinematic position before this tick's move is applied). Both strikes in a
   // mutual trade are resolved independently, so both land.

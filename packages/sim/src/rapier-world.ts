@@ -32,8 +32,15 @@ export class RapierWorld {
   readonly playerColliders: ColliderInstance[];
   readonly controllers: CharacterControllerInstance[];
   readonly ball: RigidBodyInstance;
+  /** Active Player Slots, ascending. Bodies exist only at these indices. */
+  private readonly activeSlots: number[];
 
-  constructor(config: SimConfig, arena: ArenaDef) {
+  constructor(
+    config: SimConfig,
+    arena: ArenaDef,
+    activeSlots: number[] = [0, 2],
+  ) {
+    this.activeSlots = activeSlots.slice().sort((a, b) => a - b);
     const R = getRapier();
     this.world = new R.World({ x: 0, y: config.gravityY });
     this.world.timestep = 1 / config.tickHz; // default is 1/60
@@ -47,12 +54,14 @@ export class RapierWorld {
       );
     }
 
-    // 2) players — kinematic bodies inserted in fixed slot order, AFTER arena
-    //    colliders and BEFORE the ball. This order is the determinism contract.
+    // 2) players — kinematic bodies inserted in fixed ACTIVE slot order, AFTER
+    //    arena colliders and BEFORE the ball. This order is the determinism
+    //    contract. Bodies are stored at their slot index so players[slot] is
+    //    always slot-keyed (sparse array).
     this.players = [];
     this.playerColliders = [];
     this.controllers = [];
-    for (let s = 0; s < arena.playerSpawns.length; s++) {
+    for (const s of this.activeSlots) {
       const spawn = arena.playerSpawns[s];
       if (!spawn) continue;
       const body = this.world.createRigidBody(
@@ -72,9 +81,9 @@ export class RapierWorld {
       ctrl.setUp({ x: 0, y: 1 });
       ctrl.setApplyImpulsesToDynamicBodies(true);
       ctrl.enableSnapToGround(0.1);
-      this.players.push(body);
-      this.playerColliders.push(col);
-      this.controllers.push(ctrl);
+      this.players[s] = body;
+      this.playerColliders[s] = col;
+      this.controllers[s] = ctrl;
     }
 
     // 3) ball dynamic body — inserted AFTER both players, every run. CCD (swept
@@ -197,7 +206,7 @@ export class RapierWorld {
    * Called at the start of each round reset (Phase 2+).
    */
   resetPositions(arena: ArenaDef): void {
-    for (let s = 0; s < this.players.length; s++) {
+    for (const s of this.activeSlots) {
       const spawn = arena.playerSpawns[s];
       if (!spawn) continue;
       this.players[s]?.setNextKinematicTranslation({ x: spawn.x, y: spawn.y });
@@ -230,29 +239,31 @@ export class RapierWorld {
     const restored = R.World.restoreSnapshot(bytes);
     // Swap the world reference (type cast — the readonly is only for external callers).
     (this as { world: WorldInstance }).world = restored;
-    // Re-bind rigid body handles. Insertion order: arena colliders → player0 → player1 → ball.
+    // Re-bind rigid body handles. Insertion order: arena colliders → active
+    // player bodies (ascending slot order) → ball. This is the determinism contract.
     const bodies: RigidBodyInstance[] = [];
     restored.forEachRigidBody((b) => bodies.push(b));
 
-    const n = this.players.length; // number of player slots
+    const n = this.activeSlots.length; // number of active player bodies
     if (bodies.length !== n + 1) {
       throw new Error(
         `restoreSnapshot: expected ${n + 1} rigid bodies (players + ball), got ${bodies.length}`,
       );
     }
 
+    // bodies[] is in insertion order == ascending active-slot order.
     const newPlayers: RigidBodyInstance[] = [];
     const newCols: ColliderInstance[] = [];
-    for (let s = 0; s < n; s++) {
-      const body = bodies[s];
+    this.activeSlots.forEach((slot, i) => {
+      const body = bodies[i];
       if (!body)
-        throw new Error(`restoreSnapshot: body for slot ${s} not found`);
+        throw new Error(`restoreSnapshot: body for slot ${slot} not found`);
       const col = body.collider(0);
       if (!col)
-        throw new Error(`restoreSnapshot: player ${s} collider not found`);
-      newPlayers.push(body);
-      newCols.push(col);
-    }
+        throw new Error(`restoreSnapshot: player ${slot} collider not found`);
+      newPlayers[slot] = body;
+      newCols[slot] = col;
+    });
     const ballBody = bodies[n];
     if (!ballBody) throw new Error("restoreSnapshot: ball body not found");
 
@@ -261,14 +272,17 @@ export class RapierWorld {
     (this as { ball: RigidBodyInstance }).ball = ballBody;
 
     // Re-create all character controllers (not serialized by Rapier snapshot).
+    // Remove old controllers first, then create one per active slot.
+    for (const c of this.controllers) {
+      if (c) restored.removeCharacterController(c);
+    }
     const newControllers: CharacterControllerInstance[] = [];
-    for (const c of this.controllers) restored.removeCharacterController(c);
-    for (let s = 0; s < n; s++) {
+    for (const slot of this.activeSlots) {
       const ctrl = restored.createCharacterController(0.01);
       ctrl.setUp({ x: 0, y: 1 });
       ctrl.setApplyImpulsesToDynamicBodies(true);
       ctrl.enableSnapToGround(0.1);
-      newControllers.push(ctrl);
+      newControllers[slot] = ctrl;
     }
     (this as { controllers: CharacterControllerInstance[] }).controllers =
       newControllers;

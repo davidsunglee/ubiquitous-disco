@@ -17,10 +17,13 @@ function frame(partial: Partial<InputFrame>): InputFrame {
 }
 
 function newSim() {
+  // Use activeSlots [0, 1] so 2-element input rows and players[1] references
+  // in these tests remain valid (legacy compact layout).
   const sim = createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 4242,
+    activeSlots: [0, 1],
   });
   // Advance past preRound so gameplay rules run.
   sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
@@ -318,53 +321,65 @@ test("aerial variant does not change player-vs-player knockback", () => {
         staggerPerHit: 1,
       },
     };
-    const sim = createSimulation({ config, arena: FLAT_DOJO, seed: 111 });
+    // Use the 1v1 [0, 2] template: slot 0 at (-4,1), slot 2 at (+4,1).
+    const sim = createSimulation({
+      config,
+      arena: FLAT_DOJO,
+      seed: 111,
+      activeSlots: [0, 2],
+    });
+    // Sparse row helper for [0, 2] template.
+    const r = (f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] => {
+      const row: InputFrame[] = [];
+      row[0] = f0;
+      row[2] = f2;
+      return row;
+    };
     // Start match.
-    sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+    sim.step(r(frame({ jumpPressed: true, jumpHeld: true })));
 
     // Walk players together to within strike range.
+    // Slot 0 (left, -4) walks right; slot 2 (right, +4) walks left.
     for (let i = 0; i < 200; i++) {
       const s = sim.getRenderState();
       const p0 = s.players[0];
-      const p1 = s.players[1];
-      if (!p0 || !p1) break;
-      const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+      const p2 = s.players[2];
+      if (!p0 || !p2) break;
+      const dist = Math.hypot(p2.x - p0.x, p2.y - p0.y);
       if (
         dist <=
         (DEFAULT_CONFIG.strike.reach + DEFAULT_CONFIG.combat.playerHitRadius) *
           0.9
       )
         break;
-      sim.step([frame({ moveX: 1 }), frame({ moveX: -1 })]);
+      sim.step(r(frame({ moveX: 1 }), frame({ moveX: -1 })));
     }
 
     if (airborne) {
       // Get slot 0 airborne.
-      sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
-      sim.step([frame({ jumpHeld: true }), EMPTY_INPUT]);
+      sim.step(r(frame({ jumpPressed: true, jumpHeld: true })));
+      sim.step(r(frame({ jumpHeld: true })));
     }
 
-    const x1Before = sim.getRenderState().players[1]?.x ?? 0;
+    const x2Before = sim.getRenderState().players[2]?.x ?? 0;
 
     // Strike with downward intent (to activate spike path if airborne).
-    sim.step([
-      frame({
-        strikeHeld: true,
-        strikePressed: true,
-        moveY: airborne ? -1 : 0,
-      }),
-      EMPTY_INPUT,
-    ]);
-    sim.step([
-      frame({ strikeReleased: true, moveY: airborne ? -1 : 0 }),
-      EMPTY_INPUT,
-    ]);
+    sim.step(
+      r(
+        frame({
+          strikeHeld: true,
+          strikePressed: true,
+          moveY: airborne ? -1 : 0,
+        }),
+      ),
+    );
+    sim.step(r(frame({ strikeReleased: true, moveY: airborne ? -1 : 0 })));
 
     // Let the knockback play out.
-    for (let i = 0; i < 10; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+    for (let i = 0; i < 10; i++) sim.step(r(EMPTY_INPUT));
 
-    const x1After = sim.getRenderState().players[1]?.x ?? 0;
-    return Math.abs(x1After - x1Before);
+    const x2After = sim.getRenderState().players[2]?.x ?? 0;
+    return Math.abs(x2After - x2Before);
   };
 
   // Both should produce knockback (> 0 displacement).

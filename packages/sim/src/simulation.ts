@@ -22,6 +22,7 @@ import {
 } from "./rules/match";
 import { stepMovement } from "./rules/movement";
 import { stepStrike } from "./rules/strike";
+import { teamForPlayerSlot } from "./team";
 
 export type { InputFrame } from "./input";
 export type { MatchPhase, MatchState } from "./rules/match";
@@ -282,16 +283,25 @@ export function createSimulation(opts: {
   config: SimConfig;
   arena: ArenaDef;
   seed: number;
+  /** Active Player Slots (mode template). Default 1v1 = [0, 2]. */
+  activeSlots?: number[];
 }): Simulation {
   // Work on a mutable copy so updateConfig() can mutate freely without
   // touching the caller's original DEFAULT_CONFIG object.
   let config: SimConfig = { ...opts.config };
   const { arena } = opts;
-  const rw = new RapierWorld(config, arena);
-  // Slot 0 faces right (+1), slot 1 faces left (-1) toward the centre.
-  let actors: Actor[] = arena.playerSpawns.map((_, s) =>
-    createActor(s === 0 ? 1 : -1),
-  );
+  const activeSlots = (opts.activeSlots ?? [0, 2])
+    .slice()
+    .sort((a, b) => a - b);
+  const rw = new RapierWorld(config, arena, activeSlots);
+  // Sparse actors keyed by slot id. Team 0 (slots 0/1) faces right (+1);
+  // Team 1 (slots 2/3) faces left (-1) toward the centre.
+  let actors: Actor[] = [];
+  for (const s of activeSlots) {
+    actors[s] = createActor(
+      teamForPlayerSlot(s as 0 | 1 | 2 | 3) === 0 ? 1 : -1,
+    );
+  }
   // seed reserved for Phase 3+ seeded RNG; deterministic w/o RNG this phase.
 
   // Authoritative tick counter (incremented per step) and the drainable event
@@ -300,8 +310,9 @@ export function createSimulation(opts: {
   const events: SimEvent[] = [];
   let bellRing: BellRingState = createBellRingState(arena);
 
-  // Match state: owns phase, scores, timer, pause/reset counters.
-  let match: MatchState = createMatchState(config, actors.length);
+  // Official modes always have exactly two Teams; scores are Team-indexed and
+  // decoupled from the number of occupied Player Slots.
+  let match: MatchState = createMatchState(config, 2);
 
   return {
     step(inputs: InputFrame[]) {
@@ -446,9 +457,12 @@ export function createSimulation(opts: {
       ) {
         // First tick of resetting: teleport everyone home, then freeze for the countdown.
         rw.resetPositions(arena);
-        for (let s = 0; s < actors.length; s++) {
+        actors = [];
+        for (const s of activeSlots) {
           // Re-create the actor to clear all velocity/charge state on respawn.
-          actors[s] = createActor(s === 0 ? 1 : -1);
+          actors[s] = createActor(
+            teamForPlayerSlot(s as 0 | 1 | 2 | 3) === 0 ? 1 : -1,
+          );
         }
         // Re-arm bells after respawn so the next contact can ring.
         bellRing = createBellRingState(arena);
@@ -481,13 +495,16 @@ export function createSimulation(opts: {
       if (events.length === 0) return [];
       return events.splice(0, events.length);
     },
-    // Composite hash: Rapier snapshot bytes ‖ serialized actor[0] ‖ serialized actor[1]
+    // Composite hash: Rapier snapshot bytes ‖ serialized actors in activeSlots order
     // ‖ serialized Bell Ring debounce state ‖ serialized match state. Fixed concatenation
     // order — any change in field count or type shape must be reflected here.
+    // Note: iterate activeSlots (not the sparse actors[] array) to avoid undefined holes
+    // in the spread when slots are non-contiguous (e.g. 1v1 template [0, 2]).
     hashState() {
       return hashBytes(
         rw.takeSnapshot(),
-        ...actors.map((a) => serializeActor(a)),
+        // biome-ignore lint/style/noNonNullAssertion: actors[s] is always defined for s in activeSlots
+        ...activeSlots.map((s) => serializeActor(actors[s]!)),
         serializeBellRingState(bellRing),
         serializeMatchState(match),
       );
@@ -580,8 +597,8 @@ export function createSimulation(opts: {
         });
       }
 
-      // Player bounding boxes at current world positions (one per slot).
-      for (let s = 0; s < actors.length; s++) {
+      // Player bounding boxes at current world positions (active slots only).
+      for (const s of activeSlots) {
         const pp = rw.playerPos(s);
         shapes.push({
           kind: "box",

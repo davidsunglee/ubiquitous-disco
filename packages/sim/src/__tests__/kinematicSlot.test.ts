@@ -13,6 +13,10 @@
  *     getRenderState() outcomes (deterministic).
  *  4. The optional `facing` parameter updates the actor facing field.
  *  5. Calling without `facing` leaves the actor facing unchanged.
+ *
+ * Uses the 1v1 active-slot template [0, 2]:
+ *  - Slot 0: (-4, 1), Team 0, facing +1 — the "local" player
+ *  - Slot 2: (+4, 1), Team 1, facing -1 — the "remote" player
  */
 
 import { beforeAll, expect, test } from "vitest";
@@ -33,17 +37,28 @@ function frame(p: Partial<InputFrame>): InputFrame {
   return { ...EMPTY_INPUT, ...p };
 }
 
+/** Sparse input row for the 1v1 [0, 2] template. */
+function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+  const r: InputFrame[] = [];
+  r[0] = f0;
+  r[2] = f2;
+  return r;
+}
+
 function newSim() {
+  // Use the standard 1v1 active-slot template [0, 2] so slot 2 (Team 1, facing -1)
+  // is the remote player that setSlotKinematicPosition targets.
   return createSimulation({
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: 5050,
+    activeSlots: [0, 2],
   });
 }
 
 /** Advance the sim past preRound so gameplay rules run. */
 function startMatch(sim: ReturnType<typeof newSim>): void {
-  sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+  sim.step(row(frame({ jumpPressed: true, jumpHeld: true })));
 }
 
 test("setSlotKinematicPosition updates getRenderState() for the given slot", () => {
@@ -52,58 +67,58 @@ test("setSlotKinematicPosition updates getRenderState() for the given slot", () 
 
   const targetX = 2.5;
   const targetY = 3.0;
-  sim.setSlotKinematicPosition(1, targetX, targetY);
+  sim.setSlotKinematicPosition(2, targetX, targetY);
 
   const s = sim.getRenderState();
-  const p1 = s.players[1];
-  if (!p1) throw new Error("Player slot 1 missing from render state");
+  const p2 = s.players[2];
+  if (!p2) throw new Error("Player slot 2 missing from render state");
 
-  expect(p1.x).toBeCloseTo(targetX, 4);
-  expect(p1.y).toBeCloseTo(targetY, 4);
+  expect(p2.x).toBeCloseTo(targetX, 4);
+  expect(p2.y).toBeCloseTo(targetY, 4);
 });
 
 test("setSlotKinematicPosition with facing updates the actor facing field", () => {
   const sim = newSim();
   startMatch(sim);
 
-  // Slot 1 initially faces left (-1); set it to face right (+1).
-  sim.setSlotKinematicPosition(1, 0, 1, 1);
+  // Slot 2 (Team 1) initially faces left (-1); set it to face right (+1).
+  sim.setSlotKinematicPosition(2, 0, 1, 1);
   const s = sim.getRenderState();
-  expect(s.players[1]?.facing).toBe(1);
+  expect(s.players[2]?.facing).toBe(1);
 });
 
 test("setSlotKinematicPosition without facing leaves facing unchanged", () => {
   const sim = newSim();
   startMatch(sim);
 
-  // Slot 1 starts facing -1 (set by createActor).
-  const initialFacing = sim.getRenderState().players[1]?.facing;
-  sim.setSlotKinematicPosition(1, 2, 1);
-  expect(sim.getRenderState().players[1]?.facing).toBe(initialFacing);
+  // Slot 2 (Team 1) starts facing -1.
+  const initialFacing = sim.getRenderState().players[2]?.facing;
+  sim.setSlotKinematicPosition(2, 2, 1);
+  expect(sim.getRenderState().players[2]?.facing).toBe(initialFacing);
 });
 
 test("different remote positions produce different ball outcomes after a local strike", () => {
   // Helper: set up sim at a scripted state (slot 0 about to strike the ball),
-  // then put the remote slot (1) at the given X and step to let the ball react.
+  // then put the remote slot (2) at the given X and step to let the ball react.
   function runWithRemoteAtX(remoteX: number): number {
     const sim = newSim();
     startMatch(sim);
 
     // Let slot 0 walk toward the ball for a bit.
-    for (let i = 0; i < 20; i++) sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
+    for (let i = 0; i < 20; i++) sim.step(row(frame({ moveX: 1 })));
 
     // Place the remote slot at the given X, close to the ball's path.
-    sim.setSlotKinematicPosition(1, remoteX, 1.0);
+    sim.setSlotKinematicPosition(2, remoteX, 1.0);
 
     // Slot 0 does a charge strike.
-    sim.step([frame({ strikeHeld: true, strikePressed: true }), EMPTY_INPUT]);
+    sim.step(row(frame({ strikeHeld: true, strikePressed: true })));
     for (let i = 0; i < 15; i++) {
-      sim.step([frame({ strikeHeld: true }), EMPTY_INPUT]);
+      sim.step(row(frame({ strikeHeld: true })));
     }
-    sim.step([frame({ strikeReleased: true }), EMPTY_INPUT]);
+    sim.step(row(frame({ strikeReleased: true })));
 
     // Let physics resolve for a few ticks.
-    for (let i = 0; i < 10; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+    for (let i = 0; i < 10; i++) sim.step(row(EMPTY_INPUT));
 
     return sim.getRenderState().ball.x;
   }
@@ -120,31 +135,16 @@ test("different remote positions produce different ball outcomes after a local s
 });
 
 test("same remote position produces identical getRenderState() (deterministic)", () => {
-  function runWithRemoteAt(
-    x: number,
-    y: number,
-  ): ReturnType<typeof newSim>["getRenderState"] {
-    const sim = newSim();
-    startMatch(sim);
-    for (let i = 0; i < 15; i++) sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
-    sim.setSlotKinematicPosition(1, x, y, -1);
-    for (let i = 0; i < 5; i++) sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
-    return sim.getRenderState;
-  }
-
   // Run twice with the exact same parameters and assert the sim produces the
   // same hash (determinism) — use hashState() for brevity.
   function runHash(x: number, y: number): string {
     const sim = newSim();
     startMatch(sim);
-    for (let i = 0; i < 15; i++) sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
-    sim.setSlotKinematicPosition(1, x, y, -1);
-    for (let i = 0; i < 5; i++) sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
+    for (let i = 0; i < 15; i++) sim.step(row(frame({ moveX: 1 })));
+    sim.setSlotKinematicPosition(2, x, y, -1);
+    for (let i = 0; i < 5; i++) sim.step(row(frame({ moveX: 1 })));
     return sim.hashState();
   }
-
-  // Suppress unused variable lint warning.
-  void runWithRemoteAt;
 
   expect(runHash(3, 1)).toBe(runHash(3, 1));
 });
