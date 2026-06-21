@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "bun --watch run src/index.ts",
     "start": "bun run src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "docker:build": "docker build -f apps/server/Dockerfile -t bb-server .",
+    "healthcheck": "bun run scripts/healthcheck.ts"
   },
   "dependencies": {
     "@bb/sim": "workspace:*",

@@ -16,15 +16,34 @@ gameServer.define("match", MatchRoom);
 
 const port = Number(process.env.PORT ?? 2567);
 
-// Minimal liveness route via the BunWebSockets Express-compatible app.
-// The getExpressApp() call must happen AFTER new Server() initialises the transport,
-// but BEFORE listen() opens the port. Phase 6 adds /healthz/ready.
+// Health routes via the BunWebSockets Express-compatible app.
+// getExpressApp() must be called AFTER new Server() initialises the transport
+// but BEFORE listen() opens the port.
+//
+// /healthz/live  — liveness: process is running and responsive (always 200 once
+//                  past this point; used by Docker HEALTHCHECK).
+// /healthz/ready — readiness: transport + matchmaker are initialised and the
+//                  server is ready to accept WebSocket connections (200 after
+//                  listen() completes; 503 before).
 const app = (
   transport as import("@colyseus/bun-websockets").BunWebSockets
 ).getExpressApp();
+
 app.get("/healthz/live", (_req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
+// Readiness flag: flipped to true after gameServer.listen() resolves.
+let serverReady = false;
+
+app.get("/healthz/ready", (_req, res) => {
+  if (serverReady) {
+    res.status(200).json({ status: "ready" });
+  } else {
+    res.status(503).json({ status: "starting" });
+  }
+});
+
 await gameServer.listen(port);
+serverReady = true;
 console.log(`[server] Colyseus listening on ws://0.0.0.0:${port}`);
