@@ -8,6 +8,7 @@
  * acknowledgements (lastAckedSeq advances), snapshot cadence (every 2 ticks).
  */
 
+import { base64ToUint8Array, uint8ArrayToBase64 } from "@bb/protocol";
 import { EMPTY_INPUT, type InputFrame, initSim } from "@bb/sim";
 import { beforeAll, expect, test } from "vitest";
 import { InputBuffer } from "../inputBuffer";
@@ -345,6 +346,37 @@ function DEFAULT_CONFIG_TIMER() {
   return 5400;
 }
 
+test("snapshot cadence: WorldSnapshot broadcast every SNAPSHOT_EVERY ticks carries lastAckedSeq", () => {
+  const room = makeRoom();
+  const drive = room as unknown as { tickOnce(): void };
+
+  // Two ticks → serverTick reaches 2 → one WorldSnapshot at the 15Hz cadence.
+  drive.tickOnce();
+  drive.tickOnce();
+
+  const snapshots = room.broadcastMessages.filter(
+    (m) => m.type === "WorldSnapshot",
+  );
+  expect(snapshots.length).toBe(1);
+  const payload = snapshots[0]?.payload as { lastAckedSeq: [number, number] };
+  expect(payload.lastAckedSeq).toEqual([0, 0]);
+});
+
+test("snapshot cadence: no standalone InputAck broadcast (snapshot carries the ack)", () => {
+  const room = makeRoom();
+  const drive = room as unknown as { tickOnce(): void };
+
+  // Drive several snapshot cycles.
+  for (let i = 0; i < 6; i++) drive.tickOnce();
+
+  expect(room.broadcastMessages.some((m) => m.type === "WorldSnapshot")).toBe(
+    true,
+  );
+  // The WorldSnapshot already carries lastAckedSeq, so the separate InputAck
+  // broadcast is redundant I/O and must not be sent.
+  expect(room.broadcastMessages.some((m) => m.type === "InputAck")).toBe(false);
+});
+
 test("snapshot broadcast: rapierBytesB64 round-trips to valid Uint8Array", () => {
   // Simulate what MatchRoom does: toAuthoritativeState → base64 → back.
   import("@bb/sim").then(
@@ -364,18 +396,12 @@ test("snapshot broadcast: rapierBytesB64 round-trips to valid Uint8Array", () =>
         sim.step([EMPTY_INPUT, EMPTY_INPUT]);
         const auth = toAuthoritativeState(sim);
 
-        // Encode (as MatchRoom does).
-        let binary = "";
-        for (let i = 0; i < auth.rapierBytes.length; i++) {
-          binary += String.fromCharCode(auth.rapierBytes[i] ?? 0);
-        }
-        const b64 = btoa(binary);
+        // Encode (as MatchRoom does) via the shared protocol codec.
+        const b64 = uint8ArrayToBase64(auth.rapierBytes);
         expect(b64.length).toBeGreaterThan(0);
 
-        // Decode (as client does).
-        const dec = atob(b64);
-        const bytes = new Uint8Array(dec.length);
-        for (let i = 0; i < dec.length; i++) bytes[i] = dec.charCodeAt(i);
+        // Decode (as client does) via the same shared codec.
+        const bytes = base64ToUint8Array(b64);
         expect(bytes.length).toBe(auth.rapierBytes.length);
 
         // The restored sim should match the original.

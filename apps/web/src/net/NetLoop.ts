@@ -136,11 +136,12 @@ export class NetLoop {
 
     void initSim().then(() => {
       this.simReady = true;
-      // Initialize prev/cur from the starting sim state.
-      const s = this.sim.getRenderState();
-      this.prevRender = structuredClone(s);
-      this.curRender = structuredClone(s);
-      this.reconciler.setDisplayedRender(s);
+      // Initialize prev/cur from the starting sim state. getRenderState()
+      // already returns a fresh, independent snapshot each call (see
+      // renderStateSnapshot.test.ts), so no structuredClone is needed.
+      this.prevRender = this.sim.getRenderState();
+      this.curRender = this.sim.getRenderState();
+      this.reconciler.setDisplayedRender(this.sim.getRenderState());
     });
   }
 
@@ -250,8 +251,10 @@ export class NetLoop {
     frames[remoteSlot] = EMPTY_INPUT;
     this.sim.step(frames);
 
-    // Snapshot the predicted render state.
-    const cur = structuredClone(this.sim.getRenderState());
+    // Snapshot the predicted render state. getRenderState() already returns a
+    // fresh, independent object (renderStateSnapshot.test.ts), so the previous
+    // structuredClone was a redundant second deep copy at 30Hz.
+    const cur = this.sim.getRenderState();
     const prev = this.curRender ?? cur;
     this.prevRender = prev;
     this.curRender = cur;

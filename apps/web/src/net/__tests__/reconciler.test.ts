@@ -15,7 +15,7 @@
  * apps/web/vitest.config.ts). The Reconciler uses atob for base64 decode.
  */
 
-import type { WorldSnapshot } from "@bb/protocol";
+import { uint8ArrayToBase64, type WorldSnapshot } from "@bb/protocol";
 import {
   createSimulation,
   DEFAULT_CONFIG,
@@ -44,15 +44,6 @@ function newSim() {
     arena: FLAT_DOJO,
     seed: 9999,
   });
-}
-
-/** Encode Uint8Array to base64 (node/jsdom compatible). */
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i] ?? 0);
-  }
-  return btoa(binary);
 }
 
 /** Build a WorldSnapshot from a running sim (mirrors server broadcast). */

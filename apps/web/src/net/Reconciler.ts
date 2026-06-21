@@ -15,7 +15,7 @@
  * `onCorrectedState` callback so the next render frame uses it.
  */
 
-import type { WorldSnapshot } from "@bb/protocol";
+import { base64ToUint8Array, type WorldSnapshot } from "@bb/protocol";
 import {
   type AuthoritativeState,
   EMPTY_INPUT,
@@ -225,15 +225,4 @@ export class Reconciler {
     if (!dp || !rp) return 0;
     return distance2D(dp.x, dp.y, rp.x, rp.y);
   }
-}
-
-// ── Base64 decode (browser + Bun compatible) ─────────────────────────────────
-
-function base64ToUint8Array(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }

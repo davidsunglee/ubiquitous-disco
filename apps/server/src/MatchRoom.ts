@@ -1,8 +1,9 @@
-import type {
-  MatchClosed,
-  PlayerInput,
-  Slot,
-  WorldSnapshot,
+import {
+  type MatchClosed,
+  type PlayerInput,
+  type Slot,
+  uint8ArrayToBase64,
+  type WorldSnapshot,
 } from "@bb/protocol";
 import {
   createSimulation,
@@ -99,12 +100,10 @@ export class MatchRoom extends Room {
         lastAckedSeq,
       };
 
+      // The snapshot already carries lastAckedSeq, and the client trims its
+      // pending list from snap.lastAckedSeq (NetLoop.applySnapshot). A separate
+      // InputAck broadcast would be redundant I/O at the same 15Hz cadence.
       this.broadcast("WorldSnapshot", snapshot);
-
-      // Also broadcast a standalone InputAck so clients can trim pending lists
-      // even between snapshots (snapshot also carries lastAckedSeq, but the
-      // standalone ack arrives at 15Hz between-snapshots too).
-      this.broadcast("InputAck", { type: "InputAck", lastAckedSeq });
     }
   }
 
@@ -179,15 +178,4 @@ export class MatchRoom extends Room {
   get isDisposed(): boolean {
     return this.roomDisposed;
   }
-}
-
-// ── Base64 helpers (no Node.js Buffer — works in Bun and Node) ────────────────
-
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  // Bun and modern Node both support btoa via the global; build a binary string.
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i] ?? 0);
-  }
-  return btoa(binary);
 }

@@ -10,6 +10,8 @@
  * snap above `snapThreshold`: teleport directly to the corrected position.
  */
 
+import { INTERP_DELAY_TICKS } from "./config";
+
 export interface CorrectionConfig {
   /**
    * Distance (world units) above which a correction is snapped immediately
@@ -42,5 +44,6 @@ export interface CorrectionConfig {
 export const DEFAULT_CORRECTION_CONFIG: CorrectionConfig = {
   snapThreshold: 1.5,
   smoothFactor: 0.3,
-  interpDelayTicks: 3,
+  // Single source of truth in config.ts — never hardcode the literal here.
+  interpDelayTicks: INTERP_DELAY_TICKS,
 };

@@ -113,6 +113,13 @@ export class GameScene extends Phaser.Scene {
   /** Phase 5: telemetry interval handle (clearInterval on shutdown). */
   private telemetryTimer: ReturnType<typeof setInterval> | null = null;
 
+  /**
+   * Phase 4: the `net-sim-config` document listener added in startNetLoop.
+   * Stored so shutdown() can removeEventListener it — an inline arrow can't be
+   * removed and would leak across scene restarts.
+   */
+  private netSimConfigHandler: ((e: Event) => void) | null = null;
+
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
   // hudOverlay is sized/positioned to exactly overlay the (scaled, centered)
   // canvas each frame, so the %/px-positioned HUD children stay aligned with the
@@ -171,9 +178,10 @@ export class GameScene extends Phaser.Scene {
     });
     this.orientationOverlay.mount();
 
-    const s = this.sim.getRenderState();
-    this.prev = structuredClone(s);
-    this.cur = structuredClone(s);
+    // getRenderState() returns a fresh, independent snapshot each call, so two
+    // calls give independent prev/cur without structuredClone.
+    this.prev = this.sim.getRenderState();
+    this.cur = this.sim.getRenderState();
 
     // Bell Ring banner (hidden until a Bell rings). Drawn above the canvas-center.
     this.bellText = this.add
@@ -375,11 +383,13 @@ export class GameScene extends Phaser.Scene {
 
     // Dev/e2e hook: let tests tune the simulator without driving Phaser-canvas
     // sliders. `net-latency.spec.ts` dispatches this CustomEvent to apply
-    // latency in each tab; the HUD sliders are the manual equivalent.
-    document.addEventListener("net-sim-config", (e) => {
+    // latency in each tab; the HUD sliders are the manual equivalent. Store the
+    // handler so shutdown() can remove it (avoids a listener leak on restart).
+    this.netSimConfigHandler = (e: Event) => {
       const detail = (e as CustomEvent<NetSimPatch>).detail;
       if (detail) this.simTransport?.applyPatch(detail);
-    });
+    };
+    document.addEventListener("net-sim-config", this.netSimConfigHandler);
 
     this.netLoop = new NetLoop(
       this.netClient,
@@ -467,9 +477,10 @@ export class GameScene extends Phaser.Scene {
     this.simTick = 0;
     this.liveConfig = { ...DEFAULT_CONFIG };
     this.sim = this.buildSim(this.liveConfig);
-    const s = this.sim.getRenderState();
-    this.prev = structuredClone(s);
-    this.cur = structuredClone(s);
+    // getRenderState() returns a fresh, independent snapshot each call, so two
+    // calls give independent prev/cur without structuredClone.
+    this.prev = this.sim.getRenderState();
+    this.cur = this.sim.getRenderState();
     this.bellFlash = { left: 0, right: 0 };
     this.bellText.setAlpha(0).setText("");
   }
@@ -480,9 +491,10 @@ export class GameScene extends Phaser.Scene {
     this.simTick = 0;
     this.liveConfig = { ...DEFAULT_CONFIG };
     this.sim = this.buildSim(this.liveConfig);
-    const s = this.sim.getRenderState();
-    this.prev = structuredClone(s);
-    this.cur = structuredClone(s);
+    // getRenderState() returns a fresh, independent snapshot each call, so two
+    // calls give independent prev/cur without structuredClone.
+    this.prev = this.sim.getRenderState();
+    this.cur = this.sim.getRenderState();
     this.bellFlash = { left: 0, right: 0 };
 
     const replayData = deserializeReplay(json);
@@ -649,7 +661,8 @@ export class GameScene extends Phaser.Scene {
 
       this.sim.step(inputFrames);
       this.simTick += 1;
-      this.cur = structuredClone(this.sim.getRenderState());
+      // getRenderState() already returns a fresh object — no clone needed.
+      this.cur = this.sim.getRenderState();
       // Drain sim events each tick and surface Bell Ring feedback.
       for (const event of this.sim.drainEvents()) {
         if (event.type === "bellRing") this.onBellRing(event.bell);
@@ -906,6 +919,11 @@ export class GameScene extends Phaser.Scene {
     if (this.telemetryTimer !== null) {
       clearInterval(this.telemetryTimer);
       this.telemetryTimer = null;
+    }
+    // Phase 4: remove the net-sim-config listener if one was registered.
+    if (this.netSimConfigHandler !== null) {
+      document.removeEventListener("net-sim-config", this.netSimConfigHandler);
+      this.netSimConfigHandler = null;
     }
   }
 }
