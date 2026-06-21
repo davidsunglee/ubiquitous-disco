@@ -25,7 +25,12 @@
  * (at serverTick - INTERP_DELAY_TICKS).
  */
 
-import type { PlayerInput, SeqInput, Slot, WorldSnapshot } from "@bb/protocol";
+import type {
+  PlayerInput,
+  PlayerSlotId,
+  SeqInput,
+  WorldSnapshot,
+} from "@bb/protocol";
 import {
   createSimulation,
   DEFAULT_CONFIG,
@@ -85,7 +90,10 @@ export class NetLoop {
   latestMatchState: MatchState | null = null;
 
   private net: NetClient;
-  private slot: Slot;
+  private slot: PlayerSlotId;
+  /** All remote (non-local) active slots derived from RoomReady.slots. */
+  private remoteSlots: PlayerSlotId[];
+
   private cb: NetLoopCallbacks;
 
   /** Optional network simulator. When set, all send/receive is routed through it. */
@@ -94,38 +102,49 @@ export class NetLoop {
   /** Snapshot queue: drops obsolete snapshots before applying. */
   private snapshotQueue = new SnapshotQueue();
 
-  // Client-side prediction sim.
-  private sim = createSimulation({
-    config: DEFAULT_CONFIG,
-    arena: FLAT_DOJO,
-    seed: 1234,
-  });
+  // Client-side prediction sim (built from active slot template).
+  private sim: ReturnType<typeof createSimulation>;
   private simReady = false;
 
-  // Interpolation buffer for the remote slot.
-  readonly interpBuffer = new InterpolationBuffer();
+  // Per-remote interpolation buffers (one per non-local active slot).
+  // Keyed by PlayerSlotId. Phase 2+: each remote has its own buffer so
+  // all four players can be interpolated independently.
+  readonly interpBuffers = new Map<PlayerSlotId, InterpolationBuffer>();
 
   // Reconciler: handles snapshot → replay → smooth/snap.
   private reconciler: Reconciler;
 
   constructor(
     net: NetClient,
-    slot: Slot,
+    slot: PlayerSlotId,
+    activeSlots: PlayerSlotId[],
     cb: NetLoopCallbacks,
     transport: SimulatedTransport | null = null,
   ) {
     this.net = net;
     this.slot = slot;
+    this.remoteSlots = activeSlots.filter((s) => s !== slot);
     this.cb = cb;
     this.transport = transport;
 
-    const remoteSlot: Slot = slot === 0 ? 1 : 0;
+    this.sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 1234,
+      activeSlots,
+    });
 
+    // Build one interpolation buffer per remote slot.
+    for (const r of this.remoteSlots) {
+      this.interpBuffers.set(r, new InterpolationBuffer());
+    }
+
+    // For the Reconciler: use the per-remote buffers map.
     this.reconciler = new Reconciler(
       this.sim,
       slot,
-      remoteSlot,
-      this.interpBuffer,
+      this.remoteSlots,
+      this.interpBuffers,
       (prev, cur) => {
         // Reconciler pushes corrected state back here.
         this.prevRender = prev;
@@ -155,7 +174,7 @@ export class NetLoop {
       });
 
       this.transport.onMessage("InputAck", (msg) => {
-        const ack = msg as { lastAckedSeq: [number, number] };
+        const ack = msg as { lastAckedSeq: [number, number, number, number] };
         const ackedForSlot = ack.lastAckedSeq[this.slot] ?? 0;
         this.trimPending(ackedForSlot);
       });
@@ -167,7 +186,7 @@ export class NetLoop {
       });
 
       this.net.onMessage("InputAck", (msg) => {
-        const ack = msg as { lastAckedSeq: [number, number] };
+        const ack = msg as { lastAckedSeq: [number, number, number, number] };
         const ackedForSlot = ack.lastAckedSeq[this.slot] ?? 0;
         this.trimPending(ackedForSlot);
       });
@@ -231,24 +250,27 @@ export class NetLoop {
       this.net.send("PlayerInput", msg);
     }
 
-    // Drive the remote slot from the interpolation buffer at
+    // Drive each remote slot from its own interpolation buffer at
     // serverTick - INTERP_DELAY_TICKS (Q4 + Design 0c).
     const sampleTick = Math.max(0, this.latestServerTick - INTERP_DELAY_TICKS);
-    const remotePose = this.interpBuffer.sample(sampleTick);
-    const remoteSlot: Slot = this.slot === 0 ? 1 : 0;
-    if (remotePose) {
-      this.sim.setSlotKinematicPosition(
-        remoteSlot,
-        remotePose.x,
-        remotePose.y,
-        remotePose.facing,
-      );
+    for (const r of this.remoteSlots) {
+      const remotePose = this.interpBuffers.get(r)?.sample(sampleTick);
+      if (remotePose) {
+        this.sim.setSlotKinematicPosition(
+          r,
+          remotePose.x,
+          remotePose.y,
+          remotePose.facing,
+        );
+      }
     }
 
-    // Step the prediction sim: local slot gets local input, remote gets EMPTY.
+    // Step the prediction sim: local slot gets local input, remotes get EMPTY.
     const frames: InputFrame[] = [];
     frames[this.slot] = localInput;
-    frames[remoteSlot] = EMPTY_INPUT;
+    for (const r of this.remoteSlots) {
+      frames[r] = EMPTY_INPUT;
+    }
     this.sim.step(frames);
 
     // Snapshot the predicted render state. getRenderState() already returns a
@@ -280,18 +302,19 @@ export class NetLoop {
     this.latestServerTick = snap.serverTick;
     this.latestMatchState = snap.match;
 
-    // Push the remote slot's authoritative pose into the interpolation buffer.
-    const remoteSlot: Slot = this.slot === 0 ? 1 : 0;
-    const remotePoseInSnap = snap.players[remoteSlot];
-    if (remotePoseInSnap) {
-      this.interpBuffer.push({
-        serverTick: snap.serverTick,
-        x: remotePoseInSnap.x,
-        y: remotePoseInSnap.y,
-        vx: remotePoseInSnap.vx,
-        vy: remotePoseInSnap.vy,
-        facing: remotePoseInSnap.facing,
-      });
+    // Push each remote slot's authoritative pose into its own interpolation buffer.
+    for (const r of this.remoteSlots) {
+      const pose = snap.players[r];
+      if (pose) {
+        this.interpBuffers.get(r)?.push({
+          serverTick: snap.serverTick,
+          x: pose.x,
+          y: pose.y,
+          vx: pose.vx,
+          vy: pose.vy,
+          facing: pose.facing,
+        });
+      }
     }
 
     // Trim SeqInput pending queue using snapshot's lastAckedSeq.
@@ -310,6 +333,11 @@ export class NetLoop {
     return Math.min(1, this.accumulator / FIXED_STEP_MS);
   }
 
+  /** Active non-local slots (for GameScene remote-render patch loop). */
+  getRemoteSlots(): PlayerSlotId[] {
+    return this.remoteSlots;
+  }
+
   get currentRender(): RenderState | null {
     return this.curRender;
   }
@@ -319,12 +347,14 @@ export class NetLoop {
   }
 
   /**
-   * Sample the remote player's interpolated pose for rendering.
-   * Called by GameScene each frame to position the remote player.
-   * Returns null if the buffer is empty (before any snapshot).
+   * Sample a specific remote slot's interpolated pose for rendering.
+   * Called by GameScene each frame to position remote players.
+   * Returns null if the buffer is empty (before any snapshot) or slot is unknown.
    */
-  sampleRemoteRender(): import("./InterpolationBuffer").RemotePose | null {
+  sampleRemoteRender(
+    remoteSlot: PlayerSlotId,
+  ): import("./InterpolationBuffer").RemotePose | null {
     const sampleTick = Math.max(0, this.latestServerTick - INTERP_DELAY_TICKS);
-    return this.interpBuffer.sample(sampleTick);
+    return this.interpBuffers.get(remoteSlot)?.sample(sampleTick) ?? null;
   }
 }

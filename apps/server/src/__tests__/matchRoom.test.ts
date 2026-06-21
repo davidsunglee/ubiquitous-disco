@@ -6,9 +6,16 @@
  *
  * Phase 2: input ordering (out-of-order seqs consumed in order), seq
  * acknowledgements (lastAckedSeq advances), snapshot cadence (every 2 ticks).
+ *
+ * Phase 3: bot-source routing — a room created with botSlots feeds bot frames for
+ * those slots; PlayerInput for a bot slot is ignored; bot lastAckedSeq stays 0.
  */
 
-import { base64ToUint8Array, uint8ArrayToBase64 } from "@bb/protocol";
+import {
+  base64ToUint8Array,
+  type PlayerSlotId,
+  uint8ArrayToBase64,
+} from "@bb/protocol";
 import { EMPTY_INPUT, type InputFrame, initSim } from "@bb/sim";
 import { beforeAll, expect, test } from "vitest";
 import { InputBuffer } from "../inputBuffer";
@@ -32,7 +39,7 @@ function makeClient(sessionId: string) {
   };
 }
 
-function makeRoom() {
+function makeRoom(options?: { botSlots?: PlayerSlotId[] }) {
   const room = new MatchRoom();
 
   // Patch clients array so onJoin's broadcast loop can find them.
@@ -63,9 +70,9 @@ function makeRoom() {
     return Promise.resolve();
   };
 
-  // Call onCreate to initialise the sim and buffers (sim is no longer a class
+  // Call onCreate to initialise the sim and sources (sim is no longer a class
   // field initialiser — it's constructed inside onCreate after initSim()).
-  room.onCreate();
+  room.onCreate(options);
 
   // Attach test helpers as live properties (getters must be defined with
   // Object.defineProperty since Object.assign evaluates getters eagerly).
@@ -105,70 +112,77 @@ test("first client joins as slot 0", () => {
   expect((ready?.payload as { slot: number }).slot).toBe(0);
 });
 
-test("second client joins as slot 1", () => {
+test("clients join as slots 0,1,2,3 in order (2v2 [0,1,2,3] template)", () => {
   const room = makeRoom();
   const clientA = makeClient("session-a");
   const clientB = makeClient("session-b");
-  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  const clientC = makeClient("session-c");
+  const clientD = makeClient("session-d");
+  (room as unknown as { clients: unknown[] }).clients.push(
+    clientA,
+    clientB,
+    clientC,
+    clientD,
+  );
 
   room.onJoin(clientA as never);
   room.onJoin(clientB as never);
+  room.onJoin(clientC as never);
+  room.onJoin(clientD as never);
 
   expect(room.slotForSession("session-a")).toBe(0);
   expect(room.slotForSession("session-b")).toBe(1);
+  expect(room.slotForSession("session-c")).toBe(2);
+  expect(room.slotForSession("session-d")).toBe(3);
 });
 
-test("both clients receive full=true when second joins", () => {
+test("all four clients receive full=true when fourth joins", () => {
   const room = makeRoom();
-  const clientA = makeClient("session-a");
-  const clientB = makeClient("session-b");
-  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  const clients = ["a", "b", "c", "d"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
+  for (const c of clients) room.onJoin(c as never);
 
-  room.onJoin(clientA as never);
-  room.onJoin(clientB as never);
-
-  // After the second join, both clients should have received a RoomReady with full:true
-  const aFull = clientA.messages.filter(
-    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
-  );
-  const bFull = clientB.messages.filter(
-    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
-  );
-  expect(aFull.length).toBeGreaterThan(0);
-  expect(bFull.length).toBeGreaterThan(0);
+  // After the fourth join, all clients should have received a RoomReady with full:true
+  for (const c of clients) {
+    const full = c.messages.filter(
+      (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
+    );
+    expect(full.length).toBeGreaterThan(0);
+  }
 });
 
-test("both clients receive their OWN slot in full=true RoomReady", () => {
+test("all four clients receive their OWN slot in full=true RoomReady", () => {
   const room = makeRoom();
-  const clientA = makeClient("session-a");
-  const clientB = makeClient("session-b");
-  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  const clients = ["a", "b", "c", "d"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
+  for (const c of clients) room.onJoin(c as never);
 
-  room.onJoin(clientA as never);
-  room.onJoin(clientB as never);
-
-  // A should receive slot 0 in the full RoomReady, B should receive slot 1.
-  const aFullMsgs = clientA.messages.filter(
-    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
-  );
-  const bFullMsgs = clientB.messages.filter(
-    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
-  );
-  expect((aFullMsgs[0]?.payload as { slot: number })?.slot).toBe(0);
-  expect((bFullMsgs[0]?.payload as { slot: number })?.slot).toBe(1);
+  // Each client should receive its own slot (0,1,2,3) in the full=true RoomReady.
+  const expectedSlots = [0, 1, 2, 3];
+  clients.forEach((c, i) => {
+    const fullMsgs = c.messages.filter(
+      (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
+    );
+    expect((fullMsgs[0]?.payload as { slot: number })?.slot).toBe(
+      expectedSlots[i],
+    );
+  });
 });
 
-test("slot count reflects connected clients", () => {
+test("slot count reflects connected clients (up to four)", () => {
   const room = makeRoom();
-  const clientA = makeClient("session-a");
-  const clientB = makeClient("session-b");
-  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  const clients = ["a", "b", "c", "d"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
 
   expect(room.slotCount).toBe(0);
-  room.onJoin(clientA as never);
+  room.onJoin(clients[0] as never);
   expect(room.slotCount).toBe(1);
-  room.onJoin(clientB as never);
+  room.onJoin(clients[1] as never);
   expect(room.slotCount).toBe(2);
+  room.onJoin(clients[2] as never);
+  expect(room.slotCount).toBe(3);
+  room.onJoin(clients[3] as never);
+  expect(room.slotCount).toBe(4);
 });
 
 test("slot removed on leave", () => {
@@ -186,9 +200,35 @@ test("slot removed on leave", () => {
   expect(room.slotCount).toBe(1);
 });
 
-test("maxClients is 2", () => {
+test("maxClients is 4", () => {
   const room = makeRoom();
-  expect(room.maxClients).toBe(2);
+  expect(room.maxClients).toBe(4);
+});
+
+test("RoomReady includes slots=[0,1,2,3] (2v2 template)", () => {
+  const room = makeRoom();
+  const clientA = makeClient("session-a");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA);
+
+  room.onJoin(clientA as never);
+
+  const ready = clientA.messages.find((m) => m.type === "RoomReady");
+  expect(ready).toBeDefined();
+  expect((ready?.payload as { slots: number[] }).slots).toEqual([0, 1, 2, 3]);
+});
+
+test("full=true RoomReady includes slots=[0,1,2,3]", () => {
+  const room = makeRoom();
+  const clients = ["a", "b", "c", "d"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
+  for (const c of clients) room.onJoin(c as never);
+
+  const aFull = (clients[0]?.messages ?? []).filter(
+    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
+  );
+  expect((aFull[0]?.payload as { slots: number[] })?.slots).toEqual([
+    0, 1, 2, 3,
+  ]);
 });
 
 // ── Phase 2: InputBuffer ──────────────────────────────────────────────────────
@@ -330,10 +370,21 @@ test("authoritative sim: sim steps produce valid authoritative state", () => {
   const room = makeRoom();
   const sim = room.simulation;
 
-  // Step the sim forward (past preRound start).
+  // Step the sim forward (past preRound start). The 2v2 [0,1,2,3] template uses
+  // all four slots; use a sparse array so slot 0 gets jumpPressed to start.
   const startFrame = f({ jumpPressed: true, jumpHeld: true });
-  sim.step([startFrame, EMPTY_INPUT]);
-  for (let i = 0; i < 5; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+  const inputRow: (typeof EMPTY_INPUT)[] = [];
+  inputRow[0] = startFrame;
+  inputRow[1] = EMPTY_INPUT;
+  inputRow[2] = EMPTY_INPUT;
+  inputRow[3] = EMPTY_INPUT;
+  sim.step(inputRow);
+  const emptyRow: (typeof EMPTY_INPUT)[] = [];
+  emptyRow[0] = EMPTY_INPUT;
+  emptyRow[1] = EMPTY_INPUT;
+  emptyRow[2] = EMPTY_INPUT;
+  emptyRow[3] = EMPTY_INPUT;
+  for (let i = 0; i < 5; i++) sim.step(emptyRow);
 
   const match = sim.getMatchState();
   expect(match.phase).toBe("playing");
@@ -346,7 +397,7 @@ function DEFAULT_CONFIG_TIMER() {
   return 5400;
 }
 
-test("snapshot cadence: WorldSnapshot broadcast every SNAPSHOT_EVERY ticks carries lastAckedSeq", () => {
+test("snapshot cadence: WorldSnapshot broadcast every SNAPSHOT_EVERY ticks carries four-entry lastAckedSeq", () => {
   const room = makeRoom();
   const drive = room as unknown as { tickOnce(): void };
 
@@ -358,8 +409,11 @@ test("snapshot cadence: WorldSnapshot broadcast every SNAPSHOT_EVERY ticks carri
     (m) => m.type === "WorldSnapshot",
   );
   expect(snapshots.length).toBe(1);
-  const payload = snapshots[0]?.payload as { lastAckedSeq: [number, number] };
-  expect(payload.lastAckedSeq).toEqual([0, 0]);
+  const payload = snapshots[0]?.payload as {
+    lastAckedSeq: [number, number, number, number];
+  };
+  // 2v2 [0,1,2,3] template: all four slots have buffers; all start at 0.
+  expect(payload.lastAckedSeq).toEqual([0, 0, 0, 0]);
 });
 
 test("snapshot cadence: no standalone InputAck broadcast (snapshot carries the ack)", () => {
@@ -506,4 +560,96 @@ test("onLeave: isDisposed is true after first leave", () => {
   expect(room.isDisposed).toBe(false);
   room.onLeave(clientA as never);
   expect(room.isDisposed).toBe(true);
+});
+
+// ── Phase 3: bot-source routing ───────────────────────────────────────────────
+
+test("botSlots: slot 3 is backed by a bot source (not a human buffer)", () => {
+  const room = makeRoom({ botSlots: [3] });
+
+  // Slot 3 should have a non-human source and no InputBuffer.
+  const src = room.inputSources.get(3);
+  expect(src).toBeDefined();
+  expect(src?.isHuman).toBe(false);
+
+  // No InputBuffer for the bot slot.
+  expect(room.inputBuffers.has(3)).toBe(false);
+
+  // Human slots 0, 1, 2 should have human sources and buffers.
+  for (const s of [0, 1, 2] as PlayerSlotId[]) {
+    expect(room.inputSources.get(s)?.isHuman).toBe(true);
+    expect(room.inputBuffers.has(s)).toBe(true);
+  }
+});
+
+test("botSlots: bot slot lastAckedSeq is always 0", () => {
+  const room = makeRoom({ botSlots: [3] });
+  const drive = room as unknown as { tickOnce(): void };
+
+  // Drive several ticks — bot slot should never advance lastAckedSeq.
+  for (let i = 0; i < 6; i++) drive.tickOnce();
+
+  const src = room.inputSources.get(3);
+  expect(src?.lastAckedSeq).toBe(0);
+});
+
+test("botSlots: snapshot lastAckedSeq[3] stays 0 for a bot slot", () => {
+  const room = makeRoom({ botSlots: [3] });
+  const drive = room as unknown as { tickOnce(): void };
+
+  // Two ticks → one snapshot (cadence = 2).
+  drive.tickOnce();
+  drive.tickOnce();
+
+  const snapshots = room.broadcastMessages.filter(
+    (m) => m.type === "WorldSnapshot",
+  );
+  expect(snapshots.length).toBe(1);
+  const payload = snapshots[0]?.payload as {
+    lastAckedSeq: [number, number, number, number];
+  };
+  // Slot 3 is a bot → lastAckedSeq[3] = 0.
+  expect(payload.lastAckedSeq[3]).toBe(0);
+});
+
+test("botSlots: PlayerInput for a bot slot is silently ignored (no buffer for bot slot)", () => {
+  const room = makeRoom({ botSlots: [3] });
+
+  // Slot 3 is configured as a bot — no InputBuffer is created for it.
+  // This is the structural guarantee: the PlayerInput handler calls
+  // `if (this.sources.get(s)?.isHuman) this.buffers.get(s)?.push(...)`,
+  // so even if a message arrives for slot 3, it is a no-op because
+  // isHuman=false and there is no buffer to push into.
+  expect(room.inputBuffers.has(3)).toBe(false);
+  expect(room.inputSources.get(3)?.isHuman).toBe(false);
+
+  // Human slots do have buffers and human sources.
+  for (const s of [0, 1, 2] as PlayerSlotId[]) {
+    expect(room.inputBuffers.has(s)).toBe(true);
+    expect(room.inputSources.get(s)?.isHuman).toBe(true);
+  }
+});
+
+test("botSlots: clients filling human slots achieve full=true (bot slot not counted)", () => {
+  // With botSlots=[3], only 3 human slots (0, 1, 2) need to join for full=true.
+  const room = makeRoom({ botSlots: [3] });
+  const clients = ["a", "b", "c"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
+
+  room.onJoin(clients[0] as never);
+  room.onJoin(clients[1] as never);
+  room.onJoin(clients[2] as never);
+
+  // After three human joins, all three should have received full=true.
+  for (const c of clients) {
+    const fullMsgs = c.messages.filter(
+      (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
+    );
+    expect(fullMsgs.length).toBeGreaterThan(0);
+  }
+
+  // Slots assigned should be 0, 1, 2 (not 3 — that's the bot).
+  expect(room.slotForSession("session-a")).toBe(0);
+  expect(room.slotForSession("session-b")).toBe(1);
+  expect(room.slotForSession("session-c")).toBe(2);
 });

@@ -11,7 +11,7 @@
  *  - Optional telemetry readout (`data-testid="net-telemetry"`) showing RTT.
  */
 
-import type { MatchClosed, Slot } from "@bb/protocol";
+import type { MatchClosed, PlayerSlotId, Slot } from "@bb/protocol";
 import type { NetClient } from "../net/NetClient";
 
 type Status = "idle" | "connecting" | "connected" | "error" | "closed";
@@ -60,7 +60,7 @@ export class ConnectionOverlay {
     this.root.appendChild(panel);
 
     const title = document.createElement("div");
-    title.textContent = "Networked 1v1";
+    title.textContent = "Networked 2v2 (direct)";
     title.style.cssText = "color:#fff;font-size:16px;font-weight:bold;";
     panel.appendChild(title);
 
@@ -135,21 +135,27 @@ export class ConnectionOverlay {
   /**
    * Wire callbacks to a NetClient instance. Called by GameScene after mount().
    *
-   * @param onRoomFull     Phase 2: called with the local slot once both players
-   *                       are present so GameScene can start the NetLoop.
+   * @param onRoomFull     Phase 2: called with the local slot + active-slot
+   *                       template once all players are present so GameScene
+   *                       can start the NetLoop.
    * @param onSessionStart Called once create/join succeeds (room connected, but
    *                       possibly awaiting an opponent) so GameScene can freeze
    *                       the local background sim.
+   * @param createOptions  Phase 3: optional room creation options (e.g. botSlots)
+   *                       forwarded to the server. Temporary — replaced in Phase 5
+   *                       by the launch manifest.
    */
   wire(
     net: NetClient,
     canvas: HTMLCanvasElement,
-    onRoomFull?: (slot: Slot) => void,
+    onRoomFull?: (slot: Slot, slots?: PlayerSlotId[]) => void,
     onSessionStart?: () => void,
+    createOptions?: { botSlots?: number[] },
   ): void {
     this.net = net;
     this.onRoomFull = onRoomFull ?? null;
     this.onSessionStart = onSessionStart ?? null;
+    this.createOptions = createOptions ?? null;
 
     this.createBtn.addEventListener("click", () => {
       void this.handleCreate();
@@ -180,15 +186,18 @@ export class ConnectionOverlay {
     align();
   }
 
-  private onRoomFull: ((slot: Slot) => void) | null = null;
+  private onRoomFull: ((slot: Slot, slots?: PlayerSlotId[]) => void) | null =
+    null;
   private onSessionStart: (() => void) | null = null;
+  /** Phase 3: options forwarded to net.create() (e.g. botSlots). */
+  private createOptions: { botSlots?: number[] } | null = null;
 
   private async handleCreate(): Promise<void> {
     if (!this.net) return;
     const net = this.net;
     this.setStatus("connecting");
     try {
-      const roomId = await net.create();
+      const roomId = await net.create(this.createOptions ?? undefined);
       this.onSessionStart?.();
       this.roomIdEl.textContent = roomId;
       this.setStatus("connected");
@@ -200,12 +209,16 @@ export class ConnectionOverlay {
       this.hintEl.style.color = "#ffe066";
       this.hintEl.style.fontSize = "13px";
       net.onMessage("RoomReady", (msg) => {
-        const m = msg as { slot: number; full: boolean };
-        net.slot = m.slot as 0 | 1;
+        const m = msg as {
+          slot: number;
+          full: boolean;
+          slots?: PlayerSlotId[];
+        };
+        net.slot = m.slot as PlayerSlotId;
         this.updateBadge(`connected (slot ${m.slot})`);
         if (m.full) {
           this.hidePanel();
-          this.onRoomFull?.(m.slot as Slot);
+          this.onRoomFull?.(m.slot as Slot, m.slots);
         }
       });
       net.onLeave((_code) => {
@@ -228,11 +241,15 @@ export class ConnectionOverlay {
       this.setStatus("connected");
       this.hidePanel();
       net.onMessage("RoomReady", (msg) => {
-        const m = msg as { slot: number; full: boolean };
-        net.slot = m.slot as 0 | 1;
+        const m = msg as {
+          slot: number;
+          full: boolean;
+          slots?: PlayerSlotId[];
+        };
+        net.slot = m.slot as PlayerSlotId;
         this.updateBadge(`connected (slot ${m.slot})`);
         // When B joins, the room is immediately full from B's perspective.
-        this.onRoomFull?.(m.slot as Slot);
+        this.onRoomFull?.(m.slot as Slot, m.slots);
       });
       net.onLeave((_code) => {
         this.setStatus("error");

@@ -52,103 +52,120 @@ function longContactHeavyScript(): InputFrame[][] {
     return { ...EMPTY_INPUT, ...partial };
   }
 
+  // Helper: sparse row keyed by the 1v1 [0, 2] template.
+  // slot 0 = left player (same position as old "slot 0")
+  // slot 2 = right player (same position as old "slot 1": spawn at x=4)
+  function row(s0: InputFrame, s2: InputFrame): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = s0;
+    r[2] = s2;
+    return r;
+  }
+
   // ── Start the match (both players press jump) ────────────────────────────
-  frames.push([
-    f({ jumpPressed: true, jumpHeld: true }),
-    f({ jumpPressed: true, jumpHeld: true }),
-  ]);
+  frames.push(
+    row(
+      f({ jumpPressed: true, jumpHeld: true }),
+      f({ jumpPressed: true, jumpHeld: true }),
+    ),
+  );
 
   // ── Settle on the ground ─────────────────────────────────────────────────
-  for (let i = 0; i < 20; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
 
-  // ── Slot 0 walks right, slot 1 walks left — both converging ─────────────
-  for (let i = 0; i < 25; i++) frames.push([f({ moveX: 1 }), f({ moveX: -1 })]);
+  // ── Slot 0 walks right, slot 2 walks left — both converging ─────────────
+  for (let i = 0; i < 25; i++)
+    frames.push(row(f({ moveX: 1 }), f({ moveX: -1 })));
 
   // ── Both players jump at the same time ──────────────────────────────────
-  frames.push([
-    f({ moveX: 1, jumpPressed: true, jumpHeld: true }),
-    f({ moveX: -1, jumpPressed: true, jumpHeld: true }),
-  ]);
+  frames.push(
+    row(
+      f({ moveX: 1, jumpPressed: true, jumpHeld: true }),
+      f({ moveX: -1, jumpPressed: true, jumpHeld: true }),
+    ),
+  );
   for (let i = 0; i < 15; i++)
-    frames.push([
-      f({ moveX: 1, jumpHeld: true }),
-      f({ moveX: -1, jumpHeld: true }),
-    ]);
+    frames.push(
+      row(f({ moveX: 1, jumpHeld: true }), f({ moveX: -1, jumpHeld: true })),
+    );
 
   // ── Slot 0 does a charged strike (upward) in mid-air ────────────────────
-  frames.push([
-    f({ moveX: 1, moveY: 1, strikeHeld: true, strikePressed: true }),
-    f({ moveX: -1 }),
-  ]);
-  for (let i = 0; i < 12; i++) {
-    frames.push([
-      f({ moveX: 1, moveY: 1, strikeHeld: true }),
+  frames.push(
+    row(
+      f({ moveX: 1, moveY: 1, strikeHeld: true, strikePressed: true }),
       f({ moveX: -1 }),
-    ]);
+    ),
+  );
+  for (let i = 0; i < 12; i++) {
+    frames.push(
+      row(f({ moveX: 1, moveY: 1, strikeHeld: true }), f({ moveX: -1 })),
+    );
   }
-  frames.push([f({ moveX: 1, moveY: 1, strikeReleased: true }), EMPTY_INPUT]);
+  frames.push(
+    row(f({ moveX: 1, moveY: 1, strikeReleased: true }), EMPTY_INPUT),
+  );
 
   // ── Let the ball fly (bounces off walls / ceiling) ───────────────────────
-  for (let i = 0; i < 60; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
+  for (let i = 0; i < 60; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
 
-  // ── Slot 1 Tele-Dash left ────────────────────────────────────────────────
-  frames.push([
-    EMPTY_INPUT,
-    f({ moveX: -1, dashPressed: true, dashHeld: true }),
-  ]);
-  for (let i = 0; i < 5; i++) frames.push([EMPTY_INPUT, f({ moveX: -1 })]);
+  // ── Slot 2 Tele-Dash left ────────────────────────────────────────────────
+  frames.push(
+    row(EMPTY_INPUT, f({ moveX: -1, dashPressed: true, dashHeld: true })),
+  );
+  for (let i = 0; i < 5; i++) frames.push(row(EMPTY_INPUT, f({ moveX: -1 })));
 
-  // ── Slot 1 jumps and tries an aerial upward strike toward the left Bell ──
-  frames.push([
-    EMPTY_INPUT,
-    f({ moveX: -1, jumpPressed: true, jumpHeld: true }),
-  ]);
+  // ── Slot 2 jumps and tries an aerial upward strike toward the left Bell ──
+  frames.push(
+    row(EMPTY_INPUT, f({ moveX: -1, jumpPressed: true, jumpHeld: true })),
+  );
   for (let i = 0; i < 8; i++)
-    frames.push([EMPTY_INPUT, f({ moveX: -1, jumpHeld: true })]);
-  frames.push([
-    EMPTY_INPUT,
-    f({ moveX: -1, moveY: 1, strikeHeld: true, strikePressed: true }),
-  ]);
+    frames.push(row(EMPTY_INPUT, f({ moveX: -1, jumpHeld: true })));
+  frames.push(
+    row(
+      EMPTY_INPUT,
+      f({ moveX: -1, moveY: 1, strikeHeld: true, strikePressed: true }),
+    ),
+  );
   for (let i = 0; i < 10; i++) {
-    frames.push([EMPTY_INPUT, f({ moveX: -1, moveY: 1, strikeHeld: true })]);
+    frames.push(row(EMPTY_INPUT, f({ moveX: -1, moveY: 1, strikeHeld: true })));
   }
-  frames.push([EMPTY_INPUT, f({ moveX: -1, moveY: 1, strikeReleased: true })]);
+  frames.push(
+    row(EMPTY_INPUT, f({ moveX: -1, moveY: 1, strikeReleased: true })),
+  );
 
   // ── Extended settle + ball bounces (contact-solver activity) ────────────
-  for (let i = 0; i < 80; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
+  for (let i = 0; i < 80; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
 
   // ── Slot 0 walks left and does a grounded strike ────────────────────────
-  for (let i = 0; i < 20; i++) frames.push([f({ moveX: -1 }), EMPTY_INPUT]);
-  frames.push([
-    f({ moveX: -1, strikeHeld: true, strikePressed: true }),
-    EMPTY_INPUT,
-  ]);
+  for (let i = 0; i < 20; i++) frames.push(row(f({ moveX: -1 }), EMPTY_INPUT));
+  frames.push(
+    row(f({ moveX: -1, strikeHeld: true, strikePressed: true }), EMPTY_INPUT),
+  );
   for (let i = 0; i < 8; i++) {
-    frames.push([f({ moveX: -1, strikeHeld: true }), EMPTY_INPUT]);
+    frames.push(row(f({ moveX: -1, strikeHeld: true }), EMPTY_INPUT));
   }
-  frames.push([f({ moveX: -1, strikeReleased: true }), EMPTY_INPUT]);
+  frames.push(row(f({ moveX: -1, strikeReleased: true }), EMPTY_INPUT));
 
   // ── Long idle: let physics converge, timer tick down ────────────────────
-  for (let i = 0; i < 120; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
+  for (let i = 0; i < 120; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
 
-  // ── Slot 1 attempts a spike (downward aerial strike) ────────────────────
-  for (let i = 0; i < 10; i++) frames.push([EMPTY_INPUT, f({ moveX: 1 })]);
-  frames.push([
-    EMPTY_INPUT,
-    f({ moveX: 1, jumpPressed: true, jumpHeld: true }),
-  ]);
-  for (let i = 0; i < 6; i++) frames.push([EMPTY_INPUT, f({ jumpHeld: true })]);
-  frames.push([
-    EMPTY_INPUT,
-    f({ moveY: -1, strikeHeld: true, strikePressed: true }),
-  ]);
+  // ── Slot 2 attempts a spike (downward aerial strike) ────────────────────
+  for (let i = 0; i < 10; i++) frames.push(row(EMPTY_INPUT, f({ moveX: 1 })));
+  frames.push(
+    row(EMPTY_INPUT, f({ moveX: 1, jumpPressed: true, jumpHeld: true })),
+  );
+  for (let i = 0; i < 6; i++)
+    frames.push(row(EMPTY_INPUT, f({ jumpHeld: true })));
+  frames.push(
+    row(EMPTY_INPUT, f({ moveY: -1, strikeHeld: true, strikePressed: true })),
+  );
   for (let i = 0; i < 6; i++) {
-    frames.push([EMPTY_INPUT, f({ moveY: -1, strikeHeld: true })]);
+    frames.push(row(EMPTY_INPUT, f({ moveY: -1, strikeHeld: true })));
   }
-  frames.push([EMPTY_INPUT, f({ moveY: -1, strikeReleased: true })]);
+  frames.push(row(EMPTY_INPUT, f({ moveY: -1, strikeReleased: true })));
 
   // ── Final settle ─────────────────────────────────────────────────────────
-  for (let i = 0; i < 60; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
+  for (let i = 0; i < 60; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
 
   return frames;
 }

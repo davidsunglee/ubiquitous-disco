@@ -23,13 +23,33 @@ import {
 
 // ── RoomReady ─────────────────────────────────────────────────────────────────
 
-test("RoomReady round-trips (slot 0, not full)", () => {
-  const m: RoomReady = { type: "RoomReady", slot: 0, full: false };
+test("RoomReady round-trips (slot 0, not full, 1v1 template)", () => {
+  const m: RoomReady = {
+    type: "RoomReady",
+    slot: 0,
+    full: false,
+    slots: [0, 2],
+  };
   expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
 });
 
-test("RoomReady round-trips (slot 1, full)", () => {
-  const m: RoomReady = { type: "RoomReady", slot: 1, full: true };
+test("RoomReady round-trips (slot 2, full, 1v1 template)", () => {
+  const m: RoomReady = {
+    type: "RoomReady",
+    slot: 2,
+    full: true,
+    slots: [0, 2],
+  };
+  expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
+});
+
+test("RoomReady round-trips (slot 1, full, 2v2 template)", () => {
+  const m: RoomReady = {
+    type: "RoomReady",
+    slot: 1,
+    full: true,
+    slots: [0, 1, 2, 3],
+  };
   expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
 });
 
@@ -59,13 +79,13 @@ test("PlayerInput round-trips (multiple frames with redundant tail)", () => {
 
 // ── InputAck ──────────────────────────────────────────────────────────────────
 
-test("InputAck round-trips", () => {
-  const m: InputAck = { type: "InputAck", lastAckedSeq: [12, 10] };
+test("InputAck round-trips (four-entry AckBySlot)", () => {
+  const m: InputAck = { type: "InputAck", lastAckedSeq: [12, 0, 10, 0] };
   expect(deserializeInputAck(serializeInputAck(m))).toEqual(m);
 });
 
 test("InputAck round-trips (zero acked)", () => {
-  const m: InputAck = { type: "InputAck", lastAckedSeq: [0, 0] };
+  const m: InputAck = { type: "InputAck", lastAckedSeq: [0, 0, 0, 0] };
   expect(deserializeInputAck(serializeInputAck(m))).toEqual(m);
 });
 
@@ -110,7 +130,7 @@ function makeSnapshot(): WorldSnapshot {
       winner: -1,
       timerExpired: false,
     },
-    lastAckedSeq: [5, 4],
+    lastAckedSeq: [5, 0, 4, 0],
   };
 }
 

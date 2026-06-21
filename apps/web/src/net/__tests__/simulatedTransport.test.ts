@@ -65,7 +65,7 @@ function makeSnap(serverTick: number): WorldSnapshot {
       winner: -1,
       timerExpired: false,
     },
-    lastAckedSeq: [0, 0],
+    lastAckedSeq: [0, 0, 0, 0],
   };
 }
 

@@ -6,8 +6,9 @@
  * simultaneous strikes, and strike-vs-ball regression.
  *
  * Design notes:
- *  - Slot 0 spawns at x=-4, slot 1 at x=+4. We walk them together until within
- *    strike reach (reach=2 + playerHitRadius=0.6 = 2.6 units) then test combat.
+ *  - Slot 0 spawns at x=-4, slot 2 at x=+4 (1v1 template [0, 2]). We walk
+ *    them together until within strike reach (reach=2 + playerHitRadius=0.6 = 2.6
+ *    units) then test combat.
  *  - The match must be in a live phase for gameplay rules to run. We use a short
  *    startMatch helper (jump press on slot 0) so the sim advances to "playing".
  *  - staggerThreshold=3, staggerPerHit=1 → 3 hits to knock down (default config).
@@ -34,24 +35,41 @@ function frame(p: Partial<InputFrame>): InputFrame {
   return { ...EMPTY_INPUT, ...p };
 }
 
-/** Build a sim with optional combat config overrides. */
+/** Build a sim with optional combat config overrides.
+ *  Uses the standard 1v1 active-slot template [0, 2]:
+ *    - Slot 0 at x=-4 (Team 0, faces right +1)
+ *    - Slot 2 at x=+4 (Team 1, faces left -1)
+ */
 function newSim(combatOverride: Partial<SimConfig["combat"]> = {}) {
   const config: SimConfig = {
     ...DEFAULT_CONFIG,
     combat: { ...DEFAULT_CONFIG.combat, ...combatOverride },
   };
-  return createSimulation({ config, arena: FLAT_DOJO, seed: 42 });
+  return createSimulation({
+    config,
+    arena: FLAT_DOJO,
+    seed: 42,
+    activeSlots: [0, 2],
+  });
+}
+
+/** Sparse input row for the 1v1 [0, 2] template. */
+function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+  const r: InputFrame[] = [];
+  r[0] = f0;
+  r[2] = f2;
+  return r;
 }
 
 /** Start the match (preRound → playing) by pressing the jump button on slot 0. */
 function startMatch(sim: ReturnType<typeof newSim>): void {
-  sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+  sim.step(row(frame({ jumpPressed: true, jumpHeld: true })));
 }
 
 /**
  * Walk the two players toward each other until they are within strike+playerHitRadius
- * of each other. Slot 0 walks right, slot 1 walks left. Returns when they are in range
- * or after maxTicks attempts.
+ * of each other. Slot 0 walks right (+x), slot 2 walks left (-x). Returns when in
+ * range or after maxTicks attempts.
  */
 function walkIntoRange(sim: ReturnType<typeof newSim>, maxTicks = 200): void {
   const reach =
@@ -59,22 +77,22 @@ function walkIntoRange(sim: ReturnType<typeof newSim>, maxTicks = 200): void {
   for (let i = 0; i < maxTicks; i++) {
     const s = sim.getRenderState();
     const p0 = s.players[0];
-    const p1 = s.players[1];
-    if (!p0 || !p1) break;
-    const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+    const p2 = s.players[2];
+    if (!p0 || !p2) break;
+    const dist = Math.hypot(p2.x - p0.x, p2.y - p0.y);
     if (dist <= reach * 0.95) return;
-    // Slot 0 walks right toward slot 1; slot 1 walks left toward slot 0.
-    sim.step([frame({ moveX: 1 }), frame({ moveX: -1 })]);
+    // Slot 0 walks right toward slot 2; slot 2 walks left toward slot 0.
+    sim.step(row(frame({ moveX: 1 }), frame({ moveX: -1 })));
   }
 }
 
 /**
  * Have slot 0 release a tap strike (press + release in two consecutive ticks).
- * Returns the stagger value on slot 1 after the strike.
+ * Target is slot 2 (within strike reach after walkIntoRange).
  */
 function tapStrike0(sim: ReturnType<typeof newSim>): void {
-  sim.step([frame({ strikeHeld: true, strikePressed: true }), EMPTY_INPUT]);
-  sim.step([frame({ strikeReleased: true }), EMPTY_INPUT]);
+  sim.step(row(frame({ strikeHeld: true, strikePressed: true })));
+  sim.step(row(frame({ strikeReleased: true })));
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -84,15 +102,15 @@ test("a strike on a player adds stagger", () => {
   startMatch(sim);
   walkIntoRange(sim);
 
-  // One tap strike from slot 0 → slot 1 should gain stagger.
+  // One tap strike from slot 0 → slot 2 should gain stagger.
   tapStrike0(sim);
 
   const s = sim.getRenderState();
-  // Slot 1 should be within strike reach still (or slightly displaced).
+  // Slot 2 should be within strike reach still (or slightly displaced).
   // The internal actor stagger is not exposed on RenderState, so we check the
   // knockdown flag (not yet triggered) and verify via a 2nd-hit approach.
   // After 1 hit with staggerPerHit=1 and threshold=3, not yet knocked down.
-  expect(s.players[1]?.knockedDown).toBe(false);
+  expect(s.players[2]?.knockedDown).toBe(false);
 });
 
 test("reaching staggerThreshold triggers Knockdown", () => {
@@ -105,7 +123,7 @@ test("reaching staggerThreshold triggers Knockdown", () => {
   tapStrike0(sim);
 
   const s = sim.getRenderState();
-  expect(s.players[1]?.knockedDown).toBe(true);
+  expect(s.players[2]?.knockedDown).toBe(true);
 });
 
 test("playerHit event fires on a non-knockdown hit (per-hit feedback)", () => {
@@ -120,7 +138,7 @@ test("playerHit event fires on a non-knockdown hit (per-hit feedback)", () => {
   const hit = evts.find((e) => e.type === "playerHit");
   expect(hit).toBeDefined();
   if (hit && hit.type === "playerHit") {
-    expect(hit.slot).toBe(1);
+    expect(hit.slot).toBe(2);
     expect(hit.knockdown).toBe(false);
   }
   // The non-knockdown hit must not have produced a knockdown event.
@@ -138,7 +156,7 @@ test("playerHit event marks knockdown=true on the hit that knocks down", () => {
   const hit = evts.find((e) => e.type === "playerHit");
   expect(hit).toBeDefined();
   if (hit && hit.type === "playerHit") {
-    expect(hit.slot).toBe(1);
+    expect(hit.slot).toBe(2);
     expect(hit.knockdown).toBe(true);
   }
 });
@@ -150,12 +168,12 @@ test("knockdown event emitted when a player is knocked down", () => {
 
   tapStrike0(sim);
 
-  // Drain events — a knockdown event for slot 1 should be present.
+  // Drain events — a knockdown event for slot 2 should be present.
   const evts = sim.drainEvents();
   const kd = evts.find((e) => e.type === "knockdown");
   expect(kd).toBeDefined();
   if (kd && kd.type === "knockdown") {
-    expect(kd.slot).toBe(1);
+    expect(kd.slot).toBe(2);
   }
 });
 
@@ -170,41 +188,41 @@ test("control is locked during Knockdown then restored with invulnTicks set", ()
   walkIntoRange(sim);
   tapStrike0(sim);
 
-  // Slot 1 should be knocked down.
-  expect(sim.getRenderState().players[1]?.knockedDown).toBe(true);
+  // Slot 2 should be knocked down.
+  expect(sim.getRenderState().players[2]?.knockedDown).toBe(true);
 
-  // During knockdown, slot 1 cannot move (control locked).
-  const xBeforeAttempt = sim.getRenderState().players[1]?.x ?? 0;
-  // Step with slot 1 trying to move right — should not affect vx since controlLock.
+  // During knockdown, slot 2 cannot move (control locked).
+  const xBeforeAttempt = sim.getRenderState().players[2]?.x ?? 0;
+  // Step with slot 2 trying to move right — should not affect vx since controlLock.
   for (let i = 0; i < 3; i++) {
-    sim.step([EMPTY_INPUT, frame({ moveX: 1 })]);
+    sim.step(row(EMPTY_INPUT, frame({ moveX: 1 })));
   }
   // Still knocked down (duration = 5, only 3 ticks passed).
-  expect(sim.getRenderState().players[1]?.knockedDown).toBe(true);
+  expect(sim.getRenderState().players[2]?.knockedDown).toBe(true);
 
   // Wait for knockdown to expire (5 ticks total).
   for (let i = 0; i < 3; i++) {
-    sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+    sim.step(row(EMPTY_INPUT));
   }
 
   // Now should be standing (not knocked down) and invulnerable.
   const s = sim.getRenderState();
-  expect(s.players[1]?.knockedDown).toBe(false);
-  expect(s.players[1]?.invulnerable).toBe(true);
+  expect(s.players[2]?.knockedDown).toBe(false);
+  expect(s.players[2]?.invulnerable).toBe(true);
 
   // Position may have changed due to knockback, but the player didn't control-move.
-  // The key check: after recovery, slot 1 can move again.
-  const xBeforeMove = sim.getRenderState().players[1]?.x ?? 0;
+  // The key check: after recovery, slot 2 can move again.
+  const xBeforeMove = sim.getRenderState().players[2]?.x ?? 0;
   // Wait for invuln to expire (10 ticks).
   for (let i = 0; i < 11; i++) {
-    sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+    sim.step(row(EMPTY_INPUT));
   }
-  expect(sim.getRenderState().players[1]?.invulnerable).toBe(false);
+  expect(sim.getRenderState().players[2]?.invulnerable).toBe(false);
   // Now actually move.
   for (let i = 0; i < 5; i++) {
-    sim.step([EMPTY_INPUT, frame({ moveX: 1 })]);
+    sim.step(row(EMPTY_INPUT, frame({ moveX: 1 })));
   }
-  const xAfterMove = sim.getRenderState().players[1]?.x ?? 0;
+  const xAfterMove = sim.getRenderState().players[2]?.x ?? 0;
   expect(xAfterMove).toBeGreaterThan(xBeforeMove);
 
   // Avoid unused variable warning.
@@ -221,14 +239,14 @@ test("i-frames block stagger/knockback during recovery invulnerability", () => {
   startMatch(sim);
   walkIntoRange(sim);
 
-  // Knock down slot 1.
+  // Knock down slot 2.
   tapStrike0(sim);
-  expect(sim.getRenderState().players[1]?.knockedDown).toBe(true);
+  expect(sim.getRenderState().players[2]?.knockedDown).toBe(true);
 
   // Wait for knockdown to expire.
-  for (let i = 0; i < 6; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
-  expect(sim.getRenderState().players[1]?.knockedDown).toBe(false);
-  expect(sim.getRenderState().players[1]?.invulnerable).toBe(true);
+  for (let i = 0; i < 6; i++) sim.step(row(EMPTY_INPUT));
+  expect(sim.getRenderState().players[2]?.knockedDown).toBe(false);
+  expect(sim.getRenderState().players[2]?.invulnerable).toBe(true);
 
   // Walk back into range (knockback may have separated them).
   walkIntoRange(sim);
@@ -237,11 +255,11 @@ test("i-frames block stagger/knockback during recovery invulnerability", () => {
   // so we get a clean slate to check for new knockdown events during i-frames.
   sim.drainEvents();
 
-  // Attempt another strike on slot 1 while they are invulnerable.
+  // Attempt another strike on slot 2 while they are invulnerable.
   // The strike should NOT add stagger or knock down.
-  const beforeKD = sim.getRenderState().players[1]?.knockedDown ?? false;
+  const beforeKD = sim.getRenderState().players[2]?.knockedDown ?? false;
   tapStrike0(sim);
-  const afterKD = sim.getRenderState().players[1]?.knockedDown ?? false;
+  const afterKD = sim.getRenderState().players[2]?.knockedDown ?? false;
 
   // Still not knocked down (i-frames blocked the hit).
   expect(beforeKD).toBe(false);
@@ -262,21 +280,21 @@ test("a knocked-down target is immune to further strikes (no stunlock)", () => {
   startMatch(sim);
   walkIntoRange(sim);
 
-  // Knock slot 1 down.
+  // Knock slot 2 down.
   tapStrike0(sim);
-  expect(sim.getRenderState().players[1]?.knockedDown).toBe(true);
+  expect(sim.getRenderState().players[2]?.knockedDown).toBe(true);
   sim.drainEvents();
 
   // Mash strikes on the downed target — none should connect (no playerHit),
-  // and slot 1 must still stand up on schedule (not perpetually re-knocked-down).
+  // and slot 2 must still stand up on schedule (not perpetually re-knocked-down).
   let recovered = false;
   for (let i = 0; i < 40; i++) {
     tapStrike0(sim);
     const hits = sim
       .drainEvents()
-      .filter((e) => e.type === "playerHit" && e.slot === 1);
+      .filter((e) => e.type === "playerHit" && e.slot === 2);
     expect(hits).toHaveLength(0);
-    if (!sim.getRenderState().players[1]?.knockedDown) {
+    if (!sim.getRenderState().players[2]?.knockedDown) {
       recovered = true;
       break;
     }
@@ -300,7 +318,7 @@ test("stagger decays over time (anti-stunlock)", () => {
   tapStrike0(sim);
 
   // After 3 live ticks, stagger should have decayed by 3 * 0.5 = 1.5 → 0 (clamped).
-  for (let i = 0; i < 10; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+  for (let i = 0; i < 10; i++) sim.step(row(EMPTY_INPUT));
 
   // Now land 2 more hits — if stagger were still accumulating from before, it would
   // reach threshold=3 and cause knockdown. With decay, it should be < 3 now.
@@ -311,7 +329,7 @@ test("stagger decays over time (anti-stunlock)", () => {
   tapStrike0(sim); // stagger +1 → ~2 total (still < threshold=3)
 
   // Not knocked down yet despite 3 total hits because decay cleared the first one.
-  expect(sim.getRenderState().players[1]?.knockedDown).toBe(false);
+  expect(sim.getRenderState().players[2]?.knockedDown).toBe(false);
 });
 
 test("grace window: spaced-out hits still reach Knockdown (count, not timing)", () => {
@@ -326,10 +344,10 @@ test("grace window: spaced-out hits still reach Knockdown (count, not timing)", 
     walkIntoRange(sim);
     tapStrike0(sim);
     // Idle ~20 ticks between hits (inside the 45-tick grace window).
-    for (let i = 0; i < 18; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+    for (let i = 0; i < 18; i++) sim.step(row(EMPTY_INPUT));
   }
 
-  expect(sim.getRenderState().players[1]?.knockedDown).toBe(true);
+  expect(sim.getRenderState().players[2]?.knockedDown).toBe(true);
 });
 
 test("simultaneous mutual strikes both land", () => {
@@ -340,17 +358,21 @@ test("simultaneous mutual strikes both land", () => {
   walkIntoRange(sim);
 
   // Both press strike simultaneously (press tick).
-  sim.step([
-    frame({ strikeHeld: true, strikePressed: true }),
-    frame({ strikeHeld: true, strikePressed: true }),
-  ]);
+  sim.step(
+    row(
+      frame({ strikeHeld: true, strikePressed: true }),
+      frame({ strikeHeld: true, strikePressed: true }),
+    ),
+  );
   // Both release simultaneously (release tick — both hits resolve this tick).
-  sim.step([frame({ strikeReleased: true }), frame({ strikeReleased: true })]);
+  sim.step(
+    row(frame({ strikeReleased: true }), frame({ strikeReleased: true })),
+  );
 
   const s = sim.getRenderState();
   // Both should be knocked down (mutual trade).
   expect(s.players[0]?.knockedDown).toBe(true);
-  expect(s.players[1]?.knockedDown).toBe(true);
+  expect(s.players[2]?.knockedDown).toBe(true);
 });
 
 test("strike-vs-ball behavior is unchanged (regression)", () => {
@@ -359,9 +381,9 @@ test("strike-vs-ball behavior is unchanged (regression)", () => {
   startMatch(sim);
 
   // Let ball settle then approach.
-  for (let i = 0; i < 40; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+  for (let i = 0; i < 40; i++) sim.step(row(EMPTY_INPUT));
   for (let i = 0; i < 50; i++) {
-    sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
+    sim.step(row(frame({ moveX: 1 })));
     const s = sim.getRenderState();
     const p = s.players[0];
     if (!p) break;
@@ -371,11 +393,10 @@ test("strike-vs-ball behavior is unchanged (regression)", () => {
 
   const ballBefore = sim.getRenderState().ball;
   // Tap strike slot 0 toward the ball.
-  sim.step([
-    frame({ strikeHeld: true, strikePressed: true, moveX: 1, moveY: 1 }),
-    EMPTY_INPUT,
-  ]);
-  sim.step([frame({ strikeReleased: true, moveX: 1, moveY: 1 }), EMPTY_INPUT]);
+  sim.step(
+    row(frame({ strikeHeld: true, strikePressed: true, moveX: 1, moveY: 1 })),
+  );
+  sim.step(row(frame({ strikeReleased: true, moveX: 1, moveY: 1 })));
   const ballAfter = sim.getRenderState().ball;
 
   const moved = Math.hypot(
@@ -392,7 +413,7 @@ test("determinism: scripted combat session produces equal hash across two runs",
     walkIntoRange(sim);
     tapStrike0(sim);
     // Wait through knockdown and recovery.
-    for (let i = 0; i < 80; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+    for (let i = 0; i < 80; i++) sim.step(row(EMPTY_INPUT));
     return sim.hashState();
   };
   expect(run()).toBe(run());

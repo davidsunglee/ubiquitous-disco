@@ -1,13 +1,25 @@
 // ── Shared types ──────────────────────────────────────────────────────────────
 
-export type Slot = 0 | 1;
+// Re-export the canonical slot/team vocabulary from @bb/sim so that
+// server and web can import from either package without a circular dep.
+export type { AckBySlot, PlayerSlotId, TeamId } from "@bb/sim";
+export { TEAM_0_SLOTS, TEAM_1_SLOTS, teamForPlayerSlot } from "@bb/sim";
+
+/** @deprecated Use PlayerSlotId. Retained during the 1v1→2v2 migration. */
+export type Slot = import("@bb/sim").PlayerSlotId;
 
 // ── Room lifecycle messages (Phase 1) ─────────────────────────────────────────
 
 export interface RoomReady {
   type: "RoomReady";
-  slot: Slot;
+  slot: import("@bb/sim").PlayerSlotId;
   full: boolean;
+  /**
+   * The match's active Player Slots (mode template): 1v1 = [0, 2],
+   * 2v2 = [0, 1, 2, 3]. The client builds its prediction sim + remote set
+   * from this so it always matches the server.
+   */
+  slots: import("@bb/sim").PlayerSlotId[];
 }
 
 export interface RoomErrorMsg {
@@ -39,7 +51,7 @@ export interface PlayerInput {
 /** Server → Client: per-slot acknowledgement of the last consumed seq. */
 export interface InputAck {
   type: "InputAck";
-  lastAckedSeq: [number, number]; // [slot0LastAcked, slot1LastAcked]
+  lastAckedSeq: import("@bb/sim").AckBySlot; // index == PlayerSlotId
 }
 
 /**
@@ -79,7 +91,7 @@ export interface WorldSnapshot {
   /** Base64-encoded Rapier world snapshot (rw.takeSnapshot()). Always present. */
   rapierBytesB64: string;
   match: MatchState;
-  lastAckedSeq: [number, number];
+  lastAckedSeq: import("@bb/sim").AckBySlot; // index == PlayerSlotId; bot slots carry 0
 }
 
 // ── Disconnect + telemetry messages (Phase 5) ────────────────────────────────

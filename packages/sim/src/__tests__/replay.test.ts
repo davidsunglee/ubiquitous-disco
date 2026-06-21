@@ -16,6 +16,7 @@
 
 import { beforeAll, expect, test } from "vitest";
 import {
+  type BotWorldView,
   createReplay,
   createSimulation,
   DEFAULT_CONFIG,
@@ -25,6 +26,7 @@ import {
   initSim,
   playReplay,
   recordFrame,
+  samplePracticeBotInput,
 } from "../index";
 
 beforeAll(async () => {
@@ -46,45 +48,47 @@ function newSim() {
 /**
  * A scripted session: settle, walk right, jump, walk back, do a Tele-Dash, then
  * Strike the ball. This exercises the composite hash path thoroughly.
- * Returns per-tick rows [slot0Frame, slot1Frame].
+ * Returns per-tick rows using the 1v1 [0, 2] active-slot template.
  */
 function scriptedFrameList(): InputFrame[][] {
   const frames: InputFrame[][] = [];
-  // Settle on the ground.
-  for (let i = 0; i < 20; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
-  // Walk right.
-  for (let i = 0; i < 20; i++) frames.push([frame({ moveX: 1 }), EMPTY_INPUT]);
-  // Full held jump.
-  frames.push([
-    frame({ moveX: 1, jumpPressed: true, jumpHeld: true }),
-    EMPTY_INPUT,
-  ]);
-  for (let i = 0; i < 20; i++)
-    frames.push([frame({ moveX: 1, jumpHeld: true }), EMPTY_INPUT]);
-  // Settle again.
-  for (let i = 0; i < 20; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
-  // Tele-Dash right.
-  frames.push([
-    frame({ moveX: 1, dashPressed: true, dashHeld: true }),
-    EMPTY_INPUT,
-  ]);
-  for (let i = 0; i < 5; i++) frames.push([frame({ moveX: 1 }), EMPTY_INPUT]);
-  // Walk right until near ball.
-  for (let i = 0; i < 20; i++) frames.push([frame({ moveX: 1 }), EMPTY_INPUT]);
-  // Charged upward Strike.
-  frames.push([
-    frame({ moveX: 1, moveY: 1, strikeHeld: true, strikePressed: true }),
-    EMPTY_INPUT,
-  ]);
-  for (let i = 0; i < 10; i++) {
-    frames.push([frame({ moveX: 1, moveY: 1, strikeHeld: true }), EMPTY_INPUT]);
+
+  // Helper: sparse row for the 1v1 [0, 2] template.
+  // Slot 0 = left player (driven), slot 2 = right player (idle with gravity applied).
+  // Providing EMPTY_INPUT at index 2 ensures gravity is applied to slot 2's body
+  // (stepMovement is called), keeping it grounded — identical to old [0,1] behavior.
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
   }
-  frames.push([
-    frame({ moveX: 1, moveY: 1, strikeReleased: true }),
-    EMPTY_INPUT,
-  ]);
+
+  // Settle on the ground.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk right.
+  for (let i = 0; i < 20; i++) frames.push(row(frame({ moveX: 1 })));
+  // Full held jump.
+  frames.push(row(frame({ moveX: 1, jumpPressed: true, jumpHeld: true })));
+  for (let i = 0; i < 20; i++)
+    frames.push(row(frame({ moveX: 1, jumpHeld: true })));
+  // Settle again.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Tele-Dash right.
+  frames.push(row(frame({ moveX: 1, dashPressed: true, dashHeld: true })));
+  for (let i = 0; i < 5; i++) frames.push(row(frame({ moveX: 1 })));
+  // Walk right until near ball.
+  for (let i = 0; i < 20; i++) frames.push(row(frame({ moveX: 1 })));
+  // Charged upward Strike.
+  frames.push(
+    row(frame({ moveX: 1, moveY: 1, strikeHeld: true, strikePressed: true })),
+  );
+  for (let i = 0; i < 10; i++) {
+    frames.push(row(frame({ moveX: 1, moveY: 1, strikeHeld: true })));
+  }
+  frames.push(row(frame({ moveX: 1, moveY: 1, strikeReleased: true })));
   // Let the ball fly.
-  for (let i = 0; i < 40; i++) frames.push([EMPTY_INPUT, EMPTY_INPUT]);
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
   return frames;
 }
 
@@ -260,6 +264,123 @@ test("playReplay hash equals live hash for a scripted match start path", () => {
   expect(sim2.hashState()).toBe(liveHash);
 });
 
+// ── Replay with Practice Bot slot: hash is stable across runs ───────────────
+
+/**
+ * Build a 2v2 frame list where slots 0, 1, 2 are driven by scripted human
+ * inputs and slot 3 is driven by samplePracticeBotInput (a Practice Bot).
+ * Recording bot outputs into the replay and replaying them must be
+ * deterministic (same hash on two independent playbacks).
+ */
+function buildBotReplayFrames(): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  // Create a sim just to drive the bot decisions from authoritative state.
+  const driveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 8888,
+    activeSlots: [0, 1, 2, 3],
+  });
+
+  const emptyRow = (): InputFrame[] => {
+    const r: InputFrame[] = [];
+    r[0] = EMPTY_INPUT;
+    r[1] = EMPTY_INPUT;
+    r[2] = EMPTY_INPUT;
+    r[3] = EMPTY_INPUT;
+    return r;
+  };
+
+  for (let tick = 0; tick < 80; tick++) {
+    const row = emptyRow();
+
+    // Slot 0 human: start on tick 0, then idle.
+    if (tick === 0) {
+      row[0] = frame({ jumpPressed: true, jumpHeld: true });
+    }
+
+    // Slot 3 bot: sample from authoritative state each tick.
+    const render = driveSim.getRenderState();
+    const ballVel = driveSim.getBallVel();
+    const p3 = render.players[3];
+    if (p3) {
+      const botView: BotWorldView = {
+        tick,
+        self: { x: p3.x, y: p3.y, facing: p3.facing, grounded: p3.grounded },
+        ball: {
+          x: render.ball.x,
+          y: render.ball.y,
+          vx: ballVel.vx,
+          vy: ballVel.vy,
+        },
+      };
+      row[3] = samplePracticeBotInput(3, botView, DEFAULT_CONFIG);
+    }
+
+    frames.push(row);
+    driveSim.step(row);
+  }
+
+  return frames;
+}
+
+test("replay with Practice Bot slot: playback is deterministic across two runs", () => {
+  const frames = buildBotReplayFrames();
+  const seed = 8888;
+
+  // Run #1.
+  const sim1 = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    activeSlots: [0, 1, 2, 3],
+  });
+  for (const row of frames) sim1.step(row);
+  const hash1 = sim1.hashState();
+
+  // Run #2 (independent).
+  const sim2 = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    activeSlots: [0, 1, 2, 3],
+  });
+  for (const row of frames) sim2.step(row);
+  const hash2 = sim2.hashState();
+
+  expect(hash1).toBe(hash2);
+});
+
+test("replay with Practice Bot slot: recorded frames replay to the same hash as live capture", () => {
+  const frames = buildBotReplayFrames();
+  const seed = 8888;
+
+  // Replay using a ReplayData (recordFrame path).
+  const replay = createReplay(seed);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    activeSlots: [0, 1, 2, 3],
+  });
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  // Play back the recorded frames through a fresh sim.
+  const replaySim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    activeSlots: [0, 1, 2, 3],
+  });
+  for (const row of replay.inputFrames) replaySim.step(row);
+  expect(replaySim.hashState()).toBe(liveHash);
+});
+
 // ── getDebugColliders() returns expected shapes ──────────────────────────────
 
 test("getDebugColliders() returns arena boxes + player/ball + Bell art and hit-zones", () => {
@@ -272,11 +393,12 @@ test("getDebugColliders() returns arena boxes + player/ball + Bell art and hit-z
   const arenaBoxes = shapes.filter((s) => s.label.startsWith("arena"));
   expect(arenaBoxes).toHaveLength(FLAT_DOJO.colliders.length);
 
-  // Player boxes — one per slot.
+  // Player boxes — one per active slot. newSim() uses the default 1v1 template
+  // [0, 2] (2 active slots), not all 4 spawns in FLAT_DOJO.playerSpawns.
   const playerBoxes = shapes.filter(
     (s) => s.label.startsWith("player[") && s.kind === "box",
   );
-  expect(playerBoxes).toHaveLength(FLAT_DOJO.playerSpawns.length);
+  expect(playerBoxes).toHaveLength(2); // activeSlots [0, 2] → 2 active players
 
   // Ball circle.
   expect(shapes.some((s) => s.label === "ball" && s.kind === "circle")).toBe(

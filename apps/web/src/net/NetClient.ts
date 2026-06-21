@@ -1,4 +1,4 @@
-import type { MatchClosed, Slot } from "@bb/protocol";
+import type { MatchClosed, PlayerSlotId, Slot } from "@bb/protocol";
 // @colyseus/sdk 0.17 exports the class as both `Client` (alias) and `ColyseusSDK`
 import { Client, type Room } from "@colyseus/sdk";
 import { SERVER_URL } from "./config";
@@ -11,11 +11,22 @@ export type FailClosedCallback = (
 export class NetClient {
   private client = new Client(SERVER_URL);
   room!: Room;
+  /** @deprecated Use PlayerSlotId. */
   slot: Slot = 0;
+  /** The client's assigned Player Slot id (same value as slot, wider type). */
+  get playerSlotId(): PlayerSlotId {
+    return this.slot as PlayerSlotId;
+  }
 
-  /** Create a new room and return its roomId. */
-  async create(): Promise<string> {
-    this.room = await this.client.create("match");
+  /**
+   * Create a new room and return its roomId.
+   *
+   * @param options  Optional room creation options forwarded to the server.
+   *                 `botSlots` (Phase 3): Player Slot ids to fill with Practice Bots.
+   *                 Temporary option — replaced by the launch manifest in Phase 5.
+   */
+  async create(options?: { botSlots?: number[] }): Promise<string> {
+    this.room = await this.client.create("match", options ?? {});
     return this.room.roomId;
   }
 
