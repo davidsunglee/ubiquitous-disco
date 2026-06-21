@@ -16,6 +16,7 @@
 
 import { beforeAll, expect, test } from "vitest";
 import {
+  type BotWorldView,
   createReplay,
   createSimulation,
   DEFAULT_CONFIG,
@@ -25,6 +26,7 @@ import {
   initSim,
   playReplay,
   recordFrame,
+  samplePracticeBotInput,
 } from "../index";
 
 beforeAll(async () => {
@@ -260,6 +262,123 @@ test("playReplay hash equals live hash for a scripted match start path", () => {
   });
   for (const row of replay.inputFrames) sim2.step(row);
   expect(sim2.hashState()).toBe(liveHash);
+});
+
+// ── Replay with Practice Bot slot: hash is stable across runs ───────────────
+
+/**
+ * Build a 2v2 frame list where slots 0, 1, 2 are driven by scripted human
+ * inputs and slot 3 is driven by samplePracticeBotInput (a Practice Bot).
+ * Recording bot outputs into the replay and replaying them must be
+ * deterministic (same hash on two independent playbacks).
+ */
+function buildBotReplayFrames(): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  // Create a sim just to drive the bot decisions from authoritative state.
+  const driveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 8888,
+    activeSlots: [0, 1, 2, 3],
+  });
+
+  const emptyRow = (): InputFrame[] => {
+    const r: InputFrame[] = [];
+    r[0] = EMPTY_INPUT;
+    r[1] = EMPTY_INPUT;
+    r[2] = EMPTY_INPUT;
+    r[3] = EMPTY_INPUT;
+    return r;
+  };
+
+  for (let tick = 0; tick < 80; tick++) {
+    const row = emptyRow();
+
+    // Slot 0 human: start on tick 0, then idle.
+    if (tick === 0) {
+      row[0] = frame({ jumpPressed: true, jumpHeld: true });
+    }
+
+    // Slot 3 bot: sample from authoritative state each tick.
+    const render = driveSim.getRenderState();
+    const ballVel = driveSim.getBallVel();
+    const p3 = render.players[3];
+    if (p3) {
+      const botView: BotWorldView = {
+        tick,
+        self: { x: p3.x, y: p3.y, facing: p3.facing, grounded: p3.grounded },
+        ball: {
+          x: render.ball.x,
+          y: render.ball.y,
+          vx: ballVel.vx,
+          vy: ballVel.vy,
+        },
+      };
+      row[3] = samplePracticeBotInput(3, botView, DEFAULT_CONFIG);
+    }
+
+    frames.push(row);
+    driveSim.step(row);
+  }
+
+  return frames;
+}
+
+test("replay with Practice Bot slot: playback is deterministic across two runs", () => {
+  const frames = buildBotReplayFrames();
+  const seed = 8888;
+
+  // Run #1.
+  const sim1 = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    activeSlots: [0, 1, 2, 3],
+  });
+  for (const row of frames) sim1.step(row);
+  const hash1 = sim1.hashState();
+
+  // Run #2 (independent).
+  const sim2 = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    activeSlots: [0, 1, 2, 3],
+  });
+  for (const row of frames) sim2.step(row);
+  const hash2 = sim2.hashState();
+
+  expect(hash1).toBe(hash2);
+});
+
+test("replay with Practice Bot slot: recorded frames replay to the same hash as live capture", () => {
+  const frames = buildBotReplayFrames();
+  const seed = 8888;
+
+  // Replay using a ReplayData (recordFrame path).
+  const replay = createReplay(seed);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    activeSlots: [0, 1, 2, 3],
+  });
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  // Play back the recorded frames through a fresh sim.
+  const replaySim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    activeSlots: [0, 1, 2, 3],
+  });
+  for (const row of replay.inputFrames) replaySim.step(row);
+  expect(replaySim.hashState()).toBe(liveHash);
 });
 
 // ── getDebugColliders() returns expected shapes ──────────────────────────────

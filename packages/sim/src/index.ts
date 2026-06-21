@@ -8,6 +8,8 @@ export type {
   ColliderDef,
 } from "./arena";
 export { FLAT_DOJO } from "./arena";
+export type { BotWorldView } from "./bot/practiceBot";
+export { samplePracticeBotInput } from "./bot/practiceBot";
 export type {
   BallConfig,
   CombatConfig,

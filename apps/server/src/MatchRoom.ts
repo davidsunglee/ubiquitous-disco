@@ -7,6 +7,7 @@ import {
   type WorldSnapshot,
 } from "@bb/protocol";
 import {
+  type BotWorldView,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
@@ -17,6 +18,11 @@ import {
 import { type Client, Room } from "@colyseus/core";
 import { FixedStepAccumulator } from "./fixedStep";
 import { InputBuffer } from "./inputBuffer";
+import {
+  botSource,
+  humanSource,
+  type SlotInputSource,
+} from "./slotInputSource";
 
 // 30Hz tick → 15Hz snapshot
 const SNAPSHOT_EVERY = 2;
@@ -35,14 +41,22 @@ export class MatchRoom extends Room {
   /** Set to true once disconnect() has been called so double-dispose is avoided. */
   private roomDisposed = false;
 
-  // Authoritative sim + buffers (initialised in onCreate after initSim() is awaited)
+  // Authoritative sim + sources (initialised in onCreate after initSim() is awaited)
   private sim!: ReturnType<typeof createSimulation>;
-  /** Input buffer per ACTIVE human slot, keyed by Player Slot id. */
+  /**
+   * Input buffer per ACTIVE human slot, keyed by Player Slot id.
+   * Only human slots have buffers; bot slots go through botSource directly.
+   */
   private buffers = new Map<PlayerSlotId, InputBuffer>();
+  /**
+   * Input source per ACTIVE slot (human or bot), keyed by Player Slot id.
+   * tickOnce() calls source.take(view) uniformly for all slots.
+   */
+  private sources = new Map<PlayerSlotId, SlotInputSource>();
   private stepClock = new FixedStepAccumulator(FIXED_STEP_MS);
   private serverTick = 0;
 
-  onCreate(): void {
+  onCreate(options?: { botSlots?: PlayerSlotId[] }): void {
     // Construct the simulation here (not as a class field) so that Rapier WASM
     // is guaranteed to have been initialised via initSim() in index.ts before
     // any room can be created.
@@ -52,12 +66,25 @@ export class MatchRoom extends Room {
       seed: 1234,
       activeSlots: this.activeSlots,
     });
-    for (const s of this.activeSlots) this.buffers.set(s, new InputBuffer());
 
-    // Register PlayerInput handler.
+    // Build input sources: bot for declared bot slots, human (buffered) for the rest.
+    const botSlots = new Set<PlayerSlotId>(options?.botSlots ?? []);
+    for (const s of this.activeSlots) {
+      if (botSlots.has(s)) {
+        this.sources.set(s, botSource(s, DEFAULT_CONFIG));
+      } else {
+        const buf = new InputBuffer();
+        this.buffers.set(s, buf);
+        this.sources.set(s, humanSource(buf));
+      }
+    }
+
+    // Register PlayerInput handler — ignore frames for bot slots.
     this.onMessage("PlayerInput", (client, msg: PlayerInput) => {
       const s = this.slot(client);
-      this.buffers.get(s)?.push(msg.frames);
+      if (this.sources.get(s)?.isHuman) {
+        this.buffers.get(s)?.push(msg.frames);
+      }
     });
 
     // Fixed-step authoritative loop at 30Hz.
@@ -81,15 +108,58 @@ export class MatchRoom extends Room {
     this.patchRate = 0;
   }
 
+  private buildBotWorldView(): {
+    tick: number;
+    ball: { x: number; y: number; vx: number; vy: number };
+    selves: (BotWorldView["self"] | undefined)[];
+  } {
+    const render = this.sim.getRenderState();
+    const ballVel = this.sim.getBallVel();
+    const selves: (BotWorldView["self"] | undefined)[] = [];
+    for (const s of this.activeSlots) {
+      const p = render.players[s];
+      if (p) {
+        selves[s] = {
+          x: p.x,
+          y: p.y,
+          facing: p.facing,
+          grounded: p.grounded,
+        };
+      }
+    }
+    return {
+      tick: this.serverTick,
+      ball: {
+        x: render.ball.x,
+        y: render.ball.y,
+        vx: ballVel.vx,
+        vy: ballVel.vy,
+      },
+      selves,
+    };
+  }
+
   private tickOnce(): void {
-    // Build the per-slot input row from active-slot sources. Inactive slots are
-    // holes; the sim guards them. (Phase 3 swaps buffer.take() for SlotInputSource.)
+    // Build per-slot BotWorldView from current authoritative state (before stepping).
+    const worldView = this.buildBotWorldView();
+
+    // Build the per-slot input row from slot sources. Bot slots call
+    // samplePracticeBotInput; human slots pull from the InputBuffer.
     const inputRow: InputFrame[] = [];
     const lastAckedSeq: AckBySlot = [0, 0, 0, 0];
     for (const s of this.activeSlots) {
-      const taken = this.buffers.get(s)?.take();
-      inputRow[s] = taken?.input ?? EMPTY_INPUT;
-      lastAckedSeq[s] = this.buffers.get(s)?.lastAckedSeq ?? 0;
+      const src = this.sources.get(s);
+      if (!src) continue;
+      const self = worldView.selves[s];
+      const view: BotWorldView = {
+        tick: worldView.tick,
+        ball: worldView.ball,
+        // Provide a neutral self-view if the slot somehow has no render state.
+        self: self ?? { x: 0, y: 0, facing: 1, grounded: false },
+      };
+      const taken = src.take(view);
+      inputRow[s] = taken.input ?? EMPTY_INPUT;
+      lastAckedSeq[s] = src.lastAckedSeq; // bot → 0
     }
     this.sim.step(inputRow);
     this.serverTick += 1;
@@ -118,14 +188,22 @@ export class MatchRoom extends Room {
   }
 
   onJoin(client: Client): void {
-    // Assign the next unoccupied active slot in template order.
+    // Assign the next unoccupied HUMAN active slot in template order.
+    // Bot slots are pre-configured and skipped during join.
     const taken = new Set(this.slotOf.values());
-    const unoccupied = this.activeSlots.find((s) => !taken.has(s));
-    // biome-ignore lint/style/noNonNullAssertion: activeSlots is always non-empty (MODE_1V1 has 2 entries)
+    const unoccupied = this.activeSlots.find(
+      (s) => !taken.has(s) && this.sources.get(s)?.isHuman,
+    );
+    // biome-ignore lint/style/noNonNullAssertion: activeSlots always has at least one human slot (MODE_2V2 has 4)
     const slot: PlayerSlotId = unoccupied ?? this.activeSlots[0]!;
     this.slotOf.set(client.sessionId, slot);
 
-    const full = this.slotOf.size === this.activeSlots.length;
+    // "full" when all human slots are occupied (bot slots don't count as clients).
+    const humanSlotCount = [...this.activeSlots].filter(
+      (s) => this.sources.get(s)?.isHuman,
+    ).length;
+    const full = this.slotOf.size === humanSlotCount;
+
     // Tell this client its own slot assignment.
     // Phase 1 note: each client gets its OWN slot — per-recipient send, not broadcast.
     client.send("RoomReady", {
@@ -188,6 +266,11 @@ export class MatchRoom extends Room {
   /** Expose buffers for testing. */
   get inputBuffers(): Map<PlayerSlotId, InputBuffer> {
     return this.buffers;
+  }
+
+  /** Expose sources for testing. */
+  get inputSources(): Map<PlayerSlotId, SlotInputSource> {
+    return this.sources;
   }
 
   /** Expose sim for testing. */

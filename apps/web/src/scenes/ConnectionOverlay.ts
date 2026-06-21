@@ -141,16 +141,21 @@ export class ConnectionOverlay {
    * @param onSessionStart Called once create/join succeeds (room connected, but
    *                       possibly awaiting an opponent) so GameScene can freeze
    *                       the local background sim.
+   * @param createOptions  Phase 3: optional room creation options (e.g. botSlots)
+   *                       forwarded to the server. Temporary — replaced in Phase 5
+   *                       by the launch manifest.
    */
   wire(
     net: NetClient,
     canvas: HTMLCanvasElement,
     onRoomFull?: (slot: Slot, slots?: PlayerSlotId[]) => void,
     onSessionStart?: () => void,
+    createOptions?: { botSlots?: number[] },
   ): void {
     this.net = net;
     this.onRoomFull = onRoomFull ?? null;
     this.onSessionStart = onSessionStart ?? null;
+    this.createOptions = createOptions ?? null;
 
     this.createBtn.addEventListener("click", () => {
       void this.handleCreate();
@@ -184,13 +189,15 @@ export class ConnectionOverlay {
   private onRoomFull: ((slot: Slot, slots?: PlayerSlotId[]) => void) | null =
     null;
   private onSessionStart: (() => void) | null = null;
+  /** Phase 3: options forwarded to net.create() (e.g. botSlots). */
+  private createOptions: { botSlots?: number[] } | null = null;
 
   private async handleCreate(): Promise<void> {
     if (!this.net) return;
     const net = this.net;
     this.setStatus("connecting");
     try {
-      const roomId = await net.create();
+      const roomId = await net.create(this.createOptions ?? undefined);
       this.onSessionStart?.();
       this.roomIdEl.textContent = roomId;
       this.setStatus("connected");

@@ -219,6 +219,14 @@ export class GameScene extends Phaser.Scene {
     this.netClient = new NetClient();
     this.connectionOverlay = new ConnectionOverlay();
     this.connectionOverlay.mount();
+
+    // Phase 3: read optional ?botSlot=N URL parameter(s) to fill slots with
+    // Practice Bots. Temporary — replaced by the launch manifest in Phase 5.
+    const urlParams = new URLSearchParams(window.location.search);
+    const botSlotParam = urlParams.get("botSlot");
+    const createOptions =
+      botSlotParam !== null ? { botSlots: [Number(botSlotParam)] } : undefined;
+
     this.connectionOverlay.wire(
       this.netClient,
       this.game.canvas,
@@ -235,6 +243,7 @@ export class GameScene extends Phaser.Scene {
         this.awaitingOpponent = true;
         this.startPromptEl.style.display = "none";
       },
+      createOptions,
     );
 
     // Launch the HUD in parallel (it renders on top without replacing GameScene).

@@ -18,9 +18,15 @@ export class NetClient {
     return this.slot as PlayerSlotId;
   }
 
-  /** Create a new room and return its roomId. */
-  async create(): Promise<string> {
-    this.room = await this.client.create("match");
+  /**
+   * Create a new room and return its roomId.
+   *
+   * @param options  Optional room creation options forwarded to the server.
+   *                 `botSlots` (Phase 3): Player Slot ids to fill with Practice Bots.
+   *                 Temporary option — replaced by the launch manifest in Phase 5.
+   */
+  async create(options?: { botSlots?: number[] }): Promise<string> {
+    this.room = await this.client.create("match", options ?? {});
     return this.room.roomId;
   }
 
