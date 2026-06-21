@@ -60,7 +60,7 @@ export class ConnectionOverlay {
     this.root.appendChild(panel);
 
     const title = document.createElement("div");
-    title.textContent = "Networked 1v1";
+    title.textContent = "Networked 2v2 (direct)";
     title.style.cssText = "color:#fff;font-size:16px;font-weight:bold;";
     panel.appendChild(title);
 

@@ -50,11 +50,21 @@ export class Reconciler {
   /** The currently displayed (possibly smoothed) render state. */
   private displayedRender: RenderState | null = null;
 
+  /** All non-local active slots (for driving remotes during replay). */
+  private readonly remoteSlots: number[];
+
+  /** Per-remote interpolation buffers (keyed by slot id). */
+  private readonly interpBuffers: Map<number, InterpolationBuffer>;
+
+  /**
+   * Backwards-compat: accept either the legacy (single remoteSlot + single
+   * InterpolationBuffer) or the new (remoteSlots[] + Map) form.
+   */
   constructor(
     private readonly sim: Simulation,
     private readonly localSlot: number,
-    private readonly remoteSlot: number,
-    private readonly interp: InterpolationBuffer,
+    remoteSlotOrSlots: number | number[],
+    interpOrBuffers: InterpolationBuffer | Map<number, InterpolationBuffer>,
     private readonly onCorrectedState: (
       prev: RenderState,
       cur: RenderState,
@@ -62,6 +72,22 @@ export class Reconciler {
     cfg: Partial<CorrectionConfig> = {},
   ) {
     this.cfg = { ...DEFAULT_CORRECTION_CONFIG, ...cfg };
+
+    if (Array.isArray(remoteSlotOrSlots)) {
+      this.remoteSlots = remoteSlotOrSlots;
+    } else {
+      this.remoteSlots = [remoteSlotOrSlots];
+    }
+
+    if (interpOrBuffers instanceof Map) {
+      this.interpBuffers = interpOrBuffers;
+    } else {
+      // Legacy single-buffer: wrap in a Map keyed to the single remote slot.
+      this.interpBuffers = new Map();
+      for (const s of this.remoteSlots) {
+        this.interpBuffers.set(s, interpOrBuffers);
+      }
+    }
   }
 
   /** Replace the correction config at runtime (for HUD slider tuning). */
@@ -124,8 +150,8 @@ export class Reconciler {
     const ackedSeq = snap.lastAckedSeq[this.localSlot] ?? 0;
     this.pending = this.pending.filter((p) => p.seq > ackedSeq);
 
-    // 3. Replay unacked pending inputs in seq order, driving the remote slot
-    //    from the tick-indexed interpolation buffer (Design 0d).
+    // 3. Replay unacked pending inputs in seq order, driving each remote slot
+    //    from its tick-indexed interpolation buffer (Design 0d).
     //
     //    The interp buffer is keyed by the server's tick clock, so the sample
     //    tick MUST be derived from snap.serverTick — NOT from the input's
@@ -137,23 +163,28 @@ export class Reconciler {
     let replayTick = snap.serverTick;
     for (const p of this.pending) {
       replayTick += 1;
-      const remotePose = this.interp.positionAtTick(
-        replayTick - this.cfg.interpDelayTicks,
-      );
-      if (remotePose) {
-        this.sim.setSlotKinematicPosition(
-          this.remoteSlot,
-          remotePose.x,
-          remotePose.y,
-          remotePose.facing,
-        );
+      // Drive each remote slot kinematically from its own buffer.
+      for (const r of this.remoteSlots) {
+        const remotePose = this.interpBuffers
+          .get(r)
+          ?.positionAtTick(replayTick - this.cfg.interpDelayTicks);
+        if (remotePose) {
+          this.sim.setSlotKinematicPosition(
+            r,
+            remotePose.x,
+            remotePose.y,
+            remotePose.facing,
+          );
+        }
       }
 
-      // Build the two-slot input array: local slot gets the pending input,
-      // remote slot gets EMPTY_INPUT (position is driven kinematically above).
+      // Build the input array: local slot gets the pending input,
+      // all remote slots get EMPTY_INPUT (positions driven kinematically above).
       const frames: InputFrame[] = [];
       frames[this.localSlot] = p.input;
-      frames[this.remoteSlot] = EMPTY_INPUT;
+      for (const r of this.remoteSlots) {
+        frames[r] = EMPTY_INPUT;
+      }
       this.sim.step(frames);
     }
 

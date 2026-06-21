@@ -22,16 +22,16 @@ import { InputBuffer } from "./inputBuffer";
 const SNAPSHOT_EVERY = 2;
 const FIXED_STEP_MS = 1000 / DEFAULT_CONFIG.tickHz; // 33.33ms
 
-const MODE_1V1: PlayerSlotId[] = [0, 2];
+const MODE_2V2: PlayerSlotId[] = [0, 1, 2, 3];
 
 export class MatchRoom extends Room {
-  maxClients = 2;
+  maxClients = 4;
   // patchRate is set to 0 inside onCreate(), AFTER setSimulationInterval — not
   // as a class field. See the comment at that assignment for why the ordering
   // matters (it avoids an orphaned 60Hz clock.tick() interval).
 
   private slotOf = new Map<string, PlayerSlotId>();
-  private activeSlots: PlayerSlotId[] = MODE_1V1;
+  private activeSlots: PlayerSlotId[] = MODE_2V2;
   /** Set to true once disconnect() has been called so double-dispose is avoided. */
   private roomDisposed = false;
 

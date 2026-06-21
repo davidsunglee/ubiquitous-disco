@@ -48,10 +48,13 @@ import { type HudBridge, hudBridge } from "./HudScene";
 import { OrientationOverlay } from "./OrientationOverlay";
 import { bellFromScoreDelta } from "./scoreFeedback";
 
-// Distinct colors for slot 0 and slot 1 (grounded / airborne variants).
+// Distinct colors per player slot (grounded / airborne variants).
+// Slots 0/1 = Team 0 (blue shades, left side); Slots 2/3 = Team 1 (orange/red shades, right side).
 const SLOT_COLORS = [
-  { grounded: 0x33aaff, air: 0x55ccff }, // P1: blue
-  { grounded: 0xff7755, air: 0xff9977 }, // P2: orange
+  { grounded: 0x2288ff, air: 0x55ccff }, // slot 0 — Team 0
+  { grounded: 0x33aaff, air: 0x88ddff }, // slot 1 — Team 0
+  { grounded: 0xff6644, air: 0xff9977 }, // slot 2 — Team 1
+  { grounded: 0xff8855, air: 0xffbb99 }, // slot 3 — Team 1
 ];
 
 export class GameScene extends Phaser.Scene {
@@ -581,16 +584,13 @@ export class GameScene extends Phaser.Scene {
       // Phase 3: use predicted render state with smooth interpolation.
       const alpha = this.netLoop.renderAlpha;
 
-      // Override the remote player's render position from the interpolation
-      // buffer so it moves smoothly independent of the prediction sim.
-      // We do this by patching prev/cur just before drawing.
-      // Phase 1: single shared buffer for the one remote in 1v1.
-      const remoteSample = this.netLoop.sampleRemoteRender();
-      if (remoteSample !== null) {
-        // For each remote slot, patch its position from the interp buffer.
-        // Phase 1: all remotes share the single interpBuffer sample.
-        for (const remoteSlot of this.netLoop.getRemoteSlots()) {
-          // Patch the current render state for the remote slot.
+      // Override each remote player's render position from its own interpolation
+      // buffer so all remotes move smoothly independent of the prediction sim.
+      // Each remote slot has its own buffer (Phase 2+ multi-remote support).
+      for (const remoteSlot of this.netLoop.getRemoteSlots()) {
+        const remoteSample = this.netLoop.sampleRemoteRender(remoteSlot);
+        if (remoteSample !== null) {
+          // Patch cur for this remote slot.
           if (this.cur.players[remoteSlot]) {
             this.cur = {
               ...this.cur,

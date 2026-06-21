@@ -105,70 +105,77 @@ test("first client joins as slot 0", () => {
   expect((ready?.payload as { slot: number }).slot).toBe(0);
 });
 
-test("second client joins as slot 2 (1v1 [0,2] template)", () => {
+test("clients join as slots 0,1,2,3 in order (2v2 [0,1,2,3] template)", () => {
   const room = makeRoom();
   const clientA = makeClient("session-a");
   const clientB = makeClient("session-b");
-  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  const clientC = makeClient("session-c");
+  const clientD = makeClient("session-d");
+  (room as unknown as { clients: unknown[] }).clients.push(
+    clientA,
+    clientB,
+    clientC,
+    clientD,
+  );
 
   room.onJoin(clientA as never);
   room.onJoin(clientB as never);
+  room.onJoin(clientC as never);
+  room.onJoin(clientD as never);
 
   expect(room.slotForSession("session-a")).toBe(0);
-  expect(room.slotForSession("session-b")).toBe(2);
+  expect(room.slotForSession("session-b")).toBe(1);
+  expect(room.slotForSession("session-c")).toBe(2);
+  expect(room.slotForSession("session-d")).toBe(3);
 });
 
-test("both clients receive full=true when second joins", () => {
+test("all four clients receive full=true when fourth joins", () => {
   const room = makeRoom();
-  const clientA = makeClient("session-a");
-  const clientB = makeClient("session-b");
-  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  const clients = ["a", "b", "c", "d"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
+  for (const c of clients) room.onJoin(c as never);
 
-  room.onJoin(clientA as never);
-  room.onJoin(clientB as never);
-
-  // After the second join, both clients should have received a RoomReady with full:true
-  const aFull = clientA.messages.filter(
-    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
-  );
-  const bFull = clientB.messages.filter(
-    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
-  );
-  expect(aFull.length).toBeGreaterThan(0);
-  expect(bFull.length).toBeGreaterThan(0);
+  // After the fourth join, all clients should have received a RoomReady with full:true
+  for (const c of clients) {
+    const full = c.messages.filter(
+      (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
+    );
+    expect(full.length).toBeGreaterThan(0);
+  }
 });
 
-test("both clients receive their OWN slot in full=true RoomReady", () => {
+test("all four clients receive their OWN slot in full=true RoomReady", () => {
   const room = makeRoom();
-  const clientA = makeClient("session-a");
-  const clientB = makeClient("session-b");
-  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  const clients = ["a", "b", "c", "d"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
+  for (const c of clients) room.onJoin(c as never);
 
-  room.onJoin(clientA as never);
-  room.onJoin(clientB as never);
-
-  // A should receive slot 0 in the full RoomReady, B should receive slot 2 (1v1 [0,2] template).
-  const aFullMsgs = clientA.messages.filter(
-    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
-  );
-  const bFullMsgs = clientB.messages.filter(
-    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
-  );
-  expect((aFullMsgs[0]?.payload as { slot: number })?.slot).toBe(0);
-  expect((bFullMsgs[0]?.payload as { slot: number })?.slot).toBe(2);
+  // Each client should receive its own slot (0,1,2,3) in the full=true RoomReady.
+  const expectedSlots = [0, 1, 2, 3];
+  clients.forEach((c, i) => {
+    const fullMsgs = c.messages.filter(
+      (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
+    );
+    expect((fullMsgs[0]?.payload as { slot: number })?.slot).toBe(
+      expectedSlots[i],
+    );
+  });
 });
 
-test("slot count reflects connected clients", () => {
+test("slot count reflects connected clients (up to four)", () => {
   const room = makeRoom();
-  const clientA = makeClient("session-a");
-  const clientB = makeClient("session-b");
-  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  const clients = ["a", "b", "c", "d"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
 
   expect(room.slotCount).toBe(0);
-  room.onJoin(clientA as never);
+  room.onJoin(clients[0] as never);
   expect(room.slotCount).toBe(1);
-  room.onJoin(clientB as never);
+  room.onJoin(clients[1] as never);
   expect(room.slotCount).toBe(2);
+  room.onJoin(clients[2] as never);
+  expect(room.slotCount).toBe(3);
+  room.onJoin(clients[3] as never);
+  expect(room.slotCount).toBe(4);
 });
 
 test("slot removed on leave", () => {
@@ -182,16 +189,16 @@ test("slot removed on leave", () => {
   room.onLeave(clientA as never);
 
   expect(room.slotForSession("session-a")).toBeUndefined();
-  expect(room.slotForSession("session-b")).toBe(2);
+  expect(room.slotForSession("session-b")).toBe(1);
   expect(room.slotCount).toBe(1);
 });
 
-test("maxClients is 2", () => {
+test("maxClients is 4", () => {
   const room = makeRoom();
-  expect(room.maxClients).toBe(2);
+  expect(room.maxClients).toBe(4);
 });
 
-test("RoomReady includes slots=[0,2] (1v1 template)", () => {
+test("RoomReady includes slots=[0,1,2,3] (2v2 template)", () => {
   const room = makeRoom();
   const clientA = makeClient("session-a");
   (room as unknown as { clients: unknown[] }).clients.push(clientA);
@@ -200,22 +207,21 @@ test("RoomReady includes slots=[0,2] (1v1 template)", () => {
 
   const ready = clientA.messages.find((m) => m.type === "RoomReady");
   expect(ready).toBeDefined();
-  expect((ready?.payload as { slots: number[] }).slots).toEqual([0, 2]);
+  expect((ready?.payload as { slots: number[] }).slots).toEqual([0, 1, 2, 3]);
 });
 
-test("full=true RoomReady includes slots=[0,2]", () => {
+test("full=true RoomReady includes slots=[0,1,2,3]", () => {
   const room = makeRoom();
-  const clientA = makeClient("session-a");
-  const clientB = makeClient("session-b");
-  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  const clients = ["a", "b", "c", "d"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
+  for (const c of clients) room.onJoin(c as never);
 
-  room.onJoin(clientA as never);
-  room.onJoin(clientB as never);
-
-  const aFull = clientA.messages.filter(
+  const aFull = (clients[0]?.messages ?? []).filter(
     (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
   );
-  expect((aFull[0]?.payload as { slots: number[] })?.slots).toEqual([0, 2]);
+  expect((aFull[0]?.payload as { slots: number[] })?.slots).toEqual([
+    0, 1, 2, 3,
+  ]);
 });
 
 // ── Phase 2: InputBuffer ──────────────────────────────────────────────────────
@@ -357,16 +363,20 @@ test("authoritative sim: sim steps produce valid authoritative state", () => {
   const room = makeRoom();
   const sim = room.simulation;
 
-  // Step the sim forward (past preRound start). The 1v1 [0,2] template uses
-  // slot 0 and slot 2; use a sparse array so slot 0 gets jumpPressed.
+  // Step the sim forward (past preRound start). The 2v2 [0,1,2,3] template uses
+  // all four slots; use a sparse array so slot 0 gets jumpPressed to start.
   const startFrame = f({ jumpPressed: true, jumpHeld: true });
   const inputRow: (typeof EMPTY_INPUT)[] = [];
   inputRow[0] = startFrame;
+  inputRow[1] = EMPTY_INPUT;
   inputRow[2] = EMPTY_INPUT;
+  inputRow[3] = EMPTY_INPUT;
   sim.step(inputRow);
   const emptyRow: (typeof EMPTY_INPUT)[] = [];
   emptyRow[0] = EMPTY_INPUT;
+  emptyRow[1] = EMPTY_INPUT;
   emptyRow[2] = EMPTY_INPUT;
+  emptyRow[3] = EMPTY_INPUT;
   for (let i = 0; i < 5; i++) sim.step(emptyRow);
 
   const match = sim.getMatchState();
@@ -395,7 +405,7 @@ test("snapshot cadence: WorldSnapshot broadcast every SNAPSHOT_EVERY ticks carri
   const payload = snapshots[0]?.payload as {
     lastAckedSeq: [number, number, number, number];
   };
-  // 1v1 [0,2] template: slots 0 and 2 have buffers; slots 1 and 3 carry 0.
+  // 2v2 [0,1,2,3] template: all four slots have buffers; all start at 0.
   expect(payload.lastAckedSeq).toEqual([0, 0, 0, 0]);
 });
 
