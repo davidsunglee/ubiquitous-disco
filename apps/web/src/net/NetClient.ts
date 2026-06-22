@@ -36,16 +36,19 @@ export class NetClient {
   }
 
   /**
-   * Join (or create) the match for a launch (Phase 5). The server filters rooms
-   * by `launchId`, so all humans of one launch land in the same room. The room
-   * validates `joinToken` against the worker and maps the client to its claimed
-   * Player Slot.
+   * Join the match for a launch (Phase 5). The first launch join may create the
+   * MatchRoom; reconnect attempts must join only an existing MatchRoom so stale
+   * tokens cannot create a new room after grace expiry.
    */
-  async joinLaunch(launchId: string, joinToken: string): Promise<void> {
-    this.room = await this.client.joinOrCreate("match", {
-      launchId,
-      joinToken,
-    });
+  async joinLaunch(
+    launchId: string,
+    joinToken: string,
+    options: { create?: boolean } = { create: true },
+  ): Promise<void> {
+    const joinOptions = { launchId, joinToken };
+    this.room = options.create
+      ? await this.client.joinOrCreate("match", joinOptions)
+      : await this.client.join("match", joinOptions);
   }
 
   /** Register a typed message handler on the connected room. */

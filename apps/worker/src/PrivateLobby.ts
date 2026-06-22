@@ -170,19 +170,23 @@ export class PrivateLobby extends Server<Env> {
     this.connToPlayer.delete(connection.id);
 
     // Mark the player as absent (keep their seat — they may reconnect).
+    let markedAbsent = false;
     const slotId = this.playerToSlot.get(playerId);
     if (slotId !== undefined) {
       const seat = this.seats.get(slotId);
       if (seat) {
+        if (seat.connId !== connection.id) return;
         seat.connId = null;
+        markedAbsent = true;
         this.sendLobbyStateToAll();
       }
     }
 
     // Phase 6 (two-stage): if the lobby is not locked, record when this
     // player went absent and schedule the next sweep alarm.
-    if (!this.locked) {
+    if (!this.locked && markedAbsent) {
       this.absentSince.set(playerId, Date.now());
+      this.hostTransferred.delete(playerId);
       this.scheduleNextAlarm();
     }
   }
@@ -214,6 +218,21 @@ export class PrivateLobby extends Server<Env> {
     for (const [playerId, since] of this.absentSince) {
       const elapsed = now - since;
 
+      // Stage 1: host transfer — only if this player is still the current
+      // host and we haven't already transferred for this absence.
+      if (
+        elapsed >= hostTransferMs &&
+        playerId === this.hostPlayerId &&
+        !this.hostTransferred.has(playerId)
+      ) {
+        const newHost = this.nextPresentHost(playerId);
+        if (newHost !== null) {
+          this.hostTransferred.add(playerId);
+          this.hostPlayerId = newHost;
+          stateChanged = true;
+        }
+      }
+
       // Stage 2: seat expiry — free the seat if absent long enough.
       if (elapsed >= seatExpiryMs) {
         const slotId = this.playerToSlot.get(playerId);
@@ -230,22 +249,6 @@ export class PrivateLobby extends Server<Env> {
           this.hostPlayerId = this.nextPresentHost(null);
         }
         stateChanged = true;
-        continue;
-      }
-
-      // Stage 1: host transfer — only if this player is still the current
-      // host and we haven't already transferred for this absence.
-      if (
-        elapsed >= hostTransferMs &&
-        playerId === this.hostPlayerId &&
-        !this.hostTransferred.has(playerId)
-      ) {
-        this.hostTransferred.add(playerId);
-        const newHost = this.nextPresentHost(playerId);
-        if (newHost !== null) {
-          this.hostPlayerId = newHost;
-          stateChanged = true;
-        }
       }
     }
 
@@ -280,7 +283,8 @@ export class PrivateLobby extends Server<Env> {
       // Stage 1 (only if this player is the current host and not yet transferred).
       if (
         playerId === this.hostPlayerId &&
-        !this.hostTransferred.has(playerId)
+        !this.hostTransferred.has(playerId) &&
+        this.nextPresentHost(playerId) !== null
       ) {
         const transfer = since + hostTransferMs;
         if (transfer < earliest) earliest = transfer;
@@ -325,9 +329,7 @@ export class PrivateLobby extends Server<Env> {
         // fire for this player. Re-schedule in case the earliest deadline
         // was theirs.
         this.absentSince.delete(playerId);
-        // Note: we do NOT clear hostTransferred — if ownership already
-        // transferred (Stage 1 fired), the returning player does NOT reclaim
-        // ownership; they only reclaim their slot.
+        this.hostTransferred.delete(playerId);
         this.scheduleNextAlarm();
 
         this.sendLobbyStateToAll();
@@ -356,6 +358,9 @@ export class PrivateLobby extends Server<Env> {
     };
     this.seats.set(slotId, seat);
     this.playerToSlot.set(playerId, slotId);
+
+    // A newly present human can satisfy an overdue no-target host-transfer.
+    this.scheduleNextAlarm();
 
     // Broadcast updated state to all clients (including the new one).
     this.sendLobbyStateToAll();

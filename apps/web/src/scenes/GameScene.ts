@@ -25,7 +25,11 @@ import {
   P2_KEYMAP,
 } from "../input/KeyboardAdapter";
 import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
-import { peekLaunch } from "../lobby/launchHandoff";
+import {
+  hasLaunchJoined,
+  markLaunchJoined,
+  peekLaunch,
+} from "../lobby/launchHandoff";
 import { NetClient } from "../net/NetClient";
 import { NetLoop } from "../net/NetLoop";
 import {
@@ -462,9 +466,12 @@ export class GameScene extends Phaser.Scene {
     const net = this.netClient;
     net.slot = launch.playerSlotId;
 
+    const create = !hasLaunchJoined(launch.launchId);
+
     void net
-      .joinLaunch(launch.launchId, launch.joinToken)
+      .joinLaunch(launch.launchId, launch.joinToken, { create })
       .then(() => {
+        markLaunchJoined(launch.launchId);
         net.onMessage("RoomReady", (msg) => {
           const m = msg as {
             slot: number;
@@ -523,7 +530,9 @@ export class GameScene extends Phaser.Scene {
     net.slot = launch.playerSlotId;
 
     try {
-      await net.joinLaunch(launch.launchId, launch.joinToken);
+      await net.joinLaunch(launch.launchId, launch.joinToken, {
+        create: false,
+      });
 
       // Reconnect succeeded — wire up the message handlers.
       net.onMessage("RoomReady", (msg) => {

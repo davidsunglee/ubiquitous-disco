@@ -337,11 +337,23 @@ export class MatchRoom extends Room {
     // Phase 6: check if this join is a reclaim of a reserved slot.
     const reservation = this.reservedSlots.get(claimedSlot);
     if (reservation) {
+      if (
+        reservation.launchId !== launchId ||
+        reservation.joinToken !== joinToken
+      ) {
+        client.leave();
+        return;
+      }
       // This slot was reserved (player disconnected and is within grace). Cancel
       // the grace timer and restore the human source.
       this.cancelReservation(claimedSlot);
       // Re-seat the reconnected client at their original slot.
       this.seatAndAnnounce(client, claimedSlot);
+      return;
+    }
+
+    if ([...this.slotOf.values()].includes(claimedSlot)) {
+      client.leave();
       return;
     }
 

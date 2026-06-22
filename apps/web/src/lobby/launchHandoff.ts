@@ -11,10 +11,12 @@
 import type { MatchLaunch } from "@bb/protocol";
 
 const KEY = "bb.launch";
+const JOINED_KEY = "bb.launch.joined";
 
 /** Persist the launch payload and return the match URL to navigate to. */
 export function saveLaunch(launch: MatchLaunch): void {
   sessionStorage.setItem(KEY, JSON.stringify(launch));
+  sessionStorage.removeItem(JOINED_KEY);
 }
 
 /** Read the launch payload (or null if none). Does not clear it. */
@@ -31,6 +33,19 @@ export function peekLaunch(): MatchLaunch | null {
 /** Read and clear the launch payload (single-use). */
 export function takeLaunch(): MatchLaunch | null {
   const launch = peekLaunch();
-  if (launch) sessionStorage.removeItem(KEY);
+  if (launch) {
+    sessionStorage.removeItem(KEY);
+    sessionStorage.removeItem(JOINED_KEY);
+  }
   return launch;
+}
+
+/** Mark that this launch has already completed its first room handoff. */
+export function markLaunchJoined(launchId: string): void {
+  sessionStorage.setItem(JOINED_KEY, launchId);
+}
+
+/** Return true when a retained launch must reconnect to an existing room only. */
+export function hasLaunchJoined(launchId: string): boolean {
+  return sessionStorage.getItem(JOINED_KEY) === launchId;
 }

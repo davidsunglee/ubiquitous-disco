@@ -194,6 +194,47 @@ test("onJoin rejects an invalid/duplicate claim by leaving (no seat)", async () 
   expect(room.slotCount).toBe(0);
 });
 
+test("onJoin rejects same-token replay while the original session is active", async () => {
+  const room = makeRoom();
+  const mf = manifest2v2();
+  claimImpl = async () => ({ ok: true, playerSlotId: 0, manifest: mf });
+
+  const original = makeClient("session-original");
+  const replay = makeClient("session-replay");
+  (room as unknown as { clients: unknown[] }).clients.push(original, replay);
+
+  await room.onJoin(original as never, { launchId: "L1", joinToken: "t0" });
+  await room.onJoin(replay as never, { launchId: "L1", joinToken: "t0" });
+
+  expect(replay.leftCalled).toBe(true);
+  expect(original.leftCalled).toBe(false);
+  expect(room.slotForSession("session-original")).toBe(0);
+  expect(room.slotForSession("session-replay")).toBeUndefined();
+  expect(room.slotCount).toBe(1);
+});
+
+test("onJoin rejects same-slot claim while the original session is active", async () => {
+  const room = makeRoom();
+  const mf = manifest2v2();
+  claimImpl = async () => ({ ok: true, playerSlotId: 0, manifest: mf });
+
+  const original = makeClient("session-original");
+  const intruder = makeClient("session-intruder");
+  (room as unknown as { clients: unknown[] }).clients.push(original, intruder);
+
+  await room.onJoin(original as never, { launchId: "L1", joinToken: "t0" });
+  await room.onJoin(intruder as never, {
+    launchId: "L2",
+    joinToken: "other-token",
+  });
+
+  expect(intruder.leftCalled).toBe(true);
+  expect(original.leftCalled).toBe(false);
+  expect(room.slotForSession("session-original")).toBe(0);
+  expect(room.slotForSession("session-intruder")).toBeUndefined();
+  expect(room.slotCount).toBe(1);
+});
+
 test("onJoin with no launch options uses the legacy dev/test direct-connect path", async () => {
   // No launchId/joinToken → legacy join-order seating (dev/test shortcut), NOT
   // a fail-closed leave. Builds a default 2v2 manifest (4 human slots).
@@ -415,6 +456,40 @@ test("same-slot reclaim within grace succeeds and restores human source", async 
   expect(room.slotForSession("session-a2")).toBe(0);
   // Source for slot 0 should be restored to a human source.
   expect(room.inputSources.get(0)?.isHuman).toBe(true);
+});
+
+test("reserved slot reclaim requires the exact stored launch credentials", async () => {
+  const room = makeRoom();
+  const mf = manifest2v2();
+  claimImpl = async (launchId, _joinToken) => ({
+    ok: true,
+    playerSlotId: 0,
+    manifest: { ...mf, launchId },
+  });
+
+  const original = makeClient("session-original");
+  (room as unknown as { clients: unknown[] }).clients.push(original);
+  await room.onJoin(original as never, { launchId: "L1", joinToken: "t0" });
+
+  room.onLeave(original as never);
+  expect(room.reservedSlotIds).toContain(0);
+
+  const hijack = makeClient("session-hijack");
+  (room as unknown as { clients: unknown[] }).clients.push(hijack);
+  await room.onJoin(hijack as never, { launchId: "L2", joinToken: "t-other" });
+
+  expect(hijack.leftCalled).toBe(true);
+  expect(room.slotForSession("session-hijack")).toBeUndefined();
+  expect(room.reservedSlotIds).toContain(0);
+  expect(room.isDisposed).toBe(false);
+
+  const reconnect = makeClient("session-reconnect");
+  (room as unknown as { clients: unknown[] }).clients.push(reconnect);
+  await room.onJoin(reconnect as never, { launchId: "L1", joinToken: "t0" });
+
+  expect(reconnect.leftCalled).toBe(false);
+  expect(room.slotForSession("session-reconnect")).toBe(0);
+  expect(room.reservedSlotIds).not.toContain(0);
 });
 
 test("grace expiry fail-closes with reconnect-expired", async () => {

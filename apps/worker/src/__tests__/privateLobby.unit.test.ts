@@ -847,6 +847,99 @@ test("old host reconnects after Stage 1 (transfer) — reclaims slot but NOT own
   });
 });
 
+test("stale socket close after reconnect does not mark player absent", async () => {
+  const stub = getStub(uniqueCode());
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const oldHostConn = join(instance, "conn-host-1", "host-id", "Host");
+    join(instance, "conn-guest", "guest-id", "Guest");
+
+    const newHostConn = join(instance, "conn-host-2", "host-id", "Host");
+    instance.onClose(oldHostConn);
+
+    expect(instance.seatFor(0)?.connId).toBe(newHostConn.id);
+    expect(instance.absentPlayers.has("host-id")).toBe(false);
+    expect(instance.pendingHostTransfer).toBeNull();
+    expect(instance.currentHostPlayerId).toBe("host-id");
+  });
+});
+
+test("re-disconnect after reconnect and previous transfer can transfer host again", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "conn-host", "host-id", "Host");
+    join(instance, "conn-guest", "guest-id", "Guest");
+
+    instance.onClose(host);
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("host-id", Date.now() - 11_000);
+  });
+
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    expect(instance.currentHostPlayerId).toBe("guest-id");
+
+    join(instance, "conn-host-return", "host-id", "Host");
+    const guestReturn = join(
+      instance,
+      "conn-guest-return",
+      "guest-id",
+      "Guest",
+    );
+    instance.onClose(guestReturn);
+
+    expect(instance.pendingHostTransfer).toBe("guest-id");
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("guest-id", Date.now() - 11_000);
+  });
+
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    expect(instance.currentHostPlayerId).toBe("host-id");
+    expect(instance.pendingHostTransfer).toBeNull();
+    expect(instance.slotForPlayer("guest-id")).toBe(2);
+  });
+});
+
+test("no-target Stage 1 can transfer when a guest joins before seat expiry", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "conn-host", "host-id", "Host");
+    instance.onClose(host);
+
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("host-id", Date.now() - 11_000);
+  });
+
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    expect(instance.currentHostPlayerId).toBe("host-id");
+    expect(instance.pendingHostTransfer).toBe("host-id");
+    expect(instance.seatFor(0)?.connId).toBeNull();
+
+    join(instance, "conn-guest", "guest-id", "Guest");
+
+    expect(instance.currentHostPlayerId).toBe("host-id");
+    expect(instance.pendingHostTransfer).toBe("host-id");
+    expect(instance.absentPlayers.has("host-id")).toBe(true);
+  });
+
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    expect(instance.currentHostPlayerId).toBe("guest-id");
+    expect(instance.pendingHostTransfer).toBeNull();
+    expect(instance.slotForPlayer("host-id")).toBe(0);
+  });
+});
+
 // ── Phase 6 follow-up: lock() guard ──────────────────────────────────────────
 
 test("lock() rejects start when a seat holds an absent human (connId null)", async () => {
