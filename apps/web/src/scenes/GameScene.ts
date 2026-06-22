@@ -301,6 +301,10 @@ export class GameScene extends Phaser.Scene {
     } else if (directConnect) {
       // Dev/test direct-connect shortcut: the create/join overlay path from
       // Plan 1. ?botSlot=N fills a slot with a Practice Bot on the legacy path.
+      // Freeze the local hotseat sim and hide its start prompt so only the clean
+      // connection panel shows (no "Press Jump to Start" bleeding through).
+      this.awaitingOpponent = true;
+      this.startPromptEl.style.display = "none";
       const botSlotParam = urlParams.get("botSlot");
       const createOptions =
         botSlotParam !== null
