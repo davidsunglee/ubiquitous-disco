@@ -52,6 +52,11 @@ import {
 import { ConnectionOverlay } from "./ConnectionOverlay";
 import { type HudBridge, hudBridge } from "./HudScene";
 import { OrientationOverlay } from "./OrientationOverlay";
+import {
+  type FailClosedReason,
+  shouldAttemptReconnect,
+  wireFailClosed,
+} from "./reconnectFlow";
 import { bellFromScoreDelta } from "./scoreFeedback";
 
 // Distinct colors per player slot (grounded / airborne variants).
@@ -487,21 +492,8 @@ export class GameScene extends Phaser.Scene {
           }
         });
         // Fail-closed before the loop starts (e.g. rejected/duplicate claim).
-        net.onFailClosed((reason) => {
-          // Phase 6: if we have a retained launch and haven't started
-          // reconnecting yet, try to reclaim the slot.
-          if (
-            this.retainedLaunch !== null &&
-            !this.reconnecting &&
-            reason !== "reconnect-expired" &&
-            reason !== "server-shutdown"
-          ) {
-            void this.attemptReconnect();
-          } else {
-            this.matchFailClosed = true;
-            this.connectionOverlay.showFailClosed(reason);
-          }
-        });
+        // Wired exactly once per NetClient instance (see wireFailClosed).
+        this.wireFailClosed(net);
       })
       .catch((err) => {
         console.error("[net] joinLaunch failed", err);
@@ -543,6 +535,9 @@ export class GameScene extends Phaser.Scene {
         };
         net.slot = m.slot as PlayerSlotId;
         this.reconnecting = false;
+        // Reconnect resumed: clear any terminal/fail-closed state so a stale
+        // banner can't persist over the resumed game (FLI-8 BUG #1).
+        this.clearFailClosed();
         if (m.full) {
           // Resume the net loop with the same slot.
           this.startNetLoop(
@@ -552,13 +547,9 @@ export class GameScene extends Phaser.Scene {
         }
       });
 
-      net.onFailClosed((reason) => {
-        // Reconnect attempt subsequently failed (e.g. grace expired while we
-        // were reconnecting).
-        this.reconnecting = false;
-        this.matchFailClosed = true;
-        this.connectionOverlay.showFailClosed(reason);
-      });
+      // Fresh NetClient instance — wired once. shouldAttemptReconnect() guards
+      // against re-entrancy if the reconnect itself fails closed.
+      this.wireFailClosed(net);
 
       console.info("[net] reconnect join sent — awaiting RoomReady");
     } catch (err) {
@@ -569,10 +560,62 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Wire fail-closed handling onto a NetClient EXACTLY ONCE per instance
+   * (FLI-8 BUG #1). The launch path, the reconnect path, and the net-loop path
+   * all funnel through here; wireFailClosed() (reconnectFlow) de-dupes per
+   * instance so the SDK's stacking handlers can't register two fire-once chains
+   * on the same room and fight each other on a disconnect.
+   */
+  private wireFailClosed(net: NetClient): void {
+    wireFailClosed(net, (reason: FailClosedReason) => {
+      console.info(`[net] fail-closed: ${reason}`);
+      // Stop the net loop so no more predicted ticks or sends happen.
+      this.netLoop = null;
+
+      // Phase 6: if we can recover (retained launch, not already reconnecting,
+      // non-terminal reason), attempt to reclaim the slot before showing the
+      // banner.
+      if (
+        shouldAttemptReconnect(reason, {
+          hasRetainedLaunch: this.retainedLaunch !== null,
+          reconnecting: this.reconnecting,
+        })
+      ) {
+        void this.attemptReconnect();
+        return;
+      }
+
+      // Freeze the scene so stray input can't interact with the frozen state,
+      // and show the fail-closed banner + status badge.
+      this.reconnecting = false;
+      this.matchFailClosed = true;
+      this.connectionOverlay.showFailClosed(reason);
+    });
+  }
+
+  /**
+   * Clear terminal/fail-closed state on a successful reconnect resume so a
+   * stale "Match Over" banner can't persist over the resumed game (FLI-8).
+   */
+  private clearFailClosed(): void {
+    this.matchFailClosed = false;
+    this.connectionOverlay.hideFailClosed();
+  }
+
   private startNetLoop(
     slot: PlayerSlotId,
     activeSlots: PlayerSlotId[] = [0, 2],
   ): void {
+    // Idempotency guard (FLI-8 BUG #2): the server re-broadcasts
+    // RoomReady{full:true} to ALL present clients whenever any peer reconnects,
+    // so the persistent RoomReady handler can re-invoke this on every other
+    // client. RoomReady{full:true} means "ensure the loop is running", not
+    // "start a second one". A second start would orphan the first NetLoop +
+    // SimulatedTransport, leak a duplicate net-sim-config listener, and stack
+    // another onFailClosed. If a loop is already running, do nothing.
+    if (this.netLoop !== null) return;
+
     // The match is starting — leave the awaiting-opponent freeze state.
     this.awaitingOpponent = false;
 
@@ -612,31 +655,11 @@ export class GameScene extends Phaser.Scene {
     this.netLoop.start();
     console.info(`[net] NetLoop started (slot ${slot})`);
 
-    // Phase 5/6: fail-closed — stop the net loop and either attempt reconnect
-    // (Phase 6, within grace) or show the banner (Phase 5 legacy behaviour).
-    this.netClient.onFailClosed((reason) => {
-      console.info(`[net] fail-closed: ${reason}`);
-      // Stop the net loop so no more predicted ticks or sends happen.
-      this.netLoop = null;
-
-      // Phase 6: if we have a retained launch and the reason isn't a
-      // definitive terminal (expired grace or server shutdown), attempt
-      // to reclaim the slot before showing the fail-closed banner.
-      if (
-        this.retainedLaunch !== null &&
-        !this.reconnecting &&
-        reason !== "reconnect-expired" &&
-        reason !== "server-shutdown"
-      ) {
-        void this.attemptReconnect();
-        return;
-      }
-
-      // Freeze the scene so stray input can't interact with the frozen state.
-      this.matchFailClosed = true;
-      // Show the fail-closed banner and update the status badge.
-      this.connectionOverlay.showFailClosed(reason);
-    });
+    // Phase 5/6: fail-closed — wired exactly once per NetClient instance. The
+    // launch path may already have wired this same instance (in
+    // startLaunchedMatch); wireFailClosed() de-dupes so both fire-once chains
+    // can't fight each other (FLI-8 BUG #1).
+    this.wireFailClosed(this.netClient);
 
     // Phase 5: periodic RTT telemetry (every 2 seconds).
     this.startTelemetry();

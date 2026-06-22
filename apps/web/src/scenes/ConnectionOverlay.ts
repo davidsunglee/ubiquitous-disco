@@ -326,6 +326,14 @@ export class ConnectionOverlay {
   }
 
   /**
+   * Hide the fail-closed banner. Called on a successful silent reconnect so a
+   * stale "Match Over" banner can't persist over the resumed game (FLI-8).
+   */
+  hideFailClosed(): void {
+    this.closedBannerEl.style.display = "none";
+  }
+
+  /**
    * Update the telemetry readout. Pass null to hide the element.
    *
    * @param rtt     Round-trip time in ms (from room.ping()).
