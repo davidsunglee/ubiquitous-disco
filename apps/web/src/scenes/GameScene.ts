@@ -66,7 +66,7 @@ import { bellFromScoreDelta } from "./scoreFeedback";
 // since hotseat has no in-game character picker yet. Change this to test another
 // character's feel/Special locally (e.g. "panda", "drunken-boxer"). Characters
 // are not hashed, so this does not affect the cross-engine determinism contract.
-const HOTSEAT_CHARACTER: CharacterId = "drunken-boxer";
+const HOTSEAT_CHARACTER: CharacterId = "sifu";
 
 // Distinct colors per player slot (grounded / airborne variants).
 // Slots 0/1 = Team 0 (blue shades, left side); Slots 2/3 = Team 1 (orange/red shades, right side).

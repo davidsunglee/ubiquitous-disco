@@ -47,6 +47,16 @@ export function stepMovement(
     actor.vy = cs.jumpSpeed;
     actor.grounded = false;
     actor.ticksSinceGrounded = m.coyoteTicks + 1; // consume the grace window
+  } else if (
+    input.jumpPressed &&
+    live &&
+    !canJump &&
+    actor.airJumpsRemaining > 0
+  ) {
+    // Phase 4 (FLI-9): extra mid-air jump (e.g. Monkey King). Distinct from the
+    // air Tele-Dash budget. Consumes one from the per-actor budget.
+    actor.airJumpsRemaining -= 1;
+    actor.vy = cs.jumpSpeed; // fresh upward velocity for the extra jump
   }
 
   // Variable height: releasing Jump early while still rising cuts upward velocity.

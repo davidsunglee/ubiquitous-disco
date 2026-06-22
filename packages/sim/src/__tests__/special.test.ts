@@ -1,11 +1,13 @@
 /**
- * Phase 2 (FLI-9): stepSpecial + specialCooldown tests.
+ * Phase 2/4 (FLI-9): stepSpecial + specialCooldown tests.
  *
  * Covers:
  *  1. Cooldown availability (ready at 0, blocked while > 0).
  *  2. Reset-on-respawn: round reset rebuilds the actor → specialCooldown zeroed.
  *  3. Ground Pound effect: nearby actor gets knockback/stagger; in-radius ball gets impulse.
  *  4. Determinism: same inputs → same hashState across two independent runs.
+ *  5. Phase 4: Palm Burst (Sifu), Phantom Rush (Vipra), Cloud Dash (Monkey King),
+ *     Repulse Field (Old Master) — effect + cooldown.
  */
 
 import { beforeAll, expect, test } from "vitest";
@@ -231,6 +233,328 @@ test("same Panda-Special inputs produce the same hashState across two independen
   };
 
   expect(runOnce()).toBe(runOnce());
+});
+
+// ── Phase 4: Palm Burst (Sifu) ────────────────────────────────────────────────
+
+test("Sifu Palm Burst: fires and sets cooldown correctly", () => {
+  const sifuDef = CHARACTERS.sifu;
+  const sim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 1001,
+    characters: [sifuDef],
+  });
+
+  // Start the match.
+  const startRow: InputFrame[] = [];
+  startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+  startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+  sim.step(startRow);
+
+  // Settle for 20 ticks.
+  for (let i = 0; i < 20; i++) {
+    const r: InputFrame[] = [];
+    r[0] = EMPTY_INPUT;
+    r[2] = EMPTY_INPUT;
+    sim.step(r);
+  }
+
+  const hashBefore = sim.hashState();
+
+  // Fire Special on slot 0 (Sifu) — should set cooldown to sifu.cooldownTicks = 90.
+  const fireRow: InputFrame[] = [];
+  fireRow[0] = frame({ specialPressed: true, specialHeld: true });
+  fireRow[2] = EMPTY_INPUT;
+  sim.step(fireRow);
+
+  const hashAfter = sim.hashState();
+  // The cooldown was set, so the hash must differ.
+  expect(hashBefore).not.toBe(hashAfter);
+});
+
+test("Sifu Palm Burst: same inputs → same hash across two runs (determinism)", () => {
+  const sifuDef = CHARACTERS.sifu;
+
+  const run = () => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 1002,
+      characters: [sifuDef],
+    });
+    const startRow: InputFrame[] = [];
+    startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+    startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+    sim.step(startRow);
+    for (let i = 0; i < 20; i++) {
+      const r: InputFrame[] = [];
+      r[0] = EMPTY_INPUT;
+      r[2] = EMPTY_INPUT;
+      sim.step(r);
+    }
+    const fireRow: InputFrame[] = [];
+    fireRow[0] = frame({ specialPressed: true, specialHeld: true });
+    fireRow[2] = EMPTY_INPUT;
+    sim.step(fireRow);
+    for (let i = 0; i < 30; i++) {
+      const r: InputFrame[] = [];
+      r[0] = EMPTY_INPUT;
+      r[2] = EMPTY_INPUT;
+      sim.step(r);
+    }
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+// ── Phase 4: Phantom Rush (Vipra) ────────────────────────────────────────────
+
+test("Vipra Phantom Rush: fires and sets cooldown correctly", () => {
+  const vipraDef = CHARACTERS.vipra;
+  const characters: import("../index").CharacterDef[] = [];
+  characters[0] = vipraDef;
+  characters[2] = CHARACTERS.sifu;
+
+  const sim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 2001,
+    characters,
+  });
+
+  const startRow: InputFrame[] = [];
+  startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+  startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+  sim.step(startRow);
+
+  for (let i = 0; i < 20; i++) {
+    const r: InputFrame[] = [];
+    r[0] = EMPTY_INPUT;
+    r[2] = EMPTY_INPUT;
+    sim.step(r);
+  }
+
+  const hashBefore = sim.hashState();
+
+  const fireRow: InputFrame[] = [];
+  fireRow[0] = frame({ specialPressed: true, specialHeld: true });
+  fireRow[2] = EMPTY_INPUT;
+  sim.step(fireRow);
+
+  const hashAfter = sim.hashState();
+  // Phantom Rush fires → hash changes (cooldown + blink displacement).
+  expect(hashBefore).not.toBe(hashAfter);
+});
+
+test("Vipra Phantom Rush: same inputs → same hash across two runs (determinism)", () => {
+  const vipraDef = CHARACTERS.vipra;
+
+  const run = () => {
+    const characters: import("../index").CharacterDef[] = [];
+    characters[0] = vipraDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 2002,
+      characters,
+    });
+    const startRow: InputFrame[] = [];
+    startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+    startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+    sim.step(startRow);
+    for (let i = 0; i < 20; i++) {
+      const r: InputFrame[] = [];
+      r[0] = EMPTY_INPUT;
+      r[2] = EMPTY_INPUT;
+      sim.step(r);
+    }
+    const fireRow: InputFrame[] = [];
+    fireRow[0] = frame({ specialPressed: true, specialHeld: true });
+    fireRow[2] = EMPTY_INPUT;
+    sim.step(fireRow);
+    for (let i = 0; i < 30; i++) {
+      const r: InputFrame[] = [];
+      r[0] = EMPTY_INPUT;
+      r[2] = EMPTY_INPUT;
+      sim.step(r);
+    }
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+// ── Phase 4: Monkey King's Special is DISABLED (FLI-9 balance) ────────────────
+
+test("Monkey King: Special is disabled — pressing special is a no-op (no effect, no cooldown)", () => {
+  const mkDef = CHARACTERS["monkey-king"];
+  const build = () => {
+    const characters: import("../index").CharacterDef[] = [];
+    characters[0] = mkDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 3001,
+      characters,
+    });
+    // Start the match and let both actors settle on the ground.
+    const startRow: InputFrame[] = [];
+    startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+    startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+    sim.step(startRow);
+    for (let i = 0; i < 20; i++) {
+      const r: InputFrame[] = [];
+      r[0] = EMPTY_INPUT;
+      r[2] = EMPTY_INPUT;
+      sim.step(r);
+    }
+    return sim;
+  };
+
+  // Two identical sims from the same settled state: one presses Special, one idles.
+  const simPress = build();
+  const simIdle = build();
+
+  // Only difference vs the idle sim is the Special press (no movement input),
+  // so any hash difference could come ONLY from the Special.
+  const pressRow: InputFrame[] = [];
+  pressRow[0] = frame({ specialPressed: true, specialHeld: true });
+  pressRow[2] = EMPTY_INPUT;
+  simPress.step(pressRow);
+
+  const idleRow: InputFrame[] = [];
+  idleRow[0] = EMPTY_INPUT;
+  idleRow[2] = EMPTY_INPUT;
+  simIdle.step(idleRow);
+
+  // A disabled Special has zero effect AND consumes no cooldown. specialCooldown
+  // is part of the hashed actor state, so a byte-identical hash proves both.
+  expect(simPress.hashState()).toBe(simIdle.hashState());
+});
+
+test("Monkey King: pressing the (disabled) special stays deterministic across two runs", () => {
+  const mkDef = CHARACTERS["monkey-king"];
+
+  const run = () => {
+    const characters: import("../index").CharacterDef[] = [];
+    characters[0] = mkDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 3002,
+      characters,
+    });
+    const startRow: InputFrame[] = [];
+    startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+    startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+    sim.step(startRow);
+    for (let i = 0; i < 20; i++) {
+      const r: InputFrame[] = [];
+      r[0] = EMPTY_INPUT;
+      r[2] = EMPTY_INPUT;
+      sim.step(r);
+    }
+    const jumpRow: InputFrame[] = [];
+    jumpRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+    jumpRow[2] = EMPTY_INPUT;
+    sim.step(jumpRow);
+    const fireRow: InputFrame[] = [];
+    fireRow[0] = frame({ specialPressed: true, specialHeld: true, moveX: 1 });
+    fireRow[2] = EMPTY_INPUT;
+    sim.step(fireRow);
+    for (let i = 0; i < 30; i++) {
+      const r: InputFrame[] = [];
+      r[0] = EMPTY_INPUT;
+      r[2] = EMPTY_INPUT;
+      sim.step(r);
+    }
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+// ── Phase 4: Repulse Field (Old Master) ──────────────────────────────────────
+
+test("Old Master Repulse Field: fires and sets cooldown correctly", () => {
+  const omDef = CHARACTERS["old-master"];
+  const characters: import("../index").CharacterDef[] = [];
+  characters[0] = omDef;
+  characters[2] = CHARACTERS.sifu;
+
+  const sim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 4001,
+    characters,
+  });
+
+  const startRow: InputFrame[] = [];
+  startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+  startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+  sim.step(startRow);
+
+  for (let i = 0; i < 20; i++) {
+    const r: InputFrame[] = [];
+    r[0] = EMPTY_INPUT;
+    r[2] = EMPTY_INPUT;
+    sim.step(r);
+  }
+
+  const hashBefore = sim.hashState();
+
+  const fireRow: InputFrame[] = [];
+  fireRow[0] = frame({ specialPressed: true, specialHeld: true });
+  fireRow[2] = EMPTY_INPUT;
+  sim.step(fireRow);
+
+  const hashAfter = sim.hashState();
+  // Repulse Field fires → cooldown set → hash changes.
+  expect(hashBefore).not.toBe(hashAfter);
+});
+
+test("Old Master Repulse Field: same inputs → same hash across two runs (determinism)", () => {
+  const omDef = CHARACTERS["old-master"];
+
+  const run = () => {
+    const characters: import("../index").CharacterDef[] = [];
+    characters[0] = omDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 4002,
+      characters,
+    });
+    const startRow: InputFrame[] = [];
+    startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+    startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+    sim.step(startRow);
+    for (let i = 0; i < 20; i++) {
+      const r: InputFrame[] = [];
+      r[0] = EMPTY_INPUT;
+      r[2] = EMPTY_INPUT;
+      sim.step(r);
+    }
+    const fireRow: InputFrame[] = [];
+    fireRow[0] = frame({ specialPressed: true, specialHeld: true });
+    fireRow[2] = EMPTY_INPUT;
+    sim.step(fireRow);
+    for (let i = 0; i < 30; i++) {
+      const r: InputFrame[] = [];
+      r[0] = EMPTY_INPUT;
+      r[2] = EMPTY_INPUT;
+      sim.step(r);
+    }
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
 });
 
 // ── Ground Pound ball interaction ────────────────────────────────────────────

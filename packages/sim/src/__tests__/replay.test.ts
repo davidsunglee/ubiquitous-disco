@@ -638,6 +638,242 @@ test("Drunken Boxer Stagger Stumble: replays bit-identically through a serialize
   expect(playReplay(roundTripped)).toBe(liveHash);
 });
 
+// ── Phase 4 (FLI-9): replay determinism for remaining four Specials ──────────
+
+/**
+ * Generic helper: build frames where slot 0 (given character) fires Special once,
+ * then idles. Returns a deterministic replay for any of the six characters.
+ */
+function buildSpecialFrames(walkTicks = 10): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start.
+  frames.push(
+    row(
+      frame({ jumpPressed: true, jumpHeld: true }),
+      frame({ jumpPressed: true, jumpHeld: true }),
+    ),
+  );
+  // Settle.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk.
+  for (let i = 0; i < walkTicks; i++) frames.push(row(frame({ moveX: 1 })));
+  // Fire Special.
+  frames.push(row(frame({ specialPressed: true, specialHeld: true })));
+  // Idle.
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
+  return frames;
+}
+
+test("Phase 4: Sifu Palm Burst replay is deterministic (two sims, same hash)", () => {
+  const sifuDef = CHARACTERS.sifu;
+  const frames = buildSpecialFrames();
+
+  const run = () => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 1111,
+      characters: [sifuDef],
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 4: Sifu Palm Burst replay round-trips through serialize→deserialize", () => {
+  const sifuDef = CHARACTERS.sifu;
+  const frames = buildSpecialFrames();
+  const seed = 1112;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "sifu";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters: [sifuDef],
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
+test("Phase 4: Vipra Phantom Rush replay is deterministic (two sims, same hash)", () => {
+  const vipraDef = CHARACTERS.vipra;
+  const frames = buildSpecialFrames();
+
+  const run = () => {
+    const characters: CharacterDef[] = [];
+    characters[0] = vipraDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 2111,
+      characters,
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 4: Vipra Phantom Rush replay round-trips through serialize→deserialize", () => {
+  const vipraDef = CHARACTERS.vipra;
+  const frames = buildSpecialFrames();
+  const seed = 2112;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "vipra";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const characters: CharacterDef[] = [];
+  characters[0] = vipraDef;
+  characters[2] = CHARACTERS.sifu;
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters,
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
+test("Phase 4: Monkey King replay is deterministic (two sims, same hash)", () => {
+  const mkDef = CHARACTERS["monkey-king"];
+  const frames = buildSpecialFrames();
+
+  const run = () => {
+    const characters: CharacterDef[] = [];
+    characters[0] = mkDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 3111,
+      characters,
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 4: Monkey King replay round-trips through serialize→deserialize", () => {
+  const mkDef = CHARACTERS["monkey-king"];
+  const frames = buildSpecialFrames();
+  const seed = 3112;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "monkey-king";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const characters: CharacterDef[] = [];
+  characters[0] = mkDef;
+  characters[2] = CHARACTERS.sifu;
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters,
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
+test("Phase 4: Old Master Repulse Field replay is deterministic (two sims, same hash)", () => {
+  const omDef = CHARACTERS["old-master"];
+  const frames = buildSpecialFrames();
+
+  const run = () => {
+    const characters: CharacterDef[] = [];
+    characters[0] = omDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 4111,
+      characters,
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 4: Old Master Repulse Field replay round-trips through serialize→deserialize", () => {
+  const omDef = CHARACTERS["old-master"];
+  const frames = buildSpecialFrames();
+  const seed = 4112;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "old-master";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const characters: CharacterDef[] = [];
+  characters[0] = omDef;
+  characters[2] = CHARACTERS.sifu;
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters,
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
 // ── getDebugColliders() returns expected shapes ──────────────────────────────
 
 test("getDebugColliders() returns arena boxes + player/ball + Bell art and hit-zones", () => {

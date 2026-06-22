@@ -23,7 +23,7 @@ import {
   stepMatch,
 } from "./rules/match";
 import { stepMovement } from "./rules/movement";
-import { stepSpecial } from "./rules/special";
+import { type SpecialBlink, stepSpecial } from "./rules/special";
 import { stepStrike } from "./rules/strike";
 import { teamForPlayerSlot } from "./team";
 
@@ -369,11 +369,28 @@ export function createSimulation(opts: {
           // Only initiate a strike/special if the actor was controllable at tick START.
           if (wasControllable[s]) {
             stepStrike(actor, input, config, rw, s, actors);
-            stepSpecial(actor, input, config, rw, s, actors, () => {
-              const r = nextRng(rngState);
-              rngState = r.state;
-              return r.value;
-            });
+            const sb: SpecialBlink | null = stepSpecial(
+              actor,
+              input,
+              config,
+              rw,
+              s,
+              actors,
+              () => {
+                const r = nextRng(rngState);
+                rngState = r.state;
+                return r.value;
+              },
+            );
+            // Combine blink-style Special displacement with any dash blink.
+            // (Same-tick dash+special is rare but we sum the displacements so the
+            // movement sweep clamps both against geometry in one authoritative move.)
+            if (sb) {
+              const existing = blinks[s];
+              blinks[s] = existing
+                ? { x: existing.x + sb.x, y: existing.y + sb.y }
+                : sb;
+            }
           } else {
             // Clear charge so it doesn't linger while knocked down.
             actor.charge = 0;

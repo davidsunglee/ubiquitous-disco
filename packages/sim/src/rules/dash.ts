@@ -71,5 +71,9 @@ export function stepDash(
  * Called from movement after grounded is reconciled for the tick.
  */
 export function resetDashOnLanding(actor: Actor): void {
-  if (actor.grounded) actor.airDashAvailable = true;
+  if (actor.grounded) {
+    actor.airDashAvailable = true;
+    // Phase 4 (FLI-9): restore the air-jump budget from the character on landing.
+    actor.airJumpsRemaining = actor.character.airJumps;
+  }
 }

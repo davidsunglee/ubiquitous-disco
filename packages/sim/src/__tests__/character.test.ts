@@ -119,7 +119,9 @@ test("resolveCharacter preserves airJumps and special", () => {
   const def = CHARACTERS["monkey-king"];
   const rc = resolveCharacter(def, DEFAULT_CONFIG);
   expect(rc.airJumps).toBe(1);
-  expect(rc.special.kind).toBe("cloud-dash");
+  // Monkey King's Special is intentionally disabled (FLI-9 balance) — his extra
+  // air jump is his identity, so he carries no cooldown Special.
+  expect(rc.special.kind).toBe("none");
 });
 
 // ── Sifu identity ─────────────────────────────────────────────────────────────

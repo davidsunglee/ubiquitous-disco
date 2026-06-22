@@ -14,7 +14,9 @@ export type SpecialKind =
   | "cloud-dash"
   | "repulse-field"
   | "ground-pound"
-  | "stagger-stumble";
+  | "stagger-stumble"
+  /** No Special: pressing the Special button is a no-op (no effect, no cooldown). */
+  | "none";
 
 /** Cooldown Special definition. `params` are placeholder tunables per kind. */
 export interface SpecialDef {
@@ -110,10 +112,14 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
       strikeImpulse: 0.92,
       strikeReach: 1.0,
     },
+    // Special intentionally DISABLED (FLI-9 balance): Monkey King's extra air
+    // jump is identity enough, so he carries no cooldown Special. The cloud-dash
+    // implementation is retained in stepSpecial and can be reattached by setting
+    // kind back to "cloud-dash".
     special: {
-      kind: "cloud-dash",
-      cooldownTicks: 110,
-      params: { distance: 4 },
+      kind: "none",
+      cooldownTicks: 0,
+      params: {},
     },
   },
   "old-master": {

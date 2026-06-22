@@ -36,6 +36,8 @@ export interface Actor {
   staggerDecayDelay: number;
   /** Phase 2 (FLI-9): ticks remaining before another Special is allowed (0 = ready). */
   specialCooldown: number;
+  /** Phase 4 (FLI-9): remaining mid-air jumps (initialized from character.airJumps; reset on landing). */
+  airJumpsRemaining: number;
   /** Resolved per-actor character (stats/special/airJumps). Static config — NOT hashed. */
   character: ResolvedCharacter;
 }
@@ -59,6 +61,7 @@ export function createActor(
     controlLock: false,
     staggerDecayDelay: 0,
     specialCooldown: 0,
+    airJumpsRemaining: character.airJumps,
     character,
   };
 }
@@ -88,9 +91,11 @@ export function serializeActor(actor: Actor): Uint8Array {
   //   controlLock u8 (1) + staggerDecayDelay i32 (4) = 21
   // Phase 2 (FLI-9) appends 4 bytes:
   //   specialCooldown i32 (4) = 4
-  // Total: 60 bytes.
+  // Phase 4 (FLI-9) appends 4 bytes:
+  //   airJumpsRemaining i32 (4) = 4
+  // Total: 64 bytes.
   const buf = new ArrayBuffer(
-    8 + 8 + 1 + 1 + 4 + 8 + 4 + 1 + 8 + 4 + 4 + 1 + 4 + 4,
+    8 + 8 + 1 + 1 + 4 + 8 + 4 + 1 + 8 + 4 + 4 + 1 + 4 + 4 + 4,
   );
   const view = new DataView(buf);
   let o = 0;
@@ -124,5 +129,8 @@ export function serializeActor(actor: Actor): Uint8Array {
   o += 4;
   // ── Phase 2 (FLI-9) appended field ──
   view.setInt32(o, actor.specialCooldown);
+  o += 4;
+  // ── Phase 4 (FLI-9) appended field ──
+  view.setInt32(o, actor.airJumpsRemaining);
   return new Uint8Array(buf);
 }
