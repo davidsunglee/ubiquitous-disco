@@ -31,6 +31,15 @@ import { LobbyClient } from "./LobbyClient";
 import { saveLaunch } from "./launchHandoff";
 import { loadProfile } from "./profile";
 
+/**
+ * Player Slots required to be filled for each mode (mirrors the worker).
+ * Used client-side to compute the "startable" condition for the Start button.
+ */
+const REQUIRED_SLOTS_BY_MODE: Record<"1v1" | "2v2", readonly PlayerSlotId[]> = {
+  "1v1": [0, 2],
+  "2v2": [0, 1, 2, 3],
+};
+
 /** Match-length options exposed in the Host picker (2:00–5:00 @ 30 Hz). */
 const LENGTH_OPTIONS: { label: string; ticks: number }[] = [
   { label: "2:00", ticks: 3600 },
@@ -48,6 +57,8 @@ export class LobbyPage {
   private profile = loadProfile();
   private controlsEl!: HTMLElement;
   private lengthSelect!: HTMLSelectElement;
+  private startBtn!: HTMLButtonElement;
+  private startHint!: HTMLElement;
   /** Latest known lobby state (used by seat-button handlers). */
   private lastState: LobbyState | null = null;
 
@@ -137,6 +148,7 @@ export class LobbyPage {
     this.client = new LobbyClient();
     this.client.onState((state) => this.render(state));
     this.client.onLaunch((launch) => this.handleLaunch(launch));
+    this.client.onNotice((notice) => this.handleNotice(notice));
     this.client.connect(code, profile.playerId, profile.displayName);
   }
 
@@ -190,18 +202,27 @@ export class LobbyPage {
     fillBtn.addEventListener("click", () => this.fillEmptySeats());
     btnRow.appendChild(fillBtn);
 
-    const startBtn = document.createElement("button");
-    startBtn.dataset.testid = "lobby-start-match";
-    startBtn.textContent = "Start Match";
-    startBtn.style.cssText =
+    this.startBtn = document.createElement("button");
+    this.startBtn.dataset.testid = "lobby-start-match";
+    this.startBtn.textContent = "Start Match";
+    this.startBtn.style.cssText =
       "padding:8px 20px;cursor:pointer;font-family:monospace;font-size:13px;" +
       "background:#227722;color:#fff;border:none;border-radius:4px;font-weight:bold;";
-    startBtn.addEventListener("click", () => {
+    this.startBtn.addEventListener("click", () => {
       this.client?.sendCommand({ type: "LobbyCommand", cmd: "start" });
     });
-    btnRow.appendChild(startBtn);
+    btnRow.appendChild(this.startBtn);
 
     wrap.appendChild(btnRow);
+
+    // Hint shown when start is disabled.
+    this.startHint = document.createElement("p");
+    this.startHint.style.cssText =
+      "color:#aa7700;font-size:11px;margin:0;display:none;";
+    this.startHint.textContent =
+      "Waiting for a player or bot in every slot (no disconnected players).";
+    wrap.appendChild(this.startHint);
+
     return wrap;
   }
 
@@ -274,13 +295,49 @@ export class LobbyPage {
     return el;
   }
 
+  /**
+   * Compute whether the lobby is in a startable state from the current
+   * LobbyState: all mode-required slots must be filled by a present human or
+   * a bot (no absent humans, no empty required slots).
+   */
+  private isStartable(state: LobbyState): boolean {
+    const required =
+      REQUIRED_SLOTS_BY_MODE[state.settings.mode] ??
+      REQUIRED_SLOTS_BY_MODE["2v2"];
+    for (const slotId of required) {
+      const slot = state.slots.find((s) => s.slotId === slotId);
+      if (!slot || slot.occupant === null) return false; // empty slot
+      if (slot.occupant.kind === "human" && !slot.occupant.present)
+        return false; // absent human
+    }
+    return true;
+  }
+
   private render(state: LobbyState): void {
     this.lastState = state;
     const isHost = state.hostPlayerId === this.profile.playerId;
     this.controlsEl.style.display = isHost ? "flex" : "none";
+
+    // Update the Start button enabled/disabled state.
+    if (isHost) {
+      const startable = this.isStartable(state);
+      this.startBtn.disabled = !startable;
+      this.startBtn.style.opacity = startable ? "1" : "0.45";
+      this.startBtn.style.cursor = startable ? "pointer" : "not-allowed";
+      this.startHint.style.display = startable ? "none" : "block";
+    }
+
     for (const slot of state.slots) {
       this.renderSlot(slot, state.hostPlayerId, isHost);
     }
+  }
+
+  /** Handle a LobbyNotice from the server (lock guard rejection feedback). */
+  private handleNotice(_notice: import("@bb/protocol").LobbyNotice): void {
+    // The start button is already visually disabled when not startable.
+    // A notice arriving means the server guard also rejected — no further
+    // action needed beyond what the client-side disable already shows.
+    // Future work: could show a toast/banner here.
   }
 
   private renderSlot(

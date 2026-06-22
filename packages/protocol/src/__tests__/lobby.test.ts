@@ -8,17 +8,26 @@ import { expect, test } from "vitest";
 import {
   deserializeLobbyCommand,
   deserializeLobbyJoin,
+  deserializeLobbyNotice,
   deserializeLobbyState,
+  deserializeMatchClosed,
   deserializeMatchLaunch,
+  deserializeReconnectClaim,
   type LobbyCommand,
   type LobbyJoin,
+  type LobbyNotice,
   type LobbySlot,
   type LobbyState,
+  type MatchClosed,
   type MatchLaunch,
+  type ReconnectClaim,
   serializeLobbyCommand,
   serializeLobbyJoin,
+  serializeLobbyNotice,
   serializeLobbyState,
+  serializeMatchClosed,
   serializeMatchLaunch,
+  serializeReconnectClaim,
 } from "../index";
 
 // ── LobbyJoin ─────────────────────────────────────────────────────────────────
@@ -193,4 +202,76 @@ test("MatchLaunch round-trips", () => {
     joinToken: "tok-xyz",
   };
   expect(deserializeMatchLaunch(serializeMatchLaunch(m))).toEqual(m);
+});
+
+// ── Phase 6: ReconnectClaim + MatchClosed("reconnect-expired") ───────────────
+
+test("ReconnectClaim round-trips", () => {
+  const m: ReconnectClaim = {
+    type: "ReconnectClaim",
+    launchId: "launch123abc",
+    joinToken: "tok-reconnect",
+  };
+  expect(deserializeReconnectClaim(serializeReconnectClaim(m))).toEqual(m);
+});
+
+test("ReconnectClaim preserves launchId and joinToken", () => {
+  const m: ReconnectClaim = {
+    type: "ReconnectClaim",
+    launchId: "deadbeef1234",
+    joinToken: "my-one-time-token",
+  };
+  const decoded = deserializeReconnectClaim(serializeReconnectClaim(m));
+  expect(decoded.type).toBe("ReconnectClaim");
+  expect(decoded.launchId).toBe("deadbeef1234");
+  expect(decoded.joinToken).toBe("my-one-time-token");
+});
+
+test('MatchClosed("reconnect-expired") round-trips', () => {
+  const m: MatchClosed = { type: "MatchClosed", reason: "reconnect-expired" };
+  const decoded = deserializeMatchClosed(serializeMatchClosed(m));
+  expect(decoded.type).toBe("MatchClosed");
+  expect(decoded.reason).toBe("reconnect-expired");
+});
+
+test("MatchClosed reason union includes all three variants", () => {
+  const reasons: MatchClosed["reason"][] = [
+    "peer-left",
+    "server-shutdown",
+    "reconnect-expired",
+  ];
+  for (const reason of reasons) {
+    const m: MatchClosed = { type: "MatchClosed", reason };
+    expect(deserializeMatchClosed(serializeMatchClosed(m)).reason).toBe(reason);
+  }
+});
+
+// ── LobbyNotice (Phase 6 follow-up: lock() guard) ───────────────────────────
+
+test("LobbyNotice absent-human round-trips", () => {
+  const m: LobbyNotice = { type: "LobbyNotice", reason: "absent-human" };
+  const decoded = deserializeLobbyNotice(serializeLobbyNotice(m));
+  expect(decoded.type).toBe("LobbyNotice");
+  expect(decoded.reason).toBe("absent-human");
+});
+
+test("LobbyNotice empty-required-slot round-trips", () => {
+  const m: LobbyNotice = {
+    type: "LobbyNotice",
+    reason: "empty-required-slot",
+  };
+  const decoded = deserializeLobbyNotice(serializeLobbyNotice(m));
+  expect(decoded.type).toBe("LobbyNotice");
+  expect(decoded.reason).toBe("empty-required-slot");
+});
+
+test("LobbyNotice reason union includes all variants", () => {
+  const reasons: LobbyNotice["reason"][] = [
+    "absent-human",
+    "empty-required-slot",
+  ];
+  for (const reason of reasons) {
+    const m: LobbyNotice = { type: "LobbyNotice", reason };
+    expect(deserializeLobbyNotice(serializeLobbyNotice(m)).reason).toBe(reason);
+  }
 });

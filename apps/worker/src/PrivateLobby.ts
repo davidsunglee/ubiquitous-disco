@@ -9,6 +9,7 @@
  *
  * Host controls (seat moves, bot fill, settings, lock/launch) added in Phase 5.
  * Reconnect / host-transfer authority lands in Phase 6.
+ * Two-stage pre-launch presence expiry added as Phase 6 follow-up bug fix.
  *
  * Persistence (Deviation #3 decision): this DO keeps its lobby state in
  * in-memory Maps, NOT ctx.storage. partyserver does not hibernate by default
@@ -24,8 +25,10 @@ import type {
   PlayerSlotId,
 } from "@bb/protocol";
 import {
+  DEFAULT_RECONNECT_CONFIG,
   type LobbyCommand,
   type LobbyJoin,
+  type LobbyNotice,
   type LobbySettings,
   type LobbySlot,
   type LobbyState,
@@ -33,6 +36,7 @@ import {
   MATCH_LENGTH_MAX_TICKS,
   MATCH_LENGTH_MIN_TICKS,
   type MatchLaunch,
+  serializeLobbyNotice,
   serializeLobbyState,
   serializeMatchLaunch,
 } from "@bb/protocol";
@@ -64,6 +68,15 @@ const DEFAULT_SETTINGS: LobbySettings = {
 
 /** Only the Flat Dojo arena exists today — the picker exposes just this. */
 const AVAILABLE_ARENAS = ["flat-dojo"] as const;
+
+/**
+ * Player Slots required to be filled for each mode.
+ * 2v2: all four slots; 1v1: slots 0 and 2 (one per Team).
+ */
+const REQUIRED_SLOTS: Record<"1v1" | "2v2", readonly PlayerSlotId[]> = {
+  "1v1": [0, 2],
+  "2v2": [0, 1, 2, 3],
+};
 
 interface Env {
   PrivateLobby: DurableObjectNamespace;
@@ -98,6 +111,26 @@ export class PrivateLobby extends Server<Env> {
     manifest: MatchManifest;
     tokenToSlot: Record<string, PlayerSlotId>;
   } | null = null;
+
+  // ── Phase 6: two-stage pre-launch presence expiry ────────────────────────────
+
+  /**
+   * Tracks when each absent human disconnected (ms since epoch).
+   * Keyed by playerId. An entry is added in onClose() and removed on
+   * reconnect or after the seat is freed by alarm().
+   *
+   * Two deadlines are derived from this timestamp:
+   *  - Stage 1 (hostTransferMs): if this player is the current host, transfer
+   *    ownership to the next present human.
+   *  - Stage 2 (seatExpiryMs): free the seat entirely so the slot is open.
+   */
+  private absentSince = new Map<string, number>();
+
+  /**
+   * Tracks which players have already had their host ownership transferred
+   * (Stage 1 fired). Used to avoid re-triggering Stage 1 on repeated sweeps.
+   */
+  private hostTransferred = new Set<string>();
 
   /**
    * Called when a new WebSocket connection is established.
@@ -145,13 +178,133 @@ export class PrivateLobby extends Server<Env> {
         this.sendLobbyStateToAll();
       }
     }
+
+    // Phase 6 (two-stage): if the lobby is not locked, record when this
+    // player went absent and schedule the next sweep alarm.
+    if (!this.locked) {
+      this.absentSince.set(playerId, Date.now());
+      this.scheduleNextAlarm();
+    }
   }
 
   onError(connection: Connection): void {
     this.onClose(connection);
   }
 
+  /**
+   * Phase 6: two-stage presence-expiry alarm handler.
+   *
+   * Sweeps all absent players and fires any due deadline:
+   *  - Stage 1 (hostTransferMs): transfer host ownership to the next present
+   *    human if the absent player is still the current host.
+   *  - Stage 2 (seatExpiryMs): free the seat entirely.
+   *
+   * After mutating state, calls scheduleNextAlarm() to re-arm for the next
+   * pending deadline, or leaves the alarm cleared if none remain.
+   *
+   * Driven deterministically in tests via `runDurableObjectAlarm`.
+   */
+  async alarm(): Promise<void> {
+    if (this.locked) return;
+
+    const now = Date.now();
+    const { hostTransferMs, seatExpiryMs } = DEFAULT_RECONNECT_CONFIG;
+    let stateChanged = false;
+
+    for (const [playerId, since] of this.absentSince) {
+      const elapsed = now - since;
+
+      // Stage 2: seat expiry — free the seat if absent long enough.
+      if (elapsed >= seatExpiryMs) {
+        const slotId = this.playerToSlot.get(playerId);
+        if (slotId !== undefined) {
+          this.seats.delete(slotId);
+          this.playerToSlot.delete(playerId);
+        }
+        this.absentSince.delete(playerId);
+        this.hostTransferred.delete(playerId);
+
+        // If the freed player was the current host, reassign to the next
+        // present human in SEAT_ORDER, or null if nobody is present.
+        if (playerId === this.hostPlayerId) {
+          this.hostPlayerId = this.nextPresentHost(null);
+        }
+        stateChanged = true;
+        continue;
+      }
+
+      // Stage 1: host transfer — only if this player is still the current
+      // host and we haven't already transferred for this absence.
+      if (
+        elapsed >= hostTransferMs &&
+        playerId === this.hostPlayerId &&
+        !this.hostTransferred.has(playerId)
+      ) {
+        this.hostTransferred.add(playerId);
+        const newHost = this.nextPresentHost(playerId);
+        if (newHost !== null) {
+          this.hostPlayerId = newHost;
+          stateChanged = true;
+        }
+      }
+    }
+
+    if (stateChanged) {
+      this.sendLobbyStateToAll();
+    }
+
+    // Re-arm for the next pending deadline.
+    this.scheduleNextAlarm();
+  }
+
   // ── Private helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * Compute the earliest pending alarm deadline across all absent seats and
+   * call ctx.storage.setAlarm() for it. If no deadlines are pending, does
+   * nothing (the alarm remains cleared or as previously scheduled).
+   *
+   * Called whenever absentSince changes (onClose, reconnect, after alarm sweep).
+   */
+  private scheduleNextAlarm(): void {
+    if (this.locked || this.absentSince.size === 0) return;
+
+    const { hostTransferMs, seatExpiryMs } = DEFAULT_RECONNECT_CONFIG;
+    let earliest = Infinity;
+
+    for (const [playerId, since] of this.absentSince) {
+      // Stage 2 (always pending once absent).
+      const expiry = since + seatExpiryMs;
+      if (expiry < earliest) earliest = expiry;
+
+      // Stage 1 (only if this player is the current host and not yet transferred).
+      if (
+        playerId === this.hostPlayerId &&
+        !this.hostTransferred.has(playerId)
+      ) {
+        const transfer = since + hostTransferMs;
+        if (transfer < earliest) earliest = transfer;
+      }
+    }
+
+    if (earliest !== Infinity) {
+      void this.ctx.storage.setAlarm(earliest);
+    }
+  }
+
+  /**
+   * Return the playerId of the next present human in SEAT_ORDER, excluding
+   * `excludePlayerId`. Returns null if none is present.
+   */
+  private nextPresentHost(excludePlayerId: string | null): string | null {
+    for (const slotId of SEAT_ORDER) {
+      const seat = this.seats.get(slotId);
+      if (seat && seat.connId !== null && seat.playerId !== excludePlayerId) {
+        return seat.playerId;
+      }
+    }
+    return null;
+  }
 
   private handleLobbyJoin(connection: Connection, msg: LobbyJoin): void {
     const { playerId, displayName } = msg;
@@ -167,6 +320,16 @@ export class PrivateLobby extends Server<Env> {
       if (seat) {
         seat.connId = connection.id;
         seat.displayName = displayName; // allow display name update
+
+        // Phase 6: clear the absentSince entry so the expiry alarm doesn't
+        // fire for this player. Re-schedule in case the earliest deadline
+        // was theirs.
+        this.absentSince.delete(playerId);
+        // Note: we do NOT clear hostTransferred — if ownership already
+        // transferred (Stage 1 fired), the returning player does NOT reclaim
+        // ownership; they only reclaim their slot.
+        this.scheduleNextAlarm();
+
         this.sendLobbyStateToAll();
         return;
       }
@@ -248,7 +411,7 @@ export class PrivateLobby extends Server<Env> {
         if (this.isHost(playerId)) this.applySettings(cmd.settings);
         break;
       case "start":
-        if (this.isHost(playerId)) await this.lock();
+        if (this.isHost(playerId)) await this.lock(connection);
         break;
     }
   }
@@ -312,11 +475,49 @@ export class PrivateLobby extends Server<Env> {
    * per-human single-use joinToken, writes the frozen manifest into the
    * MatchLaunch DO via DO→DO RPC, and delivers each human their own
    * MatchLaunch payload over their WebSocket.
+   *
+   * Guard conditions (either of these causes a rejection):
+   *  1. Any seat holds an absent human (connId === null). That ghost slot can
+   *     never be claimed, so the match can never start.
+   *  2. A mode-required slot has no occupant at all (neither human nor bot).
+   *
+   * On guard failure, the lobby remains unlocked and the requesting host
+   * connection receives a LobbyNotice with the reason.
    */
-  private async lock(): Promise<void> {
+  private async lock(hostConnection?: Connection): Promise<void> {
     if (this.locked) return;
     // Require at least one occupant.
     if (this.seats.size === 0) return;
+
+    // ── Guard: reject if any occupied seat is an absent human ──────────────
+    for (const seat of this.seats.values()) {
+      if (seat.connId === null) {
+        if (hostConnection) {
+          const notice: LobbyNotice = {
+            type: "LobbyNotice",
+            reason: "absent-human",
+          };
+          hostConnection.send(serializeLobbyNotice(notice));
+        }
+        return;
+      }
+    }
+
+    // ── Guard: reject if any mode-required slot is entirely empty ──────────
+    const required = REQUIRED_SLOTS[this.settings.mode];
+    for (const slotId of required) {
+      if (!this.seats.has(slotId) && !this.bots.has(slotId)) {
+        if (hostConnection) {
+          const notice: LobbyNotice = {
+            type: "LobbyNotice",
+            reason: "empty-required-slot",
+          };
+          hostConnection.send(serializeLobbyNotice(notice));
+        }
+        return;
+      }
+    }
+
     this.locked = true;
 
     const launchId = crypto.randomUUID().replace(/-/g, "");
@@ -448,6 +649,31 @@ export class PrivateLobby extends Server<Env> {
     tokenToSlot: Record<string, PlayerSlotId>;
   } | null {
     return this.lastLaunch;
+  }
+
+  /**
+   * Phase 6 (two-stage): the set of playerIds currently tracked as absent
+   * with a pending expiry deadline (for unit test inspection).
+   */
+  get absentPlayers(): ReadonlyMap<string, number> {
+    return this.absentSince;
+  }
+
+  /**
+   * Phase 6: whether a host-transfer is pending (for unit test inspection).
+   * Non-null when the host has disconnected and Stage 1 hasn't fired yet.
+   * Preserved for backward compatibility with existing tests.
+   */
+  get pendingHostTransfer(): string | null {
+    for (const [playerId] of this.absentSince) {
+      if (
+        playerId === this.hostPlayerId &&
+        !this.hostTransferred.has(playerId)
+      ) {
+        return playerId;
+      }
+    }
+    return null;
   }
 
   /**

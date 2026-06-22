@@ -16,6 +16,7 @@
 
 import {
   type BotWorldView,
+  EMPTY_INPUT,
   type InputFrame,
   type PlayerSlotId,
   type SimConfig,
@@ -60,5 +61,29 @@ export function botSource(
       return 0;
     },
     isHuman: false,
+  };
+}
+
+/**
+ * Phase 6: create an empty SlotInputSource for a reserved (disconnected) human
+ * slot. Returns EMPTY_INPUT every tick — equivalent to the player holding no
+ * buttons — so the match continues deterministically while the human is absent.
+ *
+ * Flagged isHuman = true so PlayerInput messages for this slot are still
+ * accepted by the room's message handler (they queue in the buffer until the
+ * human reclaims the slot and the original humanSource is restored).
+ */
+export function emptySource(): SlotInputSource {
+  return {
+    take(_view: BotWorldView) {
+      return { input: EMPTY_INPUT, seq: 0 };
+    },
+    get lastAckedSeq() {
+      return 0;
+    },
+    // Mark as human so the room's PlayerInput guard lets frames through.
+    // The actual buffer is frozen — frames won't be re-buffered while reserved,
+    // but the guard keeps the semantics clean.
+    isHuman: true,
   };
 }

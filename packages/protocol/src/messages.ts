@@ -97,13 +97,16 @@ export interface WorldSnapshot {
 // ── Disconnect + telemetry messages (Phase 5) ────────────────────────────────
 
 /**
- * Server → Client: the match has ended due to a peer disconnect or server
- * shutdown. Clients should show a fail-closed banner and stop accepting input.
- * No reconnect is supported — disconnect means match over.
+ * Server → Client: the match has ended due to a peer disconnect, server
+ * shutdown, or an expired reconnect grace window. Clients should show a
+ * fail-closed banner and stop accepting input.
+ *
+ * `reconnect-expired`: a disconnected human's grace window lapsed before they
+ * could reclaim their Player Slot — the match is ended for all clients.
  */
 export interface MatchClosed {
   type: "MatchClosed";
-  reason: "peer-left" | "server-shutdown";
+  reason: "peer-left" | "server-shutdown" | "reconnect-expired";
 }
 
 /**

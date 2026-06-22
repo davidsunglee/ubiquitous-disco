@@ -6,6 +6,10 @@
  *  - Balanced seat assignment in SEAT_ORDER [0, 2, 1, 3]
  *  - Presence add / remove
  *  - Host assignment (first joiner becomes host)
+ *  - Phase 6: two-stage pre-launch presence expiry
+ *    - Stage 1 (hostTransferMs): host ownership transfers to next present human
+ *    - Stage 2 (seatExpiryMs): absent human's seat is freed (slot open)
+ *  - lock() guard: rejects start with absent human or empty required slot
  *
  * Each test uses a unique lobby code to satisfy the per-file storage
  * isolation constraint (avoids bleed between tests in the same file when
@@ -17,7 +21,11 @@
  */
 
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
-import { env, runInDurableObject } from "cloudflare:test";
+import {
+  env,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from "cloudflare:test";
 import type { Connection } from "partyserver";
 import { afterEach, expect, test } from "vitest";
 import type { PrivateLobby } from "../PrivateLobby";
@@ -243,7 +251,7 @@ test("seat connId becomes null on close (presence=false)", async () => {
 
     const seat = instance.seatFor(0);
     expect(seat?.connId).toBeNull();
-    // Seat is still reserved.
+    // Seat is still reserved (stage 2 hasn't fired).
     expect(seat?.playerId).toBe("player-a");
   });
 });
@@ -411,6 +419,12 @@ test("lock() mints a launchId + one token per human and builds the manifest", as
       cmd: "fillBot",
       slotId: 1,
     });
+    // 2v2 mode requires all 4 slots — fill slot 3 with a bot too.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 3,
+    });
 
     await instance.testApplyCommand(host, {
       type: "LobbyCommand",
@@ -427,9 +441,12 @@ test("lock() mints a launchId + one token per human and builds the manifest", as
     // One join token per human (2), and they map to the humans' slots.
     expect(Object.keys(launch.tokenToSlot)).toHaveLength(2);
     expect(new Set(Object.values(launch.tokenToSlot))).toEqual(new Set([0, 2]));
-    // Manifest carries the bot slot too.
-    const bot = launch.manifest.slots.find((s) => s.kind === "bot");
-    expect(bot?.slotId).toBe(1);
+    // Manifest carries the bot slots too.
+    const botSlots = launch.manifest.slots
+      .filter((s) => s.kind === "bot")
+      .map((s) => s.slotId)
+      .sort();
+    expect(botSlots).toEqual([1, 3]);
     const humanSlots = launch.manifest.slots
       .filter((s) => s.kind === "human")
       .map((s) => s.slotId)
@@ -446,6 +463,22 @@ test("lock() writes the manifest into the MatchLaunch DO (claimable via RPC)", a
 
   await runInDurableObject(stub, async (instance: PrivateLobby) => {
     const host = join(instance, "c1", "host"); // slot 0
+    // 2v2 mode: fill the three remaining slots with bots.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 2,
+    });
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 1,
+    });
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 3,
+    });
     await instance.testApplyCommand(host, {
       type: "LobbyCommand",
       cmd: "start",
@@ -467,6 +500,498 @@ test("lock() writes the manifest into the MatchLaunch DO (claimable via RPC)", a
   expect(res.ok).toBe(true);
   expect(res.playerSlotId).toBe(0);
   expect(res.manifest?.launchId).toBe(launchId);
+});
+
+// ── Phase 6: two-stage pre-launch presence expiry ─────────────────────────────
+
+test("host disconnect schedules a pending host-transfer (absentSince populated)", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = makeMockConnection("conn-host");
+    instance.onMessage(
+      host,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "Host",
+      }),
+    );
+    const guest = makeMockConnection("conn-guest");
+    instance.onMessage(
+      guest,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "guest-id",
+        displayName: "Guest",
+      }),
+    );
+
+    // Host disconnects.
+    instance.onClose(host);
+
+    // A pending transfer should be scheduled (still via pendingHostTransfer
+    // getter, which is driven from absentSince now).
+    expect(instance.pendingHostTransfer).toBe("host-id");
+    // Host is still the host (alarm hasn't fired yet).
+    expect(instance.currentHostPlayerId).toBe("host-id");
+    // absentSince should be recorded.
+    expect(instance.absentPlayers.has("host-id")).toBe(true);
+  });
+});
+
+test("Stage 1: host ownership transfers to the next present human after alarm fires", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = makeMockConnection("conn-host");
+    instance.onMessage(
+      host,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "Host",
+      }),
+    );
+    const guest = makeMockConnection("conn-guest");
+    instance.onMessage(
+      guest,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "guest-id",
+        displayName: "Guest",
+      }),
+    );
+
+    // Host disconnects.
+    instance.onClose(host);
+    expect(instance.pendingHostTransfer).toBe("host-id");
+
+    // Advance absentSince so Stage 1 threshold (10s) is met but Stage 2 (30s)
+    // is not — this simulates the alarm firing after exactly hostTransferMs.
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("host-id", Date.now() - 11_000);
+  });
+
+  // Fire the alarm (simulates the host-transfer timeout expiring).
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    // Ownership should have transferred to the guest.
+    expect(instance.currentHostPlayerId).toBe("guest-id");
+    // Pending transfer is cleared (hostTransferred tracks stage 1 completion).
+    expect(instance.pendingHostTransfer).toBeNull();
+    // The old host's SEAT is still present (stage 2 hasn't fired).
+    expect(instance.seatFor(0)).toBeDefined();
+    expect(instance.slotForPlayer("host-id")).toBe(0);
+    // absentSince still contains the old host (stage 2 still pending).
+    expect(instance.absentPlayers.has("host-id")).toBe(true);
+  });
+});
+
+test("Stage 2: absent human seat is freed after seatExpiryMs", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = makeMockConnection("conn-host");
+    instance.onMessage(
+      host,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "Host",
+      }),
+    );
+    const guest = makeMockConnection("conn-guest");
+    instance.onMessage(
+      guest,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "guest-id",
+        displayName: "Guest",
+      }),
+    );
+
+    // Disconnect the guest (non-host) so we test non-host expiry.
+    instance.onClose(guest);
+    expect(instance.absentPlayers.has("guest-id")).toBe(true);
+
+    // Manually move absentSince far enough back to trigger stage 2.
+    // We do this by directly manipulating the internal map via the
+    // absentPlayers getter (read-only), so we call onClose with a fake
+    // time by patching the Map entry.
+    const absMap = instance.absentPlayers as Map<string, number>;
+    // Push the timestamp 31 seconds into the past (beyond seatExpiryMs=30s).
+    absMap.set("guest-id", Date.now() - 31_000);
+  });
+
+  // Fire the alarm — should sweep stage 2 for guest-id.
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    // guest's seat must be freed.
+    expect(instance.seatFor(2)).toBeUndefined();
+    expect(instance.slotForPlayer("guest-id")).toBeUndefined();
+    expect(instance.absentPlayers.has("guest-id")).toBe(false);
+    // host is unaffected.
+    expect(instance.seatFor(0)).toBeDefined();
+    expect(instance.currentHostPlayerId).toBe("host-id");
+  });
+});
+
+test("Stage 2: freeing absent host's seat reassigns host to next present human", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const hostConn = makeMockConnection("conn-host");
+    instance.onMessage(
+      hostConn,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "Host",
+      }),
+    );
+    const guestConn = makeMockConnection("conn-guest");
+    instance.onMessage(
+      guestConn,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "guest-id",
+        displayName: "Guest",
+      }),
+    );
+
+    // Host disconnects.
+    instance.onClose(hostConn);
+
+    // Push absentSince past seatExpiryMs to trigger both stages in one sweep.
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("host-id", Date.now() - 31_000);
+  });
+
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    // Host's seat is freed.
+    expect(instance.seatFor(0)).toBeUndefined();
+    expect(instance.slotForPlayer("host-id")).toBeUndefined();
+    // Host is reassigned to the next present human (guest).
+    expect(instance.currentHostPlayerId).toBe("guest-id");
+  });
+});
+
+test("Stage 2: freeing absent host seat with no other present human sets hostPlayerId to null", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const hostConn = makeMockConnection("conn-host");
+    instance.onMessage(
+      hostConn,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "Host",
+      }),
+    );
+    // Only the host — no other humans.
+    instance.onClose(hostConn);
+
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("host-id", Date.now() - 31_000);
+  });
+
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    expect(instance.seatFor(0)).toBeUndefined();
+    // No present human → host is null.
+    expect(instance.currentHostPlayerId).toBeNull();
+  });
+});
+
+test("non-host human disconnect also has seat freed after seatExpiryMs", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    join(instance, "c-host", "host-id"); // slot 0
+    const guestConn = join(instance, "c-guest", "guest-id"); // slot 2
+
+    instance.onClose(guestConn);
+    expect(instance.seatFor(2)).toBeDefined();
+    expect(instance.absentPlayers.has("guest-id")).toBe(true);
+
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("guest-id", Date.now() - 31_000);
+  });
+
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    // Slot 2 is now open.
+    expect(instance.seatFor(2)).toBeUndefined();
+    expect(instance.slotForPlayer("guest-id")).toBeUndefined();
+    // Host seat unaffected.
+    expect(instance.currentHostPlayerId).toBe("host-id");
+  });
+});
+
+test("reconnect before stage 2 cancels the seat-free", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const hostConn = makeMockConnection("conn-host");
+    instance.onMessage(
+      hostConn,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "Host",
+      }),
+    );
+    const guestConn = makeMockConnection("conn-guest");
+    instance.onMessage(
+      guestConn,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "guest-id",
+        displayName: "Guest",
+      }),
+    );
+
+    // Host disconnects and then reconnects before alarm fires.
+    instance.onClose(hostConn);
+    expect(instance.pendingHostTransfer).toBe("host-id");
+
+    // Reconnect with same playerId (new connection id).
+    const hostReconnect = makeMockConnection("conn-host-2");
+    instance.onMessage(
+      hostReconnect,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "Host",
+      }),
+    );
+
+    // Pending transfer should be cancelled (absentSince cleared).
+    expect(instance.pendingHostTransfer).toBeNull();
+    expect(instance.absentPlayers.has("host-id")).toBe(false);
+    // Old host retains ownership.
+    expect(instance.currentHostPlayerId).toBe("host-id");
+    // Slot still intact.
+    expect(instance.seatFor(0)).toBeDefined();
+    expect(instance.seatFor(0)?.connId).toBe("conn-host-2");
+  });
+});
+
+test("old host reconnects after Stage 1 (transfer) — reclaims slot but NOT ownership", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = makeMockConnection("conn-host");
+    instance.onMessage(
+      host,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "Host",
+      }),
+    );
+    const guest = makeMockConnection("conn-guest");
+    instance.onMessage(
+      guest,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "guest-id",
+        displayName: "Guest",
+      }),
+    );
+    instance.onClose(host);
+
+    // Advance absentSince so Stage 1 threshold (10s) is met but Stage 2 (30s)
+    // is not — this simulates the alarm firing after exactly hostTransferMs.
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("host-id", Date.now() - 11_000);
+  });
+
+  // Fire the alarm — Stage 1 transfers ownership (seatExpiryMs not reached).
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    // Guest is now host.
+    expect(instance.currentHostPlayerId).toBe("guest-id");
+
+    // Old host reconnects.
+    const hostReturn = makeMockConnection("conn-host-return");
+    instance.onMessage(
+      hostReturn,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "Host",
+      }),
+    );
+
+    // Old host is back in their slot, but guest remains the host.
+    expect(instance.slotForPlayer("host-id")).toBe(0);
+    expect(instance.currentHostPlayerId).toBe("guest-id"); // ownership NOT transferred back
+    // absentSince is cleared (no further expiry pending).
+    expect(instance.absentPlayers.has("host-id")).toBe(false);
+  });
+});
+
+// ── Phase 6 follow-up: lock() guard ──────────────────────────────────────────
+
+test("lock() rejects start when a seat holds an absent human (connId null)", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const hostConn = join(instance, "c-host", "host-id"); // slot 0
+    const guestConn = join(instance, "c-guest", "guest-id"); // slot 2
+
+    // Guest disconnects — now slot 2 holds an absent human.
+    instance.onClose(guestConn);
+
+    // Fill bots in slots 1 and 3 to complete the 2v2.
+    await instance.testApplyCommand(hostConn, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 1,
+    });
+    await instance.testApplyCommand(hostConn, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 3,
+    });
+
+    // Host tries to start — should be rejected because slot 2 has an absent human.
+    await instance.testApplyCommand(hostConn, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+
+    expect(instance.isLocked).toBe(false);
+    expect(instance.lastLaunchForTest).toBeNull();
+  });
+});
+
+test("lock() rejects start when a mode-required slot is entirely empty", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const hostConn = join(instance, "c-host", "host-id"); // slot 0
+    join(instance, "c-guest", "guest-id"); // slot 2
+    // Slots 1 and 3 are empty — 2v2 requires all 4.
+
+    await instance.testApplyCommand(hostConn, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+
+    expect(instance.isLocked).toBe(false);
+    expect(instance.lastLaunchForTest).toBeNull();
+  });
+});
+
+test("lock() succeeds once an absent human's slot is freed and bot-filled", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const hostConn = join(instance, "c-host", "host-id"); // slot 0
+    const guestConn = join(instance, "c-guest", "guest-id"); // slot 2
+    join(instance, "c-c", "c-id"); // slot 1
+    join(instance, "c-d", "d-id"); // slot 3
+
+    // Guest (slot 2) disconnects.
+    instance.onClose(guestConn);
+
+    // Start rejected: slot 2 has absent human.
+    await instance.testApplyCommand(hostConn, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+    expect(instance.isLocked).toBe(false);
+
+    // Push stage-2 expiry for guest.
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("guest-id", Date.now() - 31_000);
+  });
+
+  // Fire alarm — seat freed.
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    // Slot 2 is open.
+    expect(instance.seatFor(2)).toBeUndefined();
+
+    // Host bot-fills slot 2.
+    const hostConn = makeMockConnection("c-host");
+    // Re-register the host connection (need to re-join within this runInDurableObject).
+    // The connection mapping is in-memory and doesn't survive runInDurableObject
+    // boundaries, so re-send the LobbyJoin to restore it.
+    instance.onMessage(
+      hostConn,
+      JSON.stringify({
+        type: "LobbyJoin",
+        playerId: "host-id",
+        displayName: "host-id",
+      }),
+    );
+    await instance.testApplyCommand(hostConn, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 2,
+    });
+    expect(instance.hasBot(2)).toBe(true);
+
+    // Now start should succeed: no absent humans, all required slots filled.
+    await instance.testApplyCommand(hostConn, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+    expect(instance.isLocked).toBe(true);
+
+    const launch = instance.lastLaunchForTest;
+    expect(launch).not.toBeNull();
+    if (!launch) return;
+    // No absent human slot in the manifest.
+    const humanSlots = launch.manifest.slots.filter((s) => s.kind === "human");
+    for (const h of humanSlots) {
+      expect(h.playerId).not.toBe("guest-id");
+    }
+    // Slot 2 should be a bot in the manifest.
+    const slot2 = launch.manifest.slots.find((s) => s.slotId === 2);
+    expect(slot2?.kind).toBe("bot");
+  });
+});
+
+test("lock() guard: 1v1 mode only requires slots 0 and 2", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const hostConn = join(instance, "c-host", "host-id"); // slot 0
+    join(instance, "c-guest", "guest-id"); // slot 2
+    // Set 1v1 mode — only slots 0 and 2 are required.
+    await instance.testApplyCommand(hostConn, {
+      type: "LobbyCommand",
+      cmd: "setSettings",
+      settings: { mode: "1v1" },
+    });
+
+    // Slots 1 and 3 are empty but not required in 1v1 — start should succeed.
+    await instance.testApplyCommand(hostConn, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+    expect(instance.isLocked).toBe(true);
+    const launch = instance.lastLaunchForTest;
+    expect(launch).not.toBeNull();
+  });
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

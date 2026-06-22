@@ -10,19 +10,44 @@
  * kept resident by its live WebSocket connections — nothing keeps MatchLaunch
  * warm between the lock() write and the later claim() reads, so in-memory state
  * would be lost on eviction. The manifest is the source of truth for who may
- * claim each human Player Slot (and, in Phase 6, slot reclaim during grace).
+ * claim each human Player Slot (and for idempotent same-token reclaim).
+ *
+ * Reconnect grace (post-Phase-6 correctness fix):
+ * Grace is owned entirely by the Colyseus MatchRoom, NOT this DO. The DO
+ * cannot observe player disconnects — only the Colyseus server sees them via
+ * onLeave(). The MatchRoom's onLeave() → reserveSlot() path starts a wall-clock
+ * timer (DEFAULT_RECONNECT_CONFIG.reconnectGraceMs) anchored at the actual
+ * disconnect, and onGraceExpired() fail-closes after the window.
+ *
+ * This DO's responsibility is narrower:
+ *   1. Token validity — unknown token → reject.
+ *   2. Anti-hijack — a DIFFERENT token may not claim an already-claimed slot.
+ *   3. Idempotent reclaim — the SAME token may reclaim its slot at any time
+ *      (the grace clock is the MatchRoom's concern, not ours).
+ *
+ * No alarm is set. No per-slot expiry state is tracked. ClaimedSlotState holds
+ * only the token binding needed for the anti-hijack check.
  */
 
 import type { ClaimResponse, MatchManifest, PlayerSlotId } from "@bb/protocol";
 import { Server } from "partyserver";
 
+/** Per-claimed-slot state within StoredLaunch. */
+interface ClaimedSlotState {
+  /** The joinToken that performed the original claim (single-use on different tokens). */
+  token: string;
+}
+
 /** The single record persisted under STORAGE_KEY. */
 interface StoredLaunch {
   manifest: MatchManifest;
-  /** joinToken → slot id. Single-use in Phase 5 (consumed on first claim). */
+  /** joinToken → slot id. */
   tokenToSlot: Record<string, PlayerSlotId>;
-  /** Slot ids already claimed — prevents duplicate-token reuse / double-claim. */
-  claimedSlots: PlayerSlotId[];
+  /**
+   * Slot ids already claimed, keyed by slot id.
+   * Stores only the token binding needed for the anti-hijack check.
+   */
+  claimedSlots: Partial<Record<PlayerSlotId, ClaimedSlotState>>;
 }
 
 const STORAGE_KEY = "launch";
@@ -42,7 +67,7 @@ export class MatchLaunch extends Server<MatchLaunchEnv> {
     const stored: StoredLaunch = {
       manifest: data.manifest,
       tokenToSlot: data.tokenToSlot,
-      claimedSlots: [],
+      claimedSlots: {},
     };
     await this.ctx.storage.put(STORAGE_KEY, stored);
   }
@@ -78,9 +103,13 @@ export class MatchLaunch extends Server<MatchLaunchEnv> {
   /**
    * Validate a join token and claim its slot.
    *
-   * Phase 5: a token is single-use — the first claim succeeds; any unknown or
-   * already-claimed (duplicate) token is rejected. Phase 6 layers
-   * idempotent reclaim-within-grace on top of this method.
+   * Three rules — in order:
+   *   1. Unknown token → { ok: false } (403).
+   *   2. A DIFFERENT token attempting to claim an already-claimed slot → { ok: false } (403).
+   *   3. Same token (first claim or idempotent reclaim) → { ok: true, playerSlotId, manifest }.
+   *
+   * There is NO expiry check here. Grace lives in the Colyseus MatchRoom; this
+   * DO only enforces token identity + anti-hijack.
    */
   async claim(joinToken: string): Promise<ClaimResponse> {
     const stored = await this.ctx.storage.get<StoredLaunch>(STORAGE_KEY);
@@ -89,12 +118,22 @@ export class MatchLaunch extends Server<MatchLaunchEnv> {
     const slot = stored.tokenToSlot[joinToken];
     if (slot === undefined) return { ok: false };
 
-    if (stored.claimedSlots.includes(slot)) {
-      return { ok: false };
+    const existing = stored.claimedSlots[slot];
+
+    if (existing) {
+      // Slot is already claimed — check if this is the same token (reclaim).
+      if (existing.token !== joinToken) {
+        // A different token is trying to claim an occupied slot → reject.
+        return { ok: false };
+      }
+      // Same token → idempotent reclaim; always succeeds regardless of time.
+      return { ok: true, playerSlotId: slot, manifest: stored.manifest };
     }
 
-    stored.claimedSlots.push(slot);
+    // First claim for this slot — record the token binding.
+    stored.claimedSlots[slot] = { token: joinToken };
     await this.ctx.storage.put(STORAGE_KEY, stored);
+
     return { ok: true, playerSlotId: slot, manifest: stored.manifest };
   }
 }

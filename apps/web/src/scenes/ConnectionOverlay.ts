@@ -314,6 +314,7 @@ export class ConnectionOverlay {
     const messages: Record<string, string> = {
       "peer-left": "Match Over — Opponent Left",
       "server-shutdown": "Match Over — Server Shutdown",
+      "reconnect-expired": "Match Over — Reconnect Window Closed",
       "ws-error": "Match Over — Connection Lost",
     };
     this.closedBannerEl.textContent =

@@ -8,6 +8,7 @@
 import {
   type LobbyCommand,
   type LobbyJoin,
+  type LobbyNotice,
   type LobbyState,
   type MatchLaunch,
   serializeLobbyCommand,
@@ -19,6 +20,7 @@ export class LobbyClient {
   private socket: PartySocket | null = null;
   private listeners: ((state: LobbyState) => void)[] = [];
   private launchListeners: ((launch: MatchLaunch) => void)[] = [];
+  private noticeListeners: ((notice: LobbyNotice) => void)[] = [];
 
   /**
    * Connect to a lobby by code and send the player's profile.
@@ -58,6 +60,10 @@ export class LobbyClient {
           for (const listener of this.launchListeners) {
             listener(msg as MatchLaunch);
           }
+        } else if (msg.type === "LobbyNotice") {
+          for (const listener of this.noticeListeners) {
+            listener(msg as LobbyNotice);
+          }
         }
       } catch {
         // Ignore malformed messages.
@@ -73,6 +79,11 @@ export class LobbyClient {
   /** Register a listener for the MatchLaunch handoff (delivered on Host start). */
   onLaunch(listener: (launch: MatchLaunch) => void): void {
     this.launchListeners.push(listener);
+  }
+
+  /** Register a listener for LobbyNotice messages (lock guard feedback). */
+  onNotice(listener: (notice: LobbyNotice) => void): void {
+    this.noticeListeners.push(listener);
   }
 
   /** Send a host-control command (seat move, bot fill/clear, settings, start). */

@@ -25,7 +25,7 @@ import {
   P2_KEYMAP,
 } from "../input/KeyboardAdapter";
 import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
-import { takeLaunch } from "../lobby/launchHandoff";
+import { peekLaunch } from "../lobby/launchHandoff";
 import { NetClient } from "../net/NetClient";
 import { NetLoop } from "../net/NetLoop";
 import {
@@ -122,6 +122,18 @@ export class GameScene extends Phaser.Scene {
    * shutdown). Input is frozen and the fail-closed banner is shown.
    */
   private matchFailClosed = false;
+
+  /**
+   * Phase 6: retained launch payload for reconnect. Unlike `takeLaunch()` which
+   * clears sessionStorage, we keep an in-scene copy so we can re-join with the
+   * same (launchId, joinToken) if the match connection drops within grace.
+   */
+  private retainedLaunch: MatchLaunch | null = null;
+  /**
+   * Phase 6: true while a reconnect attempt is in flight. Prevents multiple
+   * concurrent reconnect attempts.
+   */
+  private reconnecting = false;
   /** Phase 4: dev network simulator (dev-only). */
   private simTransport: SimulatedTransport | null = null;
 
@@ -224,7 +236,11 @@ export class GameScene extends Phaser.Scene {
 
     // Phase 5: if the lobby handed off a launch payload, join the match via the
     // launch manifest (launchId + joinToken) and skip the create/join overlay.
-    const launch = takeLaunch();
+    //
+    // Phase 6: use peekLaunch() (not takeLaunch()) so the payload stays in
+    // sessionStorage for potential reconnect after a page refresh. We keep an
+    // in-scene copy in retainedLaunch for mid-match reconnect without a reload.
+    const launch = peekLaunch();
     if (launch) {
       this.startLaunchedMatch(launch);
     } else {
@@ -425,8 +441,16 @@ export class GameScene extends Phaser.Scene {
    * Colyseus via the launch (launchId + joinToken), and starts the NetLoop once
    * the room reports its claimed slot + active slots. On a rejected claim the
    * connection simply closes (fail-closed banner).
+   *
+   * Phase 6: retains the launch payload for reconnect. On any disconnect, if
+   * a retained launch is available, attempts to reclaim the slot by re-joining
+   * with the same (launchId, joinToken). Only shows the fail-closed banner if
+   * the reclaim fails or the grace window has expired.
    */
   private startLaunchedMatch(launch: MatchLaunch): void {
+    // Retain the launch payload for reconnect (Phase 6).
+    this.retainedLaunch = launch;
+
     // The match is entered via the lobby handoff — the direct-connect create/join
     // panel must never show (it would linger in the corner).
     this.connectionOverlay.hideConnectPanel();
@@ -457,14 +481,83 @@ export class GameScene extends Phaser.Scene {
         });
         // Fail-closed before the loop starts (e.g. rejected/duplicate claim).
         net.onFailClosed((reason) => {
-          this.matchFailClosed = true;
-          this.connectionOverlay.showFailClosed(reason);
+          // Phase 6: if we have a retained launch and haven't started
+          // reconnecting yet, try to reclaim the slot.
+          if (
+            this.retainedLaunch !== null &&
+            !this.reconnecting &&
+            reason !== "reconnect-expired" &&
+            reason !== "server-shutdown"
+          ) {
+            void this.attemptReconnect();
+          } else {
+            this.matchFailClosed = true;
+            this.connectionOverlay.showFailClosed(reason);
+          }
         });
       })
       .catch((err) => {
         console.error("[net] joinLaunch failed", err);
         this.connectionOverlay.showFailClosed("ws-error");
       });
+  }
+
+  /**
+   * Phase 6: attempt to reconnect using the retained launch payload.
+   *
+   * Re-joins Colyseus with the same (launchId, joinToken). The MatchLaunch DO
+   * treats the re-claim as idempotent within the grace window. If successful,
+   * the NetLoop resumes at the same Player Slot. If the reclaim fails (e.g.
+   * grace expired or the room was disposed), shows the fail-closed banner.
+   */
+  private async attemptReconnect(): Promise<void> {
+    const launch = this.retainedLaunch;
+    if (!launch || this.reconnecting) return;
+
+    this.reconnecting = true;
+    console.info("[net] attempting reconnect…", launch.launchId);
+
+    // Build a fresh NetClient for the new room connection.
+    this.netClient = new NetClient();
+    const net = this.netClient;
+    net.slot = launch.playerSlotId;
+
+    try {
+      await net.joinLaunch(launch.launchId, launch.joinToken);
+
+      // Reconnect succeeded — wire up the message handlers.
+      net.onMessage("RoomReady", (msg) => {
+        const m = msg as {
+          slot: number;
+          full: boolean;
+          slots?: PlayerSlotId[];
+        };
+        net.slot = m.slot as PlayerSlotId;
+        this.reconnecting = false;
+        if (m.full) {
+          // Resume the net loop with the same slot.
+          this.startNetLoop(
+            m.slot as PlayerSlotId,
+            (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
+          );
+        }
+      });
+
+      net.onFailClosed((reason) => {
+        // Reconnect attempt subsequently failed (e.g. grace expired while we
+        // were reconnecting).
+        this.reconnecting = false;
+        this.matchFailClosed = true;
+        this.connectionOverlay.showFailClosed(reason);
+      });
+
+      console.info("[net] reconnect join sent — awaiting RoomReady");
+    } catch (err) {
+      console.error("[net] reconnect failed", err);
+      this.reconnecting = false;
+      this.matchFailClosed = true;
+      this.connectionOverlay.showFailClosed("ws-error");
+    }
   }
 
   private startNetLoop(
@@ -510,12 +603,26 @@ export class GameScene extends Phaser.Scene {
     this.netLoop.start();
     console.info(`[net] NetLoop started (slot ${slot})`);
 
-    // Phase 5: fail-closed — stop the net loop and show the banner on any
-    // peer disconnect, server shutdown, or WebSocket error.
+    // Phase 5/6: fail-closed — stop the net loop and either attempt reconnect
+    // (Phase 6, within grace) or show the banner (Phase 5 legacy behaviour).
     this.netClient.onFailClosed((reason) => {
       console.info(`[net] fail-closed: ${reason}`);
       // Stop the net loop so no more predicted ticks or sends happen.
       this.netLoop = null;
+
+      // Phase 6: if we have a retained launch and the reason isn't a
+      // definitive terminal (expired grace or server shutdown), attempt
+      // to reclaim the slot before showing the fail-closed banner.
+      if (
+        this.retainedLaunch !== null &&
+        !this.reconnecting &&
+        reason !== "reconnect-expired" &&
+        reason !== "server-shutdown"
+      ) {
+        void this.attemptReconnect();
+        return;
+      }
+
       // Freeze the scene so stray input can't interact with the frozen state.
       this.matchFailClosed = true;
       // Show the fail-closed banner and update the status badge.

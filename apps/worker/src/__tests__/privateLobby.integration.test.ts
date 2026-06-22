@@ -52,7 +52,8 @@ async function connectToLobby(
   );
 
   expect(res.status).toBe(101);
-  const ws = res.webSocket!;
+  if (!res.webSocket) throw new Error("Expected WebSocket upgrade");
+  const ws = res.webSocket;
   ws.accept();
 
   ws.addEventListener("message", (evt: MessageEvent) => {
@@ -81,7 +82,8 @@ test("WebSocket upgrade returns 101", async () => {
   );
 
   expect(res.status).toBe(101);
-  const ws = res.webSocket!;
+  if (!res.webSocket) throw new Error("Expected WebSocket upgrade");
+  const ws = res.webSocket;
   ws.accept();
   ws.close();
 
@@ -108,7 +110,9 @@ test("client joins and receives LobbyState with their seat", async () => {
   await new Promise<void>((r) => setTimeout(r, 50));
 
   expect(messages.length).toBeGreaterThan(0);
-  const state = parseLobbyState(messages[messages.length - 1]!);
+  const lastMsg = messages[messages.length - 1];
+  if (!lastMsg) throw new Error("Expected at least one message");
+  const state = parseLobbyState(lastMsg);
   expect(state.type).toBe("LobbyState");
   expect(state.code).toBe(code);
   expect(state.hostPlayerId).toBe("player-alice");
@@ -161,9 +165,9 @@ test("second client joining causes both clients to receive updated LobbyState", 
   expect(client1.messages.length).toBeGreaterThan(beforeCount1);
 
   // The latest state should show Bob in slot 2 (SEAT_ORDER second position).
-  const latestState = parseLobbyState(
-    client1.messages[client1.messages.length - 1]!,
-  );
+  const lastClient1Msg = client1.messages[client1.messages.length - 1];
+  if (!lastClient1Msg) throw new Error("Expected client1 to have messages");
+  const latestState = parseLobbyState(lastClient1Msg);
   const slot2 = latestState.slots.find((s) => s.slotId === 2);
   expect(slot2?.occupant?.kind).toBe("human");
   if (slot2?.occupant?.kind === "human") {
@@ -207,9 +211,9 @@ test("client disconnect triggers presence update (present=false) broadcast", asy
   await new Promise<void>((r) => setTimeout(r, 80));
 
   // Bob's client should have received a state update with Alice present=false.
-  const latestState = parseLobbyState(
-    client2.messages[client2.messages.length - 1]!,
-  );
+  const lastClient2Msg = client2.messages[client2.messages.length - 1];
+  if (!lastClient2Msg) throw new Error("Expected client2 to have messages");
+  const latestState = parseLobbyState(lastClient2Msg);
   const aliceSlot = latestState.slots.find(
     (s) =>
       s.occupant?.kind === "human" && s.occupant.playerId === "player-alice",
