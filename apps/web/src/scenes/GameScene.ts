@@ -1,3 +1,4 @@
+import type { MatchLaunch } from "@bb/protocol";
 import {
   createReplay,
   createSimulation,
@@ -24,6 +25,11 @@ import {
   P2_KEYMAP,
 } from "../input/KeyboardAdapter";
 import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
+import {
+  hasLaunchJoined,
+  markLaunchJoined,
+  peekLaunch,
+} from "../lobby/launchHandoff";
 import { NetClient } from "../net/NetClient";
 import { NetLoop } from "../net/NetLoop";
 import {
@@ -46,6 +52,11 @@ import {
 import { ConnectionOverlay } from "./ConnectionOverlay";
 import { type HudBridge, hudBridge } from "./HudScene";
 import { OrientationOverlay } from "./OrientationOverlay";
+import {
+  type FailClosedReason,
+  shouldAttemptReconnect,
+  wireFailClosed,
+} from "./reconnectFlow";
 import { bellFromScoreDelta } from "./scoreFeedback";
 
 // Distinct colors per player slot (grounded / airborne variants).
@@ -120,6 +131,18 @@ export class GameScene extends Phaser.Scene {
    * shutdown). Input is frozen and the fail-closed banner is shown.
    */
   private matchFailClosed = false;
+
+  /**
+   * Phase 6: retained launch payload for reconnect. Unlike `takeLaunch()` which
+   * clears sessionStorage, we keep an in-scene copy so we can re-join with the
+   * same (launchId, joinToken) if the match connection drops within grace.
+   */
+  private retainedLaunch: MatchLaunch | null = null;
+  /**
+   * Phase 6: true while a reconnect attempt is in flight. Prevents multiple
+   * concurrent reconnect attempts.
+   */
+  private reconnecting = false;
   /** Phase 4: dev network simulator (dev-only). */
   private simTransport: SimulatedTransport | null = null;
 
@@ -220,31 +243,45 @@ export class GameScene extends Phaser.Scene {
     this.connectionOverlay = new ConnectionOverlay();
     this.connectionOverlay.mount();
 
-    // Phase 3: read optional ?botSlot=N URL parameter(s) to fill slots with
-    // Practice Bots. Temporary — replaced by the launch manifest in Phase 5.
-    const urlParams = new URLSearchParams(window.location.search);
-    const botSlotParam = urlParams.get("botSlot");
-    const createOptions =
-      botSlotParam !== null ? { botSlots: [Number(botSlotParam)] } : undefined;
+    // Phase 5: if the lobby handed off a launch payload, join the match via the
+    // launch manifest (launchId + joinToken) and skip the create/join overlay.
+    //
+    // Phase 6: use peekLaunch() (not takeLaunch()) so the payload stays in
+    // sessionStorage for potential reconnect after a page refresh. We keep an
+    // in-scene copy in retainedLaunch for mid-match reconnect without a reload.
+    const launch = peekLaunch();
+    if (launch) {
+      this.startLaunchedMatch(launch);
+    } else {
+      // Dev/test direct-connect shortcut: the create/join overlay path from
+      // Plan 1. The primary acceptance path is the launch handoff above.
+      // ?botSlot=N fills a slot with a Practice Bot on the server's legacy path.
+      const urlParams = new URLSearchParams(window.location.search);
+      const botSlotParam = urlParams.get("botSlot");
+      const createOptions =
+        botSlotParam !== null
+          ? { botSlots: [Number(botSlotParam)] }
+          : undefined;
 
-    this.connectionOverlay.wire(
-      this.netClient,
-      this.game.canvas,
-      (slot, slots) => {
-        // Phase 2: room is full — switch to networked mode.
-        this.startNetLoop(
-          slot as PlayerSlotId,
-          (slots ?? [0, 2]) as PlayerSlotId[],
-        );
-      },
-      () => {
-        // Created/joined a room; freeze the local sim until the match begins so
-        // stray input can't kick off a phantom local match behind the panel.
-        this.awaitingOpponent = true;
-        this.startPromptEl.style.display = "none";
-      },
-      createOptions,
-    );
+      this.connectionOverlay.wire(
+        this.netClient,
+        this.game.canvas,
+        (slot, slots) => {
+          // Phase 2: room is full — switch to networked mode.
+          this.startNetLoop(
+            slot as PlayerSlotId,
+            (slots ?? [0, 2]) as PlayerSlotId[],
+          );
+        },
+        () => {
+          // Created/joined a room; freeze the local sim until the match begins
+          // so stray input can't kick off a phantom local match.
+          this.awaitingOpponent = true;
+          this.startPromptEl.style.display = "none";
+        },
+        createOptions,
+      );
+    }
 
     // Launch the HUD in parallel (it renders on top without replacing GameScene).
     this.scene.launch("HudScene");
@@ -408,10 +445,177 @@ export class GameScene extends Phaser.Scene {
 
   // ── Phase 2: networked game loop ─────────────────────────────────────────────
 
+  /**
+   * Phase 5: join the match for a launch handoff. Freezes the local sim, joins
+   * Colyseus via the launch (launchId + joinToken), and starts the NetLoop once
+   * the room reports its claimed slot + active slots. On a rejected claim the
+   * connection simply closes (fail-closed banner).
+   *
+   * Phase 6: retains the launch payload for reconnect. On any disconnect, if
+   * a retained launch is available, attempts to reclaim the slot by re-joining
+   * with the same (launchId, joinToken). Only shows the fail-closed banner if
+   * the reclaim fails or the grace window has expired.
+   */
+  private startLaunchedMatch(launch: MatchLaunch): void {
+    // Retain the launch payload for reconnect (Phase 6).
+    this.retainedLaunch = launch;
+
+    // The match is entered via the lobby handoff — the direct-connect create/join
+    // panel must never show (it would linger in the corner).
+    this.connectionOverlay.hideConnectPanel();
+
+    // Freeze the local background sim until the networked match begins.
+    this.awaitingOpponent = true;
+    this.startPromptEl.style.display = "none";
+
+    const net = this.netClient;
+    net.slot = launch.playerSlotId;
+
+    const create = !hasLaunchJoined(launch.launchId);
+
+    void net
+      .joinLaunch(launch.launchId, launch.joinToken, { create })
+      .then(() => {
+        markLaunchJoined(launch.launchId);
+        net.onMessage("RoomReady", (msg) => {
+          const m = msg as {
+            slot: number;
+            full: boolean;
+            slots?: PlayerSlotId[];
+          };
+          net.slot = m.slot as PlayerSlotId;
+          if (m.full) {
+            this.startNetLoop(
+              m.slot as PlayerSlotId,
+              (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
+            );
+          }
+        });
+        // Fail-closed before the loop starts (e.g. rejected/duplicate claim).
+        // Wired exactly once per NetClient instance (see wireFailClosed).
+        this.wireFailClosed(net);
+      })
+      .catch((err) => {
+        console.error("[net] joinLaunch failed", err);
+        this.connectionOverlay.showFailClosed("ws-error");
+      });
+  }
+
+  /**
+   * Phase 6: attempt to reconnect using the retained launch payload.
+   *
+   * Re-joins Colyseus with the same (launchId, joinToken). The MatchLaunch DO
+   * treats the re-claim as idempotent within the grace window. If successful,
+   * the NetLoop resumes at the same Player Slot. If the reclaim fails (e.g.
+   * grace expired or the room was disposed), shows the fail-closed banner.
+   */
+  private async attemptReconnect(): Promise<void> {
+    const launch = this.retainedLaunch;
+    if (!launch || this.reconnecting) return;
+
+    this.reconnecting = true;
+    console.info("[net] attempting reconnect…", launch.launchId);
+
+    // Build a fresh NetClient for the new room connection.
+    this.netClient = new NetClient();
+    const net = this.netClient;
+    net.slot = launch.playerSlotId;
+
+    try {
+      await net.joinLaunch(launch.launchId, launch.joinToken, {
+        create: false,
+      });
+
+      // Reconnect succeeded — wire up the message handlers.
+      net.onMessage("RoomReady", (msg) => {
+        const m = msg as {
+          slot: number;
+          full: boolean;
+          slots?: PlayerSlotId[];
+        };
+        net.slot = m.slot as PlayerSlotId;
+        this.reconnecting = false;
+        // Reconnect resumed: clear any terminal/fail-closed state so a stale
+        // banner can't persist over the resumed game (FLI-8 BUG #1).
+        this.clearFailClosed();
+        if (m.full) {
+          // Resume the net loop with the same slot.
+          this.startNetLoop(
+            m.slot as PlayerSlotId,
+            (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
+          );
+        }
+      });
+
+      // Fresh NetClient instance — wired once. shouldAttemptReconnect() guards
+      // against re-entrancy if the reconnect itself fails closed.
+      this.wireFailClosed(net);
+
+      console.info("[net] reconnect join sent — awaiting RoomReady");
+    } catch (err) {
+      console.error("[net] reconnect failed", err);
+      this.reconnecting = false;
+      this.matchFailClosed = true;
+      this.connectionOverlay.showFailClosed("ws-error");
+    }
+  }
+
+  /**
+   * Wire fail-closed handling onto a NetClient EXACTLY ONCE per instance
+   * (FLI-8 BUG #1). The launch path, the reconnect path, and the net-loop path
+   * all funnel through here; wireFailClosed() (reconnectFlow) de-dupes per
+   * instance so the SDK's stacking handlers can't register two fire-once chains
+   * on the same room and fight each other on a disconnect.
+   */
+  private wireFailClosed(net: NetClient): void {
+    wireFailClosed(net, (reason: FailClosedReason) => {
+      console.info(`[net] fail-closed: ${reason}`);
+      // Stop the net loop so no more predicted ticks or sends happen.
+      this.netLoop = null;
+
+      // Phase 6: if we can recover (retained launch, not already reconnecting,
+      // non-terminal reason), attempt to reclaim the slot before showing the
+      // banner.
+      if (
+        shouldAttemptReconnect(reason, {
+          hasRetainedLaunch: this.retainedLaunch !== null,
+          reconnecting: this.reconnecting,
+        })
+      ) {
+        void this.attemptReconnect();
+        return;
+      }
+
+      // Freeze the scene so stray input can't interact with the frozen state,
+      // and show the fail-closed banner + status badge.
+      this.reconnecting = false;
+      this.matchFailClosed = true;
+      this.connectionOverlay.showFailClosed(reason);
+    });
+  }
+
+  /**
+   * Clear terminal/fail-closed state on a successful reconnect resume so a
+   * stale "Match Over" banner can't persist over the resumed game (FLI-8).
+   */
+  private clearFailClosed(): void {
+    this.matchFailClosed = false;
+    this.connectionOverlay.hideFailClosed();
+  }
+
   private startNetLoop(
     slot: PlayerSlotId,
     activeSlots: PlayerSlotId[] = [0, 2],
   ): void {
+    // Idempotency guard (FLI-8 BUG #2): the server re-broadcasts
+    // RoomReady{full:true} to ALL present clients whenever any peer reconnects,
+    // so the persistent RoomReady handler can re-invoke this on every other
+    // client. RoomReady{full:true} means "ensure the loop is running", not
+    // "start a second one". A second start would orphan the first NetLoop +
+    // SimulatedTransport, leak a duplicate net-sim-config listener, and stack
+    // another onFailClosed. If a loop is already running, do nothing.
+    if (this.netLoop !== null) return;
+
     // The match is starting — leave the awaiting-opponent freeze state.
     this.awaitingOpponent = false;
 
@@ -451,17 +655,11 @@ export class GameScene extends Phaser.Scene {
     this.netLoop.start();
     console.info(`[net] NetLoop started (slot ${slot})`);
 
-    // Phase 5: fail-closed — stop the net loop and show the banner on any
-    // peer disconnect, server shutdown, or WebSocket error.
-    this.netClient.onFailClosed((reason) => {
-      console.info(`[net] fail-closed: ${reason}`);
-      // Stop the net loop so no more predicted ticks or sends happen.
-      this.netLoop = null;
-      // Freeze the scene so stray input can't interact with the frozen state.
-      this.matchFailClosed = true;
-      // Show the fail-closed banner and update the status badge.
-      this.connectionOverlay.showFailClosed(reason);
-    });
+    // Phase 5/6: fail-closed — wired exactly once per NetClient instance. The
+    // launch path may already have wired this same instance (in
+    // startLaunchedMatch); wireFailClosed() de-dupes so both fire-once chains
+    // can't fight each other (FLI-8 BUG #1).
+    this.wireFailClosed(this.netClient);
 
     // Phase 5: periodic RTT telemetry (every 2 seconds).
     this.startTelemetry();

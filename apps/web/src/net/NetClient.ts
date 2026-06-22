@@ -35,6 +35,22 @@ export class NetClient {
     this.room = await this.client.joinById(id);
   }
 
+  /**
+   * Join the match for a launch (Phase 5). The first launch join may create the
+   * MatchRoom; reconnect attempts must join only an existing MatchRoom so stale
+   * tokens cannot create a new room after grace expiry.
+   */
+  async joinLaunch(
+    launchId: string,
+    joinToken: string,
+    options: { create?: boolean } = { create: true },
+  ): Promise<void> {
+    const joinOptions = { launchId, joinToken };
+    this.room = options.create
+      ? await this.client.joinOrCreate("match", joinOptions)
+      : await this.client.join("match", joinOptions);
+  }
+
   /** Register a typed message handler on the connected room. */
   onMessage(type: string, cb: (m: unknown) => void): void {
     this.room.onMessage(type as never, cb as never);

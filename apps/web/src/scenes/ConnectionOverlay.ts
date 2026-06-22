@@ -18,6 +18,8 @@ type Status = "idle" | "connecting" | "connected" | "error" | "closed";
 
 export class ConnectionOverlay {
   private root!: HTMLElement;
+  /** The centred create/join panel (Plan 1 direct-connect controls). */
+  private panel!: HTMLElement;
   private statusEl!: HTMLElement;
   private createBtn!: HTMLButtonElement;
   private joinRow!: HTMLElement;
@@ -57,6 +59,7 @@ export class ConnectionOverlay {
       "background:rgba(0,0,0,0.75);border-radius:8px;padding:20px 28px;" +
       "display:flex;flex-direction:column;gap:10px;align-items:center;" +
       "pointer-events:auto;";
+    this.panel = panel;
     this.root.appendChild(panel);
 
     const title = document.createElement("div");
@@ -262,9 +265,17 @@ export class ConnectionOverlay {
   }
 
   private hidePanel(): void {
-    // Hide the create/join panel once connected; badge stays visible
-    const panel = this.root.children[1] as HTMLElement | undefined;
-    if (panel) panel.style.display = "none";
+    // Hide the create/join panel once connected; badge stays visible.
+    this.panel.style.display = "none";
+  }
+
+  /**
+   * Hide the create/join panel up front. Used by the Phase 5 launch path, where
+   * the match is entered via the lobby handoff and the direct-connect controls
+   * must never be shown (otherwise they linger in the corner).
+   */
+  hideConnectPanel(): void {
+    this.panel.style.display = "none";
   }
 
   private setStatus(s: Status): void {
@@ -303,6 +314,7 @@ export class ConnectionOverlay {
     const messages: Record<string, string> = {
       "peer-left": "Match Over — Opponent Left",
       "server-shutdown": "Match Over — Server Shutdown",
+      "reconnect-expired": "Match Over — Reconnect Window Closed",
       "ws-error": "Match Over — Connection Lost",
     };
     this.closedBannerEl.textContent =
@@ -311,6 +323,14 @@ export class ConnectionOverlay {
     // Show the telemetry element if it was visible (keeps the readout).
     // Hide the panel so the banner stands alone.
     this.hidePanel();
+  }
+
+  /**
+   * Hide the fail-closed banner. Called on a successful silent reconnect so a
+   * stale "Match Over" banner can't persist over the resumed game (FLI-8).
+   */
+  hideFailClosed(): void {
+    this.closedBannerEl.style.display = "none";
   }
 
   /**

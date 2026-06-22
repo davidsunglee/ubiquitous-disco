@@ -8,7 +8,8 @@
       "*.json",
       "!**/dist",
       "!**/playwright-report",
-      "!**/test-results"
+      "!**/test-results",
+      "!**/.wrangler"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },

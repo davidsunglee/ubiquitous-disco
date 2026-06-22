@@ -1,0 +1,22 @@
+{
+  "name": "bb-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "PrivateLobby", "class_name": "PrivateLobby" },
+      { "name": "MATCH_LAUNCH", "class_name": "MatchLaunch" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PrivateLobby"] },
+    { "tag": "v2", "new_sqlite_classes": ["MatchLaunch"] }
+  ],
+  "vars": {
+    // Dev-only shared secret for the Colyseus → match-launch claim call.
+    // In production this is set out-of-band via `wrangler secret put
+    // WORKER_INTERNAL_SECRET` (which overrides this var).
+    "WORKER_INTERNAL_SECRET": "dev-secret"
+  }
+}
