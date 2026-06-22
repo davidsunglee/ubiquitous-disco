@@ -548,6 +548,58 @@ test("onLeave: double-leave does not double-broadcast (one slot reserved, one tr
   );
 });
 
+test("concurrent disconnects: first reconnect sees full=true (other slot still reserved)", async () => {
+  // Four humans seated, then TWO disconnect concurrently (both slots reserved
+  // within grace). When ONE of them reconnects, "full" should mean "every human
+  // slot that is NOT currently reserved is occupied" — so the reconnecting
+  // client must receive RoomReady{full:true} and resume immediately, without
+  // waiting for the OTHER disconnected player to return.
+  const room = makeRoom();
+  const mf = manifest2v2();
+  const tokenSlot: Record<string, PlayerSlotId> = {
+    t0: 0,
+    t1: 1,
+    t2: 2,
+    t3: 3,
+  };
+  claimImpl = async (_l, token) => ({
+    ok: true,
+    playerSlotId: tokenSlot[token],
+    manifest: mf,
+  });
+
+  const clients = ["a", "b", "c", "d"].map((id) => makeClient(`session-${id}`));
+  (room as unknown as { clients: unknown[] }).clients.push(...clients);
+
+  await room.onJoin(clients[0] as never, { launchId: "L1", joinToken: "t0" });
+  await room.onJoin(clients[1] as never, { launchId: "L1", joinToken: "t1" });
+  await room.onJoin(clients[2] as never, { launchId: "L1", joinToken: "t2" });
+  await room.onJoin(clients[3] as never, { launchId: "L1", joinToken: "t3" });
+
+  // Two humans disconnect concurrently — slots 0 and 1 are both reserved.
+  room.onLeave(clients[0] as never);
+  room.onLeave(clients[1] as never);
+  expect(room.reservedSlotIds).toContain(0);
+  expect(room.reservedSlotIds).toContain(1);
+  expect(room.isDisposed).toBe(false);
+
+  // Player at slot 0 reconnects with the same token while slot 1 is still reserved.
+  const reconnect = makeClient("session-a2");
+  (room as unknown as { clients: unknown[] }).clients.push(reconnect);
+  await room.onJoin(reconnect as never, { launchId: "L1", joinToken: "t0" });
+
+  expect(room.slotForSession("session-a2")).toBe(0);
+  expect(room.reservedSlotIds).not.toContain(0);
+  expect(room.reservedSlotIds).toContain(1);
+
+  // The reconnected client must receive a full=true RoomReady for its slot.
+  const fullMsgs = reconnect.messages.filter(
+    (m) => m.type === "RoomReady" && (m.payload as { full: boolean }).full,
+  );
+  expect(fullMsgs.length).toBeGreaterThan(0);
+  expect((fullMsgs[0]?.payload as { slot: number }).slot).toBe(0);
+});
+
 // ── Phase 5: fail-closed disconnect (legacy direct-connect path only) ─────────
 
 test("onLeave broadcasts MatchClosed(peer-left) and disposes (legacy direct-connect)", async () => {

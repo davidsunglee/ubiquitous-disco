@@ -375,11 +375,15 @@ export class MatchRoom extends Room {
   private seatAndAnnounce(client: Client, slot: PlayerSlotId): void {
     this.slotOf.set(client.sessionId, slot);
 
-    // "full" when all human slots are occupied (bot slots don't count as clients).
+    // "full" when every human slot that is NOT currently reserved (mid-grace) is
+    // occupied by a present client (bot slots don't count as clients). A reserved
+    // slot's source is emptySource(), whose isHuman is true, so it still counts in
+    // humanSlotCount — discount the reserved slots so a single reconnect can be
+    // "full" while a co-disconnected peer is still within its grace window.
     const humanSlotCount = [...this.activeSlots].filter(
       (s) => this.sources.get(s)?.isHuman,
     ).length;
-    const full = this.slotOf.size === humanSlotCount;
+    const full = this.slotOf.size + this.reservedSlots.size === humanSlotCount;
 
     // Each client gets its OWN slot — per-recipient send, not broadcast.
     client.send("RoomReady", {
