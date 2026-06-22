@@ -13,11 +13,13 @@
 import {
   createExecutionContext,
   env,
+  runInDurableObject,
   waitOnExecutionContext,
 } from "cloudflare:test";
 import type { LobbyState } from "@bb/protocol";
 import { afterEach, expect, test } from "vitest";
 import worker from "../index";
+import type { PrivateLobby } from "../PrivateLobby";
 
 let codeSeq = 0;
 function uniqueCode(): string {
@@ -25,9 +27,28 @@ function uniqueCode(): string {
 }
 
 type LobbyEnv = {
-  PrivateLobby: DurableObjectNamespace;
+  PrivateLobby: DurableObjectNamespace<PrivateLobby>;
   MATCH_LAUNCH: DurableObjectNamespace;
 };
+
+/**
+ * Resolve the same PrivateLobby DO instance that the WebSocket clients are
+ * connected to. routePartykitRequest addresses the DO by `idFromName(code)`,
+ * so a stub obtained the same way targets that exact instance — letting us
+ * inspect its post-race internal state via runInDurableObject.
+ */
+function lobbyStub(code: string): DurableObjectStub<PrivateLobby> {
+  const ns = (env as unknown as LobbyEnv).PrivateLobby;
+  return ns.get(ns.idFromName(code));
+}
+
+/** Collect the parsed message `type`s a client has received so far. */
+function messageTypes(messages: string[]): string[] {
+  return messages.map((m) => (JSON.parse(m) as { type?: string }).type ?? "");
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise<void>((r) => setTimeout(r, ms));
 
 afterEach(async () => {
   // No-op — unique codes per test provide isolation.
@@ -226,3 +247,101 @@ test("client disconnect triggers presence update (present=false) broadcast", asy
   client2.ws.close();
   await waitOnExecutionContext(ctx);
 });
+
+// ── Finding #4: drop-during-manifest-write race (no production seam) ──────────
+//
+// This reproduces the finding-#4 race with REAL in-process WebSocket clients —
+// no test-only hook in production code. The mechanism that makes it
+// deterministic (not a wall-clock gamble):
+//
+//   1. The host's `start` enters lock(). The pre-await guards run SYNCHRONOUSLY
+//      (every seat is still present), set `locked = true`, snapshot the present
+//      humans, then reach `await getServerByName(...)` / `await stub.put(...)`.
+//   2. That DO→DO RPC is a NON-storage await, so the DO input gate opens — the
+//      one and only point in lock() where a queued WebSocket event can be
+//      delivered.
+//   3. We call guest.ws.close() in the SAME synchronous turn as start, so the
+//      close frame is already queued at the lobby DO before the put RPC can
+//      resolve. The single-threaded workerd runtime therefore always delivers
+//      onClose() (which nulls the guest's seat connId) DURING the put await,
+//      never before the synchronous pre-await guards and never after lock()
+//      has already returned.
+//   4. lock() resumes, its post-await re-validation sees the snapshotted guest
+//      dropped, and ABORTS: reverts `locked`, recovers the absent-bookkeeping,
+//      sends the host a LobbyNotice, and delivers NO MatchLaunch to anyone.
+//
+// Verified to land on the post-await re-validation path (not the pre-await
+// guard) and to be non-flaky across many consecutive runs. Reverting the
+// snapshot/re-validate logic makes this test go red — proving it exercises the
+// abort path rather than the pre-await guard.
+
+test("lock() aborts (no partial launch) when a human drops during the manifest-write await", async () => {
+  const code = uniqueCode();
+  const ctx = makeCtx();
+
+  const host = await connectToLobby(code, ctx);
+  const guest = await connectToLobby(code, ctx);
+
+  host.ws.send(
+    JSON.stringify({
+      type: "LobbyJoin",
+      playerId: "host-id",
+      displayName: "Host",
+    }),
+  );
+  guest.ws.send(
+    JSON.stringify({
+      type: "LobbyJoin",
+      playerId: "guest-id",
+      displayName: "Guest",
+    }),
+  );
+  await sleep(60);
+
+  // Complete the 2v2 with bots in slots 1 and 3 so the only thing that can fail
+  // the launch is the guest dropping mid-await.
+  host.ws.send(
+    JSON.stringify({ type: "LobbyCommand", cmd: "fillBot", slotId: 1 }),
+  );
+  host.ws.send(
+    JSON.stringify({ type: "LobbyCommand", cmd: "fillBot", slotId: 3 }),
+  );
+  await sleep(60);
+
+  // Drive the race: issue `start`, then — in the same synchronous turn — close
+  // the guest. The close lands inside lock()'s manifest-write await window.
+  host.ws.send(JSON.stringify({ type: "LobbyCommand", cmd: "start" }));
+  guest.ws.close();
+
+  await sleep(120);
+
+  // The guest dropped mid-await and can never claim their slot, so the launch
+  // must be ABORTED rather than delivered as a partial launch.
+  //
+  // Observable on the wire:
+  //  - NOBODY receives a MatchLaunch (not the host, not the guest).
+  //  - The host receives a LobbyNotice explaining why (absent-human).
+  const hostGotLaunch = messageTypes(host.messages).includes("MatchLaunch");
+  const guestGotLaunch = messageTypes(guest.messages).includes("MatchLaunch");
+  expect(hostGotLaunch).toBe(false);
+  expect(guestGotLaunch).toBe(false);
+
+  const hostNotices = host.messages
+    .map((m) => JSON.parse(m) as { type?: string; reason?: string })
+    .filter((m) => m.type === "LobbyNotice")
+    .map((m) => m.reason);
+  expect(hostNotices).toContain("absent-human");
+
+  // Inspect the SAME DO instance to confirm the abort fully unwound: the lobby
+  // is unlocked, no launch was retained, and the dropped guest was recovered
+  // into the absent-expiry bookkeeping (so the ghost seat can later expire).
+  await runInDurableObject(lobbyStub(code), (instance: PrivateLobby) => {
+    expect(instance.isLocked).toBe(false);
+    expect(instance.lastLaunchForTest).toBeNull();
+    expect(instance.seatFor(2)?.connId).toBeNull();
+    expect(instance.absentPlayers.has("guest-id")).toBe(true);
+  });
+
+  host.ws.close();
+  await waitOnExecutionContext(ctx);
+}, 30000);

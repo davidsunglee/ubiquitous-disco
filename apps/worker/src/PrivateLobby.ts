@@ -367,11 +367,23 @@ export class PrivateLobby extends Server<Env> {
   }
 
   /**
-   * Find the next unoccupied slot in SEAT_ORDER (a seat is occupied by a human
-   * OR a bot). Returns null if all four are taken.
+   * The set of slots seatable in the CURRENT mode, returned in the balanced
+   * SEAT_ORDER. This is the single source of truth for mode→slots: 1v1 seats
+   * only slots 0 and 2; 2v2 seats all four. nextOpenSlot(), fillBot(), and
+   * lock() all route through this so capacity is consistently mode-aware.
+   */
+  private seatableSlots(): PlayerSlotId[] {
+    const allowed = new Set<PlayerSlotId>(REQUIRED_SLOTS[this.settings.mode]);
+    return SEAT_ORDER.filter((slotId) => allowed.has(slotId));
+  }
+
+  /**
+   * Find the next unoccupied slot in SEAT_ORDER that belongs to the current
+   * mode (a seat is occupied by a human OR a bot). Returns null when every
+   * mode-seatable slot is taken (lobby is full for this mode).
    */
   private nextOpenSlot(): PlayerSlotId | null {
-    for (const slotId of SEAT_ORDER) {
+    for (const slotId of this.seatableSlots()) {
       if (!this.seats.has(slotId) && !this.bots.has(slotId)) {
         return slotId;
       }
@@ -441,9 +453,12 @@ export class PrivateLobby extends Server<Env> {
     this.sendLobbyStateToAll();
   }
 
-  /** Fill an open seat with a Practice Bot. */
+  /** Fill an open seat with a Practice Bot. Only mode-seatable slots qualify. */
   private fillBot(slotId: PlayerSlotId): void {
     if (this.seats.has(slotId) || this.bots.has(slotId)) return;
+    // A bot may only occupy a slot that belongs to the current mode — e.g. in
+    // 1v1, slots 1 and 3 are not seatable, so they can't be bot-filled.
+    if (!this.seatableSlots().includes(slotId)) return;
     this.bots.add(slotId);
     this.sendLobbyStateToAll();
   }
@@ -508,6 +523,26 @@ export class PrivateLobby extends Server<Env> {
       }
     }
 
+    // ── Guard: reject if any OCCUPIED slot is outside the current mode ─────
+    // A host can switch mode (e.g. 2v2→1v1) after players are seated, leaving
+    // humans/bots in slots that the mode no longer seats (1 and 3 in 1v1). We
+    // do NOT auto-evict; instead we refuse to launch a mismatched lobby so a
+    // 1v1 can never produce a >2-human manifest.
+    const seatable = new Set<PlayerSlotId>(REQUIRED_SLOTS[this.settings.mode]);
+    for (const slotId of ALL_SLOTS) {
+      const occupied = this.seats.has(slotId) || this.bots.has(slotId);
+      if (occupied && !seatable.has(slotId)) {
+        if (hostConnection) {
+          const notice: LobbyNotice = {
+            type: "LobbyNotice",
+            reason: "slot-out-of-mode",
+          };
+          hostConnection.send(serializeLobbyNotice(notice));
+        }
+        return;
+      }
+    }
+
     // ── Guard: reject if any mode-required slot is entirely empty ──────────
     const required = REQUIRED_SLOTS[this.settings.mode];
     for (const slotId of required) {
@@ -525,6 +560,17 @@ export class PrivateLobby extends Server<Env> {
 
     this.locked = true;
 
+    // Snapshot every present human's (playerId → connId) BEFORE the DO→DO RPC
+    // await below. The guard above already established that every occupied seat
+    // is present (connId !== null); we capture those connIds explicitly so we
+    // can detect a drop that happens DURING the await (finding #4): the DO input
+    // gate does NOT block on a non-storage RPC await, so a player's WebSocket
+    // close can run onClose() (nulling seat.connId) in that window.
+    const presentSnapshot = new Map<string, string>();
+    for (const seat of this.seats.values()) {
+      if (seat.connId !== null) presentSnapshot.set(seat.playerId, seat.connId);
+    }
+
     const launchId = crypto.randomUUID().replace(/-/g, "");
 
     // Build the manifest slots from current humans + bots.
@@ -532,7 +578,10 @@ export class PrivateLobby extends Server<Env> {
     const tokenToSlot: Record<string, PlayerSlotId> = {};
     const launchByPlayer = new Map<string, MatchLaunch>();
 
-    for (const slotId of ALL_SLOTS) {
+    // Build the manifest only from the current mode's slot set (the out-of-mode
+    // guard above already rejected any occupant outside it, but routing through
+    // the mode slots keeps mode→slots a single source of truth).
+    for (const slotId of REQUIRED_SLOTS[this.settings.mode]) {
       const seat = this.seats.get(slotId);
       if (seat) {
         manifestSlots.push({ slotId, kind: "human", playerId: seat.playerId });
@@ -557,9 +606,64 @@ export class PrivateLobby extends Server<Env> {
 
     this.lastLaunch = { launchId, manifest, tokenToSlot };
 
-    // Write the immutable manifest into the MatchLaunch DO (DO→DO RPC).
+    // Write the immutable manifest into the MatchLaunch DO (DO→DO RPC). This is
+    // a NON-storage await: the DO input gate does NOT block here, so a player's
+    // WebSocket close can be delivered (running onClose, nulling their seat's
+    // connId) in this exact window. That is the finding #4 race, re-validated
+    // below and exercised by the privateLobby integration test.
     const stub = await getServerByName(this.env.MATCH_LAUNCH, launchId);
     await stub.put({ manifest, tokenToSlot });
+
+    // ── Re-validate presence AFTER the await (finding #4) ──────────────────
+    // If any snapshotted human dropped (or reconnected on a different connId)
+    // during the await, their committed joinToken can never be delivered to a
+    // live socket, so the MatchRoom would wait forever for a human who can't
+    // join. A partial launch is worse than no launch: ABORT instead.
+    //
+    // Reverting `locked` to false is safe: lock() is idempotent-guarded at the
+    // top (`if (this.locked) return`), and the only state mutated before this
+    // point is the `locked` flag itself, which we revert here. A re-lock mints
+    // a brand-new launchId, so the manifest already written under THIS launchId
+    // is harmless — nobody can reach it (its tokens were never delivered).
+    let dropped = false;
+    for (const [pid, connId] of presentSnapshot) {
+      const slotId = this.playerToSlot.get(pid);
+      const seat = slotId === undefined ? undefined : this.seats.get(slotId);
+      if (!seat || seat.connId !== connId) {
+        dropped = true;
+        break;
+      }
+    }
+
+    if (dropped) {
+      this.locked = false;
+      this.lastLaunch = null;
+
+      // The drop's onClose() ran while `locked` was still true, so it skipped
+      // the two-stage expiry bookkeeping (absentSince + alarm). Now that we are
+      // unlocked again, re-run that bookkeeping for any seat that is absent but
+      // untracked, otherwise the ghost seat would never expire and the lobby
+      // would be stuck unable to re-lock.
+      const now = Date.now();
+      let recovered = false;
+      for (const seat of this.seats.values()) {
+        if (seat.connId === null && !this.absentSince.has(seat.playerId)) {
+          this.absentSince.set(seat.playerId, now);
+          this.hostTransferred.delete(seat.playerId);
+          recovered = true;
+        }
+      }
+      if (recovered) this.scheduleNextAlarm();
+
+      if (hostConnection) {
+        const notice: LobbyNotice = {
+          type: "LobbyNotice",
+          reason: "absent-human",
+        };
+        hostConnection.send(serializeLobbyNotice(notice));
+      }
+      return;
+    }
 
     // Deliver each human their own launch payload.
     for (const [pid, slotId] of this.playerToSlot) {

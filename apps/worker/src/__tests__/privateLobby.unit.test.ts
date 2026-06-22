@@ -1087,6 +1087,139 @@ test("lock() guard: 1v1 mode only requires slots 0 and 2", async () => {
   });
 });
 
+// ── Finding #5: mode-aware seat capacity (1v1 must not admit >2 humans) ──────
+
+test("1v1 mode: a 3rd human cannot be seated (only slots 0 and 2 are seatable)", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host-id"); // slot 0
+    // Switch to 1v1 before more humans arrive.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "setSettings",
+      settings: { mode: "1v1" },
+    });
+
+    join(instance, "c2", "guest-id"); // slot 2 (the other 1v1 seat)
+    expect(instance.slotForPlayer("guest-id")).toBe(2);
+
+    // A 3rd human in 1v1 must be rejected — no 1v1 seat is left.
+    const thirdConn = join(instance, "c3", "third-id");
+    expect(instance.slotForPlayer("third-id")).toBeUndefined();
+    expect(instance.seatCount).toBe(2);
+    // The connection must be closed (lobby-full for this mode).
+    expect((thirdConn as unknown as { closed?: boolean }).closed).toBe(true);
+  });
+});
+
+test("1v1 mode: lock() produces a 2-human manifest (slots 0 and 2 only)", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host-id"); // slot 0
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "setSettings",
+      settings: { mode: "1v1" },
+    });
+    join(instance, "c2", "guest-id"); // slot 2
+
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+
+    expect(instance.isLocked).toBe(true);
+    const launch = instance.lastLaunchForTest;
+    expect(launch).not.toBeNull();
+    if (!launch) return;
+
+    // Exactly two humans, in slots 0 and 2; no slot 1/3 occupants at all.
+    const humanSlots = launch.manifest.slots
+      .filter((s) => s.kind === "human")
+      .map((s) => s.slotId)
+      .sort();
+    expect(humanSlots).toEqual([0, 2]);
+    expect(launch.manifest.slots).toHaveLength(2);
+    expect(Object.keys(launch.tokenToSlot)).toHaveLength(2);
+    expect(new Set(Object.values(launch.tokenToSlot))).toEqual(new Set([0, 2]));
+  });
+});
+
+test("1v1 mode: host cannot fill an out-of-mode slot (1 or 3) with a bot", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host-id"); // slot 0
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "setSettings",
+      settings: { mode: "1v1" },
+    });
+
+    // Slot 1 is outside the 1v1 slot set — a bot must not land there.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 1,
+    });
+    expect(instance.hasBot(1)).toBe(false);
+
+    // Slot 2 is a valid 1v1 seat — a bot is allowed there.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 2,
+    });
+    expect(instance.hasBot(2)).toBe(true);
+  });
+});
+
+test("lock() rejects when an occupant sits outside the current mode's slots", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    // Seat four humans in 2v2 (slots 0,2,1,3).
+    const host = join(instance, "c1", "host-id"); // slot 0
+    join(instance, "c2", "b-id"); // slot 2
+    join(instance, "c3", "c-id"); // slot 1
+    join(instance, "c4", "d-id"); // slot 3
+    expect(instance.seatCount).toBe(4);
+
+    // Host switches the mode to 1v1 AFTER players are seated — slots 1 and 3
+    // now hold humans that are outside the 1v1 slot set.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "setSettings",
+      settings: { mode: "1v1" },
+    });
+
+    // Track the notice the host receives.
+    const hostNotices: string[] = [];
+    (host as unknown as { send: (m: string) => void }).send = (m: string) =>
+      hostNotices.push(m);
+
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+
+    // Must NOT launch a >2-human manifest.
+    expect(instance.isLocked).toBe(false);
+    expect(instance.lastLaunchForTest).toBeNull();
+    const noticeReasons = hostNotices
+      .map((m) => JSON.parse(m) as { type?: string; reason?: string })
+      .filter((m) => m.type === "LobbyNotice")
+      .map((m) => m.reason);
+    expect(noticeReasons.length).toBeGreaterThan(0);
+    expect(noticeReasons).toContain("slot-out-of-mode");
+  });
+});
+
+// Finding #4 (drop-during-manifest-write abort) is covered by a real
+// integration test that reproduces the race with in-process WebSocket clients —
+// see "lock() aborts (no partial launch) when a human drops during the
+// manifest-write await" in privateLobby.integration.test.ts. That test needs no
+// production test seam; the close lands inside lock()'s non-storage RPC await
+// window naturally, deterministically driving the post-await re-validation.
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
@@ -1095,15 +1228,17 @@ test("lock() guard: 1v1 mode only requires slots 0 and 2", async () => {
  * use `connection.id`, `connection.close()`, and `connection.send()`.
  */
 function makeMockConnection(id: string): Connection {
-  return {
+  const conn = {
     id,
+    closed: false,
     send: (_msg: string) => {
       /* no-op in unit tests */
     },
-    close: (_code?: number, _reason?: string) => {
-      /* no-op */
+    close(_code?: number, _reason?: string) {
+      conn.closed = true;
     },
     readyState: 1, // OPEN
     // The remaining WebSocket methods are not called by PrivateLobby.
-  } as unknown as Connection;
+  };
+  return conn as unknown as Connection;
 }
