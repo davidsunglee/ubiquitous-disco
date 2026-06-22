@@ -193,6 +193,8 @@ export class GameScene extends Phaser.Scene {
   private startPromptEl!: HTMLElement;
   private goldenGoalEl!: HTMLElement;
   private matchSummaryEl!: HTMLElement;
+  /** Default-route "Play Online →" link (hotseat only); hidden once a match starts. */
+  private playOnlineEl: HTMLElement | null = null;
 
   constructor() {
     super("GameScene");
@@ -352,6 +354,7 @@ export class GameScene extends Phaser.Scene {
       "color:#7fd1ff;text-decoration:none;padding:6px 14px;" +
       "border:1px solid #355;border-radius:4px;background:rgba(0,0,0,0.55);";
     this.hudOverlay.appendChild(link);
+    this.playOnlineEl = link;
   }
 
   /** Create a DOM node (data-testid anchor + visible HUD element) in the overlay. */
@@ -438,6 +441,11 @@ export class GameScene extends Phaser.Scene {
     this.prevScores = [...m.scores];
     this.startPromptEl.style.display =
       m.phase === "preRound" ? "block" : "none";
+    // Once the hotseat match starts (leaves preRound), the player has elected
+    // local play — retire the "Play Online" link for good.
+    if (m.phase !== "preRound" && this.playOnlineEl) {
+      this.playOnlineEl.style.display = "none";
+    }
     this.goldenGoalEl.style.display =
       m.phase === "goldenGoal" ? "block" : "none";
     if (m.phase === "goldenGoal") {
