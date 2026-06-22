@@ -26,8 +26,8 @@ test("fail-closed: closing one tab shows the net-closed banner on the other", as
   const a = await ctxA.newPage();
   const b = await ctxB.newPage();
 
-  await a.goto("/");
-  await b.goto("/");
+  await a.goto("/?direct=1");
+  await b.goto("/?direct=1");
 
   // Wait for both canvases to appear (Phaser + overlay mounted).
   await expect(a.locator("canvas")).toBeVisible({ timeout: 8000 });

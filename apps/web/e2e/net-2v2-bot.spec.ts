@@ -30,14 +30,14 @@ test("three human clients + one bot play a 2v2 and agree on Team score + timer",
 
   // Load the app in all three tabs.
   for (const p of pages) {
-    await p.goto("/");
+    await p.goto("/?direct=1");
     await expect(p.locator("canvas")).toBeVisible({ timeout: 8000 });
   }
 
   // The host creates a room with slot 3 as a bot.
   // Use URL params to signal the bot slot to the web app create handler.
   // We navigate the host to /?botSlot=3 so the ConnectionOverlay passes it.
-  await host.goto("/?botSlot=3");
+  await host.goto("/?direct=1&botSlot=3");
   await expect(host.locator("canvas")).toBeVisible({ timeout: 8000 });
   await host.getByTestId("room-create").click();
 

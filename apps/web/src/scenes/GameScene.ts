@@ -289,13 +289,16 @@ export class GameScene extends Phaser.Scene {
     // sessionStorage for potential reconnect after a page refresh. We keep an
     // in-scene copy in retainedLaunch for mid-match reconnect without a reload.
     const launch = peekLaunch();
+    const urlParams = new URLSearchParams(window.location.search);
+    // Dev/test direct-connect overlay is opt-in via ?direct (used by net-*.spec.ts
+    // and manual dev). The default root route is a clean local hotseat with a
+    // one-click "Play Online" path to the lobby.
+    const directConnect = urlParams.get("direct") !== null;
     if (launch) {
       this.startLaunchedMatch(launch);
-    } else {
+    } else if (directConnect) {
       // Dev/test direct-connect shortcut: the create/join overlay path from
-      // Plan 1. The primary acceptance path is the launch handoff above.
-      // ?botSlot=N fills a slot with a Practice Bot on the server's legacy path.
-      const urlParams = new URLSearchParams(window.location.search);
+      // Plan 1. ?botSlot=N fills a slot with a Practice Bot on the legacy path.
       const botSlotParam = urlParams.get("botSlot");
       const createOptions =
         botSlotParam !== null
@@ -320,6 +323,11 @@ export class GameScene extends Phaser.Scene {
         },
         createOptions,
       );
+    } else {
+      // Default route: clean local hotseat. Hide the dev direct-connect panel
+      // and offer a one-click path to the online lobby (#lobby route).
+      this.connectionOverlay.hideRoomPanel();
+      this.addPlayOnlineLink();
     }
 
     // Launch the HUD in parallel (it renders on top without replacing GameScene).
@@ -327,6 +335,24 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
+
+  /**
+   * Default-route affordance: a one-click link from the local hotseat game to the
+   * online lobby (#lobby). The LobbyRouter (main.ts) handles the hash change and
+   * disables the Phaser keyboard while the lobby is shown.
+   */
+  private addPlayOnlineLink(): void {
+    const link = document.createElement("a");
+    link.dataset.testid = "play-online";
+    link.textContent = "Play Online →";
+    link.href = "#lobby";
+    link.style.cssText =
+      "position:absolute;left:50%;top:62%;transform:translate(-50%,0);" +
+      "pointer-events:auto;font-family:monospace;font-size:14px;" +
+      "color:#7fd1ff;text-decoration:none;padding:6px 14px;" +
+      "border:1px solid #355;border-radius:4px;background:rgba(0,0,0,0.55);";
+    this.hudOverlay.appendChild(link);
+  }
 
   /** Create a DOM node (data-testid anchor + visible HUD element) in the overlay. */
   private makeTestNode(testid: string, css: string): HTMLElement {
@@ -825,7 +851,13 @@ export class GameScene extends Phaser.Scene {
     // P1: merge keyboard + touch; P2: standalone keyboard.
     const p1 = mergeInputFrames(this.kb1.collect(), this.touch.collect());
     const p2 = this.kb2.collect();
-    return [p1, p2];
+    // The hotseat sim uses active slots [0, 2] (Team 0 left vs Team 1 right), and
+    // sim.step()/getRenderState() are slot-indexed. Return a slot-indexed row so
+    // P2 actually drives slot 2 (a dense [p1, p2] left slot 2 with no input).
+    const row: InputFrame[] = [];
+    row[0] = p1;
+    row[2] = p2;
+    return row;
   }
 
   update(_time: number, delta: number): void {

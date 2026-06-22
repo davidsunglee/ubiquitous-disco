@@ -136,6 +136,15 @@ export class ConnectionOverlay {
   }
 
   /**
+   * Hide the centred create/join panel. Used on the default (non-`?direct`) route
+   * so the local hotseat game isn't obscured by the dev direct-connect controls.
+   * The status badge / fail-closed banner remain available.
+   */
+  hideRoomPanel(): void {
+    if (this.panel) this.panel.style.display = "none";
+  }
+
+  /**
    * Wire callbacks to a NetClient instance. Called by GameScene after mount().
    *
    * @param onRoomFull     Phase 2: called with the local slot + active-slot
