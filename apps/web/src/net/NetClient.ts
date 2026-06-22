@@ -35,6 +35,19 @@ export class NetClient {
     this.room = await this.client.joinById(id);
   }
 
+  /**
+   * Join (or create) the match for a launch (Phase 5). The server filters rooms
+   * by `launchId`, so all humans of one launch land in the same room. The room
+   * validates `joinToken` against the worker and maps the client to its claimed
+   * Player Slot.
+   */
+  async joinLaunch(launchId: string, joinToken: string): Promise<void> {
+    this.room = await this.client.joinOrCreate("match", {
+      launchId,
+      joinToken,
+    });
+  }
+
   /** Register a typed message handler on the connected room. */
   onMessage(type: string, cb: (m: unknown) => void): void {
     this.room.onMessage(type as never, cb as never);

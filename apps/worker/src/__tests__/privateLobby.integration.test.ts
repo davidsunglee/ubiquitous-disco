@@ -24,7 +24,10 @@ function uniqueCode(): string {
   return `INT${String(++codeSeq).padStart(4, "0")}`;
 }
 
-type LobbyEnv = { PrivateLobby: DurableObjectNamespace };
+type LobbyEnv = {
+  PrivateLobby: DurableObjectNamespace;
+  MATCH_LAUNCH: DurableObjectNamespace;
+};
 
 afterEach(async () => {
   // No-op — unique codes per test provide isolation.

@@ -6,9 +6,11 @@
  */
 
 import {
-  deserializeLobbyState,
+  type LobbyCommand,
   type LobbyJoin,
   type LobbyState,
+  type MatchLaunch,
+  serializeLobbyCommand,
 } from "@bb/protocol";
 import PartySocket from "partysocket";
 import { WORKER_URL } from "./config";
@@ -16,6 +18,7 @@ import { WORKER_URL } from "./config";
 export class LobbyClient {
   private socket: PartySocket | null = null;
   private listeners: ((state: LobbyState) => void)[] = [];
+  private launchListeners: ((launch: MatchLaunch) => void)[] = [];
 
   /**
    * Connect to a lobby by code and send the player's profile.
@@ -46,10 +49,14 @@ export class LobbyClient {
 
     this.socket.addEventListener("message", (evt: MessageEvent<string>) => {
       try {
-        const state = deserializeLobbyState(evt.data);
-        if (state.type === "LobbyState") {
+        const msg = JSON.parse(evt.data) as { type?: string };
+        if (msg.type === "LobbyState") {
           for (const listener of this.listeners) {
-            listener(state);
+            listener(msg as LobbyState);
+          }
+        } else if (msg.type === "MatchLaunch") {
+          for (const listener of this.launchListeners) {
+            listener(msg as MatchLaunch);
           }
         }
       } catch {
@@ -61,6 +68,16 @@ export class LobbyClient {
   /** Register a listener for incoming LobbyState updates. */
   onState(listener: (state: LobbyState) => void): void {
     this.listeners.push(listener);
+  }
+
+  /** Register a listener for the MatchLaunch handoff (delivered on Host start). */
+  onLaunch(listener: (launch: MatchLaunch) => void): void {
+    this.launchListeners.push(listener);
+  }
+
+  /** Send a host-control command (seat move, bot fill/clear, settings, start). */
+  sendCommand(cmd: LobbyCommand): void {
+    this.socket?.send(serializeLobbyCommand(cmd));
   }
 
   /** Close the WebSocket connection. */

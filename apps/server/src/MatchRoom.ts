@@ -1,6 +1,7 @@
 import {
   type AckBySlot,
   type MatchClosed,
+  type MatchManifest,
   type PlayerInput,
   type PlayerSlotId,
   uint8ArrayToBase64,
@@ -13,11 +14,13 @@ import {
   EMPTY_INPUT,
   FLAT_DOJO,
   type InputFrame,
+  type SimConfig,
   toAuthoritativeState,
 } from "@bb/sim";
 import { type Client, Room } from "@colyseus/core";
 import { FixedStepAccumulator } from "./fixedStep";
 import { InputBuffer } from "./inputBuffer";
+import { claim } from "./lobbyClient";
 import {
   botSource,
   humanSource,
@@ -41,7 +44,21 @@ export class MatchRoom extends Room {
   /** Set to true once disconnect() has been called so double-dispose is avoided. */
   private roomDisposed = false;
 
-  // Authoritative sim + sources (initialised in onCreate after initSim() is awaited)
+  /**
+   * The immutable launch manifest (Phase 5). Cached on the first successful
+   * claim; configures active slots, bot sources, and match settings. Null until
+   * the first human joins.
+   */
+  private manifest: MatchManifest | null = null;
+  /** True once configureFromManifest() has built the sim + sources. */
+  private configured = false;
+  /** Sim config derived from the manifest's match settings. */
+  private simConfig: SimConfig = DEFAULT_CONFIG;
+
+  /** Bot slots for the dev/test direct-connect fallback (from create options). */
+  private legacyBotSlots: PlayerSlotId[] = [];
+
+  // Authoritative sim + sources (built in configureFromManifest on first join)
   private sim!: ReturnType<typeof createSimulation>;
   /**
    * Input buffer per ACTIVE human slot, keyed by Player Slot id.
@@ -56,31 +73,24 @@ export class MatchRoom extends Room {
   private stepClock = new FixedStepAccumulator(FIXED_STEP_MS);
   private serverTick = 0;
 
-  onCreate(options?: { botSlots?: PlayerSlotId[] }): void {
-    // Construct the simulation here (not as a class field) so that Rapier WASM
-    // is guaranteed to have been initialised via initSim() in index.ts before
-    // any room can be created.
-    this.sim = createSimulation({
-      config: DEFAULT_CONFIG,
-      arena: FLAT_DOJO,
-      seed: 1234,
-      activeSlots: this.activeSlots,
-    });
+  /**
+   * onCreate runs before any onJoin. The sim + input sources are NOT built here
+   * — they depend on the launch manifest, which is only known after the first
+   * client's claim succeeds (configureFromManifest). The simulation interval is
+   * installed now but no-ops until the room is configured.
+   *
+   * `options.launchId` is carried by joinOrCreate and used by the matchmaker's
+   * filterBy("launchId") so all humans of one launch land in the same room.
+   */
+  onCreate(options?: { launchId?: string; botSlots?: PlayerSlotId[] }): void {
+    // Capture bot slots for the dev/test direct-connect fallback (the launch
+    // path ignores this and uses the manifest instead).
+    this.legacyBotSlots = options?.botSlots ?? [];
 
-    // Build input sources: bot for declared bot slots, human (buffered) for the rest.
-    const botSlots = new Set<PlayerSlotId>(options?.botSlots ?? []);
-    for (const s of this.activeSlots) {
-      if (botSlots.has(s)) {
-        this.sources.set(s, botSource(s, DEFAULT_CONFIG));
-      } else {
-        const buf = new InputBuffer();
-        this.buffers.set(s, buf);
-        this.sources.set(s, humanSource(buf));
-      }
-    }
-
-    // Register PlayerInput handler — ignore frames for bot slots.
+    // Register PlayerInput handler — ignore frames for bot slots and for input
+    // arriving before the room is configured.
     this.onMessage("PlayerInput", (client, msg: PlayerInput) => {
+      if (!this.configured) return;
       const s = this.slot(client);
       if (this.sources.get(s)?.isHuman) {
         this.buffers.get(s)?.push(msg.frames);
@@ -139,7 +149,54 @@ export class MatchRoom extends Room {
     };
   }
 
+  /**
+   * Configure the room from the immutable launch manifest (first join only).
+   * Derives active slots, builds a bot SlotInputSource for each bot slot and a
+   * buffered human source for each human slot, and applies the manifest's match
+   * length to the sim config. Replaces the Phase 3 `botSlots` create option.
+   */
+  private configureFromManifest(manifest: MatchManifest): void {
+    this.manifest = manifest;
+    this.activeSlots = [...manifest.slots]
+      .map((s) => s.slotId)
+      .sort((a, b) => a - b);
+
+    // Apply the manifest's match length to the sim config (tickHz unchanged).
+    this.simConfig = {
+      ...DEFAULT_CONFIG,
+      match: {
+        ...DEFAULT_CONFIG.match,
+        lengthTicks: manifest.settings.matchLengthTicks,
+      },
+    };
+
+    this.sim = createSimulation({
+      config: this.simConfig,
+      arena: FLAT_DOJO,
+      seed: 1234,
+      activeSlots: this.activeSlots,
+    });
+
+    const botSlots = new Set<PlayerSlotId>(
+      manifest.slots.filter((s) => s.kind === "bot").map((s) => s.slotId),
+    );
+    for (const s of this.activeSlots) {
+      if (botSlots.has(s)) {
+        this.sources.set(s, botSource(s, this.simConfig));
+      } else {
+        const buf = new InputBuffer();
+        this.buffers.set(s, buf);
+        this.sources.set(s, humanSource(buf));
+      }
+    }
+
+    this.configured = true;
+  }
+
   private tickOnce(): void {
+    // No-op until the room has been configured from a launch manifest.
+    if (!this.configured) return;
+
     // Build per-slot BotWorldView from current authoritative state (before stepping).
     const worldView = this.buildBotWorldView();
 
@@ -187,15 +244,53 @@ export class MatchRoom extends Room {
     }
   }
 
-  onJoin(client: Client): void {
-    // Assign the next unoccupied HUMAN active slot in template order.
-    // Bot slots are pre-configured and skipped during join.
-    const taken = new Set(this.slotOf.values());
-    const unoccupied = this.activeSlots.find(
-      (s) => !taken.has(s) && this.sources.get(s)?.isHuman,
-    );
-    // biome-ignore lint/style/noNonNullAssertion: activeSlots always has at least one human slot (MODE_2V2 has 4)
-    const slot: PlayerSlotId = unoccupied ?? this.activeSlots[0]!;
+  /**
+   * Validate the client's launch claim against the worker, map them to their
+   * CLAIMED Player Slot (not join order), and configure the room from the
+   * manifest on first join. Rejects invalid/duplicate claims by leaving.
+   *
+   * Dev/test direct-connect shortcut (no launch options): falls back to the
+   * Plan 1 join-order path with a legacy 2v2 manifest (humans on non-bot slots,
+   * bots on the create-time `botSlots`). The primary acceptance path is the
+   * launch handoff; this fallback exists only so the netcode regression specs
+   * (latency/disconnect/reconciliation) can run without the worker + lobby.
+   */
+  async onJoin(
+    client: Client,
+    options?: { launchId?: string; joinToken?: string },
+  ): Promise<void> {
+    const launchId = options?.launchId;
+    const joinToken = options?.joinToken;
+
+    if (!launchId || !joinToken) {
+      // Legacy direct-connect path.
+      if (!this.configured) {
+        this.configureFromManifest(this.legacyManifest());
+      }
+      const taken = new Set(this.slotOf.values());
+      const slot =
+        this.activeSlots.find(
+          (s) => !taken.has(s) && this.sources.get(s)?.isHuman,
+        ) ?? this.activeSlots[0]!;
+      this.seatAndAnnounce(client, slot);
+      return;
+    }
+
+    const res = await claim(launchId, joinToken);
+    if (!res.ok || res.playerSlotId === undefined || !res.manifest) {
+      // Invalid / duplicate / unauthorised claim — fail closed.
+      client.leave();
+      return;
+    }
+
+    // Configure the room from the manifest on the first successful claim.
+    if (!this.configured) this.configureFromManifest(res.manifest);
+
+    this.seatAndAnnounce(client, res.playerSlotId);
+  }
+
+  /** Seat a client at the given slot and send RoomReady (and full=true to all). */
+  private seatAndAnnounce(client: Client, slot: PlayerSlotId): void {
     this.slotOf.set(client.sessionId, slot);
 
     // "full" when all human slots are occupied (bot slots don't count as clients).
@@ -204,8 +299,7 @@ export class MatchRoom extends Room {
     ).length;
     const full = this.slotOf.size === humanSlotCount;
 
-    // Tell this client its own slot assignment.
-    // Phase 1 note: each client gets its OWN slot — per-recipient send, not broadcast.
+    // Each client gets its OWN slot — per-recipient send, not broadcast.
     client.send("RoomReady", {
       type: "RoomReady",
       slot,
@@ -227,6 +321,24 @@ export class MatchRoom extends Room {
         }
       }
     }
+  }
+
+  /** Build a legacy 2v2 manifest for the dev/test direct-connect path. */
+  private legacyManifest(): MatchManifest {
+    const bots = new Set(this.legacyBotSlots);
+    return {
+      launchId: "legacy-dev",
+      slots: MODE_2V2.map((slotId) =>
+        bots.has(slotId)
+          ? { slotId, kind: "bot" as const }
+          : { slotId, kind: "human" as const, playerId: `dev-${slotId}` },
+      ),
+      settings: {
+        mode: "2v2",
+        matchLengthTicks: DEFAULT_CONFIG.match.lengthTicks,
+        arenaId: "flat-dojo",
+      },
+    };
   }
 
   onLeave(client: Client): void {
@@ -271,6 +383,29 @@ export class MatchRoom extends Room {
   /** Expose sources for testing. */
   get inputSources(): Map<PlayerSlotId, SlotInputSource> {
     return this.sources;
+  }
+
+  /** True once the room has been configured from a launch manifest. For testing. */
+  get isConfigured(): boolean {
+    return this.configured;
+  }
+
+  /** The cached launch manifest (or null). For testing. */
+  get launchManifest(): MatchManifest | null {
+    return this.manifest;
+  }
+
+  /** The room's active Player Slots (from the manifest, once configured). For testing. */
+  get activePlayerSlots(): PlayerSlotId[] {
+    return this.activeSlots;
+  }
+
+  /**
+   * Configure the room from a manifest directly, bypassing the claim HTTP call.
+   * For testing the tick/snapshot/bot-source paths without a live worker.
+   */
+  testConfigureFromManifest(manifest: MatchManifest): void {
+    this.configureFromManifest(manifest);
   }
 
   /** Expose sim for testing. */

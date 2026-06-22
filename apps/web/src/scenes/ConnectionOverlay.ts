@@ -18,6 +18,8 @@ type Status = "idle" | "connecting" | "connected" | "error" | "closed";
 
 export class ConnectionOverlay {
   private root!: HTMLElement;
+  /** The centred create/join panel (Plan 1 direct-connect controls). */
+  private panel!: HTMLElement;
   private statusEl!: HTMLElement;
   private createBtn!: HTMLButtonElement;
   private joinRow!: HTMLElement;
@@ -57,6 +59,7 @@ export class ConnectionOverlay {
       "background:rgba(0,0,0,0.75);border-radius:8px;padding:20px 28px;" +
       "display:flex;flex-direction:column;gap:10px;align-items:center;" +
       "pointer-events:auto;";
+    this.panel = panel;
     this.root.appendChild(panel);
 
     const title = document.createElement("div");
@@ -262,9 +265,17 @@ export class ConnectionOverlay {
   }
 
   private hidePanel(): void {
-    // Hide the create/join panel once connected; badge stays visible
-    const panel = this.root.children[1] as HTMLElement | undefined;
-    if (panel) panel.style.display = "none";
+    // Hide the create/join panel once connected; badge stays visible.
+    this.panel.style.display = "none";
+  }
+
+  /**
+   * Hide the create/join panel up front. Used by the Phase 5 launch path, where
+   * the match is entered via the lobby handoff and the direct-connect controls
+   * must never be shown (otherwise they linger in the corner).
+   */
+  hideConnectPanel(): void {
+    this.panel.style.display = "none";
   }
 
   private setStatus(s: Status): void {

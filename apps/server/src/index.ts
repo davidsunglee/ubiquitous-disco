@@ -11,8 +11,10 @@ const transport = createTransport();
 
 const gameServer = new Server({ transport });
 
-// Register the match room type.
-gameServer.define("match", MatchRoom);
+// Register the match room type. filterBy("launchId") makes joinOrCreate reuse
+// the room created for a given launch, so all humans of one launch (Phase 5
+// manifest handoff) land in the same MatchRoom.
+gameServer.define("match", MatchRoom).filterBy(["launchId"]);
 
 const port = Number(process.env.PORT ?? 2567);
 

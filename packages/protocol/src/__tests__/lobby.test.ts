@@ -6,13 +6,19 @@
 
 import { expect, test } from "vitest";
 import {
+  deserializeLobbyCommand,
   deserializeLobbyJoin,
   deserializeLobbyState,
+  deserializeMatchLaunch,
+  type LobbyCommand,
   type LobbyJoin,
   type LobbySlot,
   type LobbyState,
+  type MatchLaunch,
+  serializeLobbyCommand,
   serializeLobbyJoin,
   serializeLobbyState,
+  serializeMatchLaunch,
 } from "../index";
 
 // ── LobbyJoin ─────────────────────────────────────────────────────────────────
@@ -130,4 +136,61 @@ test("LobbyState round-trips with 1v1 mode", () => {
   m.settings.mode = "1v1";
   const decoded = deserializeLobbyState(serializeLobbyState(m));
   expect(decoded.settings.mode).toBe("1v1");
+});
+
+// ── LobbyCommand (Phase 5) ────────────────────────────────────────────────────
+
+test("LobbyCommand moveOccupant round-trips", () => {
+  const m: LobbyCommand = {
+    type: "LobbyCommand",
+    cmd: "moveOccupant",
+    fromSlot: 0,
+    toSlot: 1,
+  };
+  expect(deserializeLobbyCommand(serializeLobbyCommand(m))).toEqual(m);
+});
+
+test("LobbyCommand fillBot / clearBot round-trip", () => {
+  const fill: LobbyCommand = {
+    type: "LobbyCommand",
+    cmd: "fillBot",
+    slotId: 3,
+  };
+  const clear: LobbyCommand = {
+    type: "LobbyCommand",
+    cmd: "clearBot",
+    slotId: 3,
+  };
+  expect(deserializeLobbyCommand(serializeLobbyCommand(fill))).toEqual(fill);
+  expect(deserializeLobbyCommand(serializeLobbyCommand(clear))).toEqual(clear);
+});
+
+test("LobbyCommand setSettings round-trips a partial settings patch", () => {
+  const m: LobbyCommand = {
+    type: "LobbyCommand",
+    cmd: "setSettings",
+    settings: { matchLengthTicks: 7200 },
+  };
+  const decoded = deserializeLobbyCommand(serializeLobbyCommand(m));
+  expect(decoded).toEqual(m);
+  if (decoded.cmd === "setSettings") {
+    expect(decoded.settings.matchLengthTicks).toBe(7200);
+  }
+});
+
+test("LobbyCommand start round-trips", () => {
+  const m: LobbyCommand = { type: "LobbyCommand", cmd: "start" };
+  expect(deserializeLobbyCommand(serializeLobbyCommand(m))).toEqual(m);
+});
+
+// ── MatchLaunch (Phase 5) ─────────────────────────────────────────────────────
+
+test("MatchLaunch round-trips", () => {
+  const m: MatchLaunch = {
+    type: "MatchLaunch",
+    launchId: "abc123def456",
+    playerSlotId: 2,
+    joinToken: "tok-xyz",
+  };
+  expect(deserializeMatchLaunch(serializeMatchLaunch(m))).toEqual(m);
 });

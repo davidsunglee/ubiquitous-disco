@@ -18,6 +18,13 @@ export default defineConfig({
       url: "http://127.0.0.1:2567/healthz/live",
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
+      // Phase 5: the server validates launch claims against the worker. These
+      // mirror the worker's wrangler `vars` defaults so the claim resolves
+      // locally (and match the lobbyClient defaults).
+      env: {
+        WORKER_URL: "http://127.0.0.1:8787",
+        WORKER_INTERNAL_SECRET: "dev-secret",
+      },
     },
     {
       // Cloudflare Worker (via Wrangler dev) for lobby presence tests.

@@ -28,11 +28,29 @@ function uniqueCode(): string {
   return `UNIT${String(++codeSeq).padStart(4, "0")}`;
 }
 
-type LobbyEnv = { PrivateLobby: DurableObjectNamespace<PrivateLobby> };
+type LobbyEnv = {
+  PrivateLobby: DurableObjectNamespace<PrivateLobby>;
+  MATCH_LAUNCH: DurableObjectNamespace;
+};
 
 function getStub(code: string): DurableObjectStub<PrivateLobby> {
   const ns = (env as unknown as LobbyEnv).PrivateLobby;
   return ns.get(ns.idFromName(code));
+}
+
+/** Drive a LobbyJoin for the given player on a fresh mock connection. */
+function join(
+  instance: PrivateLobby,
+  connId: string,
+  playerId: string,
+  displayName = playerId,
+): Connection {
+  const conn = makeMockConnection(connId);
+  instance.onMessage(
+    conn,
+    JSON.stringify({ type: "LobbyJoin", playerId, displayName }),
+  );
+  return conn;
 }
 
 afterEach(async () => {
@@ -282,6 +300,173 @@ test("reconnect with same playerId reclaims the same slot", async () => {
     expect(instance.slotForPlayer("player-a")).toBe(0);
     expect(instance.seatFor(0)?.connId).toBe("conn-2");
   });
+});
+
+// ── Phase 5: host controls ────────────────────────────────────────────────────
+
+test("host fills an open seat with a bot", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host");
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 1,
+    });
+    expect(instance.hasBot(1)).toBe(true);
+  });
+});
+
+test("non-host cannot fill a bot", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    join(instance, "c1", "host");
+    const guest = join(instance, "c2", "guest");
+    await instance.testApplyCommand(guest, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 1,
+    });
+    expect(instance.hasBot(1)).toBe(false);
+  });
+});
+
+test("host clears a bot", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host");
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 1,
+    });
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "clearBot",
+      slotId: 1,
+    });
+    expect(instance.hasBot(1)).toBe(false);
+  });
+});
+
+test("a bot-filled seat is skipped by the next human joiner", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host"); // slot 0
+    // Fill slot 2 (the next in SEAT_ORDER) with a bot.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 2,
+    });
+    // Next human should take slot 1 (2 is occupied by the bot).
+    join(instance, "c2", "guest");
+    expect(instance.slotForPlayer("guest")).toBe(1);
+  });
+});
+
+test("host moves their own occupant to an open seat", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host"); // slot 0
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "moveOccupant",
+      fromSlot: 0,
+      toSlot: 3,
+    });
+    expect(instance.slotForPlayer("host")).toBe(3);
+    expect(instance.seatFor(0)).toBeUndefined();
+  });
+});
+
+test("settings clamp match length to the legal range", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host");
+    // Too long → clamps to 9000.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "setSettings",
+      settings: { matchLengthTicks: 99999 },
+    });
+    expect(instance.currentSettings.matchLengthTicks).toBe(9000);
+    // Too short → clamps to 3600.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "setSettings",
+      settings: { matchLengthTicks: 10 },
+    });
+    expect(instance.currentSettings.matchLengthTicks).toBe(3600);
+  });
+});
+
+test("lock() mints a launchId + one token per human and builds the manifest", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host"); // slot 0
+    join(instance, "c2", "guest"); // slot 2
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 1,
+    });
+
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+
+    expect(instance.isLocked).toBe(true);
+    const launch = instance.lastLaunchForTest;
+    expect(launch).not.toBeNull();
+    if (!launch) return;
+
+    // launchId is an opaque hex string (uuid without dashes).
+    expect(launch.launchId).toMatch(/^[0-9a-f]{32}$/);
+    // One join token per human (2), and they map to the humans' slots.
+    expect(Object.keys(launch.tokenToSlot)).toHaveLength(2);
+    expect(new Set(Object.values(launch.tokenToSlot))).toEqual(new Set([0, 2]));
+    // Manifest carries the bot slot too.
+    const bot = launch.manifest.slots.find((s) => s.kind === "bot");
+    expect(bot?.slotId).toBe(1);
+    const humanSlots = launch.manifest.slots
+      .filter((s) => s.kind === "human")
+      .map((s) => s.slotId)
+      .sort();
+    expect(humanSlots).toEqual([0, 2]);
+  });
+});
+
+test("lock() writes the manifest into the MatchLaunch DO (claimable via RPC)", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+  let launchId = "";
+  let aToken = "";
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host"); // slot 0
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+    const launch = instance.lastLaunchForTest;
+    if (!launch) throw new Error("expected launch");
+    launchId = launch.launchId;
+    const [firstToken] = Object.keys(launch.tokenToSlot);
+    if (!firstToken) throw new Error("expected a join token");
+    aToken = firstToken;
+  });
+
+  // The manifest must be readable from the MatchLaunch DO via its claim RPC.
+  const mlNs = (env as unknown as LobbyEnv).MATCH_LAUNCH;
+  const mlStub = mlNs.get(mlNs.idFromName(launchId)) as DurableObjectStub<
+    import("../MatchLaunch").MatchLaunch
+  >;
+  const res = await mlStub.claim(aToken);
+  expect(res.ok).toBe(true);
+  expect(res.playerSlotId).toBe(0);
+  expect(res.manifest?.launchId).toBe(launchId);
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

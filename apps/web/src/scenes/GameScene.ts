@@ -1,3 +1,4 @@
+import type { MatchLaunch } from "@bb/protocol";
 import {
   createReplay,
   createSimulation,
@@ -24,6 +25,7 @@ import {
   P2_KEYMAP,
 } from "../input/KeyboardAdapter";
 import { mergeInputFrames, TouchAdapter } from "../input/TouchAdapter";
+import { takeLaunch } from "../lobby/launchHandoff";
 import { NetClient } from "../net/NetClient";
 import { NetLoop } from "../net/NetLoop";
 import {
@@ -220,31 +222,41 @@ export class GameScene extends Phaser.Scene {
     this.connectionOverlay = new ConnectionOverlay();
     this.connectionOverlay.mount();
 
-    // Phase 3: read optional ?botSlot=N URL parameter(s) to fill slots with
-    // Practice Bots. Temporary — replaced by the launch manifest in Phase 5.
-    const urlParams = new URLSearchParams(window.location.search);
-    const botSlotParam = urlParams.get("botSlot");
-    const createOptions =
-      botSlotParam !== null ? { botSlots: [Number(botSlotParam)] } : undefined;
+    // Phase 5: if the lobby handed off a launch payload, join the match via the
+    // launch manifest (launchId + joinToken) and skip the create/join overlay.
+    const launch = takeLaunch();
+    if (launch) {
+      this.startLaunchedMatch(launch);
+    } else {
+      // Dev/test direct-connect shortcut: the create/join overlay path from
+      // Plan 1. The primary acceptance path is the launch handoff above.
+      // ?botSlot=N fills a slot with a Practice Bot on the server's legacy path.
+      const urlParams = new URLSearchParams(window.location.search);
+      const botSlotParam = urlParams.get("botSlot");
+      const createOptions =
+        botSlotParam !== null
+          ? { botSlots: [Number(botSlotParam)] }
+          : undefined;
 
-    this.connectionOverlay.wire(
-      this.netClient,
-      this.game.canvas,
-      (slot, slots) => {
-        // Phase 2: room is full — switch to networked mode.
-        this.startNetLoop(
-          slot as PlayerSlotId,
-          (slots ?? [0, 2]) as PlayerSlotId[],
-        );
-      },
-      () => {
-        // Created/joined a room; freeze the local sim until the match begins so
-        // stray input can't kick off a phantom local match behind the panel.
-        this.awaitingOpponent = true;
-        this.startPromptEl.style.display = "none";
-      },
-      createOptions,
-    );
+      this.connectionOverlay.wire(
+        this.netClient,
+        this.game.canvas,
+        (slot, slots) => {
+          // Phase 2: room is full — switch to networked mode.
+          this.startNetLoop(
+            slot as PlayerSlotId,
+            (slots ?? [0, 2]) as PlayerSlotId[],
+          );
+        },
+        () => {
+          // Created/joined a room; freeze the local sim until the match begins
+          // so stray input can't kick off a phantom local match.
+          this.awaitingOpponent = true;
+          this.startPromptEl.style.display = "none";
+        },
+        createOptions,
+      );
+    }
 
     // Launch the HUD in parallel (it renders on top without replacing GameScene).
     this.scene.launch("HudScene");
@@ -407,6 +419,53 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ── Phase 2: networked game loop ─────────────────────────────────────────────
+
+  /**
+   * Phase 5: join the match for a launch handoff. Freezes the local sim, joins
+   * Colyseus via the launch (launchId + joinToken), and starts the NetLoop once
+   * the room reports its claimed slot + active slots. On a rejected claim the
+   * connection simply closes (fail-closed banner).
+   */
+  private startLaunchedMatch(launch: MatchLaunch): void {
+    // The match is entered via the lobby handoff — the direct-connect create/join
+    // panel must never show (it would linger in the corner).
+    this.connectionOverlay.hideConnectPanel();
+
+    // Freeze the local background sim until the networked match begins.
+    this.awaitingOpponent = true;
+    this.startPromptEl.style.display = "none";
+
+    const net = this.netClient;
+    net.slot = launch.playerSlotId;
+
+    void net
+      .joinLaunch(launch.launchId, launch.joinToken)
+      .then(() => {
+        net.onMessage("RoomReady", (msg) => {
+          const m = msg as {
+            slot: number;
+            full: boolean;
+            slots?: PlayerSlotId[];
+          };
+          net.slot = m.slot as PlayerSlotId;
+          if (m.full) {
+            this.startNetLoop(
+              m.slot as PlayerSlotId,
+              (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
+            );
+          }
+        });
+        // Fail-closed before the loop starts (e.g. rejected/duplicate claim).
+        net.onFailClosed((reason) => {
+          this.matchFailClosed = true;
+          this.connectionOverlay.showFailClosed(reason);
+        });
+      })
+      .catch((err) => {
+        console.error("[net] joinLaunch failed", err);
+        this.connectionOverlay.showFailClosed("ws-error");
+      });
+  }
 
   private startNetLoop(
     slot: PlayerSlotId,

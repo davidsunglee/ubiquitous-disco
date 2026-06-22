@@ -74,6 +74,78 @@ export interface LobbyJoin {
   displayName: string;
 }
 
+/**
+ * Host-owned lobby controls (and the human "move to an open seat" action),
+ * sent client → server over the lobby WebSocket. The PrivateLobby DO enforces
+ * permissions: only the Host may fill/clear bots, change settings, move other
+ * occupants, or start; any human may move themselves to an open seat.
+ */
+export type LobbyCommand =
+  | {
+      type: "LobbyCommand";
+      cmd: "moveOccupant";
+      fromSlot: PlayerSlotId;
+      toSlot: PlayerSlotId;
+    }
+  | { type: "LobbyCommand"; cmd: "fillBot"; slotId: PlayerSlotId }
+  | { type: "LobbyCommand"; cmd: "clearBot"; slotId: PlayerSlotId }
+  | {
+      type: "LobbyCommand";
+      cmd: "setSettings";
+      settings: Partial<LobbySettings>;
+    }
+  | { type: "LobbyCommand"; cmd: "start" };
+
+// ── Launch handoff (Phase 5) ──────────────────────────────────────────────────
+
+/** Match-length clamp range in sim ticks (2:00–5:00 @ 30 Hz). */
+export const MATCH_LENGTH_MIN_TICKS = 3600;
+export const MATCH_LENGTH_MAX_TICKS = 9000;
+export const MATCH_LENGTH_DEFAULT_TICKS = 5400;
+
+/** One slot in the immutable launch manifest (human or bot). */
+export interface MatchManifestSlot {
+  slotId: PlayerSlotId;
+  kind: "human" | "bot";
+  /** Present for human slots — the lobby playerId that owns this slot. */
+  playerId?: string;
+}
+
+/**
+ * The immutable, frozen description of a launched match. Written into the
+ * MatchLaunch DO at lock() time and returned (without tokens) to the Colyseus
+ * server on a successful claim. Carries no join tokens — those live alongside
+ * the manifest in the MatchLaunch DO's storage, never exposed to clients.
+ */
+export interface MatchManifest {
+  launchId: string;
+  slots: MatchManifestSlot[];
+  settings: LobbySettings;
+}
+
+/**
+ * Server → client message delivered to each human when the Host starts the
+ * match. Each human gets their OWN slot id + single-use join token.
+ */
+export interface MatchLaunch {
+  type: "MatchLaunch";
+  launchId: string;
+  playerSlotId: PlayerSlotId;
+  joinToken: string;
+}
+
+/** Colyseus → MatchLaunch DO: validate a join token. */
+export interface ClaimRequest {
+  joinToken: string;
+}
+
+/** MatchLaunch DO → Colyseus: claim result. */
+export interface ClaimResponse {
+  ok: boolean;
+  playerSlotId?: PlayerSlotId;
+  manifest?: MatchManifest;
+}
+
 // ── (De)serializers ───────────────────────────────────────────────────────────
 
 export const serializeLobbyState = (m: LobbyState): string => JSON.stringify(m);
@@ -83,3 +155,13 @@ export const deserializeLobbyState = (s: string): LobbyState =>
 export const serializeLobbyJoin = (m: LobbyJoin): string => JSON.stringify(m);
 export const deserializeLobbyJoin = (s: string): LobbyJoin =>
   JSON.parse(s) as LobbyJoin;
+
+export const serializeLobbyCommand = (m: LobbyCommand): string =>
+  JSON.stringify(m);
+export const deserializeLobbyCommand = (s: string): LobbyCommand =>
+  JSON.parse(s) as LobbyCommand;
+
+export const serializeMatchLaunch = (m: MatchLaunch): string =>
+  JSON.stringify(m);
+export const deserializeMatchLaunch = (s: string): MatchLaunch =>
+  JSON.parse(s) as MatchLaunch;

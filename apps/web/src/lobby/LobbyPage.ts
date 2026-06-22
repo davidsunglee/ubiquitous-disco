@@ -5,25 +5,54 @@
  * showing the two Player Slots and their current occupants + presence status.
  * Updates in real-time as LobbyState messages arrive from the PrivateLobby DO.
  *
+ * Host controls (Phase 5): the Host can fill/clear Practice Bot seats, pick the
+ * match length, and start. On start, the worker hands back a MatchLaunch which
+ * we stash (per-tab) and navigate into the Phaser match.
+ *
  * Stable data-testid anchors (required for Playwright):
  *   lobby-code            — displays the lobby code
  *   lobby-slots           — wrapper around all four seat elements
  *   lobby-slot-{0..3}     — individual seat elements
+ *   lobby-fill-bots       — fill all empty seats with bots (Host only)
+ *   lobby-match-length    — match-length <select> (Host only)
+ *   lobby-start-match     — start the match (Host only)
+ *   lobby-slot-{n}-bot    — fill that empty seat with a bot (Host only)
+ *   lobby-slot-{n}-clear  — clear the bot from that seat (Host only)
  */
 
-import type { LobbySlot, LobbyState, PlayerSlotId } from "@bb/protocol";
-import { teamForPlayerSlot } from "@bb/protocol";
+import type {
+  LobbySlot,
+  LobbyState,
+  MatchLaunch,
+  PlayerSlotId,
+} from "@bb/protocol";
+import { MATCH_LENGTH_DEFAULT_TICKS, teamForPlayerSlot } from "@bb/protocol";
 import { LobbyClient } from "./LobbyClient";
+import { saveLaunch } from "./launchHandoff";
 import { loadProfile } from "./profile";
+
+/** Match-length options exposed in the Host picker (2:00–5:00 @ 30 Hz). */
+const LENGTH_OPTIONS: { label: string; ticks: number }[] = [
+  { label: "2:00", ticks: 3600 },
+  { label: "2:30", ticks: 4500 },
+  { label: "3:00", ticks: 5400 },
+  { label: "4:00", ticks: 7200 },
+  { label: "5:00", ticks: 9000 },
+];
 
 export class LobbyPage {
   private root!: HTMLElement;
   private client: LobbyClient | null = null;
   private slotEls = new Map<PlayerSlotId, HTMLElement>();
   private codeEl!: HTMLElement;
+  private profile = loadProfile();
+  private controlsEl!: HTMLElement;
+  private lengthSelect!: HTMLSelectElement;
+  /** Latest known lobby state (used by seat-button handlers). */
+  private lastState: LobbyState | null = null;
 
   mount(container: HTMLElement, code: string): void {
-    const profile = loadProfile();
+    const profile = this.profile;
 
     this.root = document.createElement("div");
     this.root.style.cssText =
@@ -87,6 +116,10 @@ export class LobbyPage {
     teamsRow.appendChild(team1Col);
     this.root.appendChild(teamsRow);
 
+    // Host controls (shown only when the local player is the Host).
+    this.controlsEl = this.makeHostControls();
+    this.root.appendChild(this.controlsEl);
+
     // Back button
     const backBtn = document.createElement("button");
     backBtn.textContent = "Back to Menu";
@@ -103,7 +136,96 @@ export class LobbyPage {
     // Connect to the lobby WebSocket.
     this.client = new LobbyClient();
     this.client.onState((state) => this.render(state));
+    this.client.onLaunch((launch) => this.handleLaunch(launch));
     this.client.connect(code, profile.playerId, profile.displayName);
+  }
+
+  /** Build the (initially hidden) Host controls row. */
+  private makeHostControls(): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.style.cssText =
+      "display:none;flex-direction:column;gap:12px;align-items:center;" +
+      "border-top:1px solid #333;padding-top:16px;width:100%;max-width:560px;";
+
+    // Match length picker.
+    const lengthRow = document.createElement("div");
+    lengthRow.style.cssText = "display:flex;gap:8px;align-items:center;";
+    const lengthLabel = document.createElement("label");
+    lengthLabel.textContent = "Match length:";
+    lengthLabel.style.cssText = "font-size:12px;color:#aaa;";
+    lengthRow.appendChild(lengthLabel);
+
+    this.lengthSelect = document.createElement("select");
+    this.lengthSelect.dataset.testid = "lobby-match-length";
+    this.lengthSelect.style.cssText =
+      "padding:4px 8px;font-family:monospace;font-size:12px;" +
+      "background:#222;color:#eee;border:1px solid #555;border-radius:4px;";
+    for (const opt of LENGTH_OPTIONS) {
+      const o = document.createElement("option");
+      o.value = String(opt.ticks);
+      o.textContent = opt.label;
+      if (opt.ticks === MATCH_LENGTH_DEFAULT_TICKS) o.selected = true;
+      this.lengthSelect.appendChild(o);
+    }
+    this.lengthSelect.addEventListener("change", () => {
+      this.client?.sendCommand({
+        type: "LobbyCommand",
+        cmd: "setSettings",
+        settings: { matchLengthTicks: Number(this.lengthSelect.value) },
+      });
+    });
+    lengthRow.appendChild(this.lengthSelect);
+    wrap.appendChild(lengthRow);
+
+    // Action buttons.
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:12px;align-items:center;";
+
+    const fillBtn = document.createElement("button");
+    fillBtn.dataset.testid = "lobby-fill-bots";
+    fillBtn.textContent = "Fill Empty Seats with Bots";
+    fillBtn.style.cssText =
+      "padding:8px 16px;cursor:pointer;font-family:monospace;font-size:12px;" +
+      "background:#665500;color:#ffe;border:none;border-radius:4px;";
+    fillBtn.addEventListener("click", () => this.fillEmptySeats());
+    btnRow.appendChild(fillBtn);
+
+    const startBtn = document.createElement("button");
+    startBtn.dataset.testid = "lobby-start-match";
+    startBtn.textContent = "Start Match";
+    startBtn.style.cssText =
+      "padding:8px 20px;cursor:pointer;font-family:monospace;font-size:13px;" +
+      "background:#227722;color:#fff;border:none;border-radius:4px;font-weight:bold;";
+    startBtn.addEventListener("click", () => {
+      this.client?.sendCommand({ type: "LobbyCommand", cmd: "start" });
+    });
+    btnRow.appendChild(startBtn);
+
+    wrap.appendChild(btnRow);
+    return wrap;
+  }
+
+  /** Fill every currently-empty seat with a Practice Bot. */
+  private fillEmptySeats(): void {
+    if (!this.lastState) return;
+    for (const slot of this.lastState.slots) {
+      if (slot.occupant === null) {
+        this.client?.sendCommand({
+          type: "LobbyCommand",
+          cmd: "fillBot",
+          slotId: slot.slotId,
+        });
+      }
+    }
+  }
+
+  /** On launch: stash the per-tab payload and navigate into the Phaser match. */
+  private handleLaunch(launch: MatchLaunch): void {
+    saveLaunch(launch);
+    // Clear the lobby hash to reveal the match, then reload so GameScene picks
+    // up the launch payload on create().
+    window.location.hash = "";
+    window.location.reload();
   }
 
   private makeTeamColumn(
@@ -153,12 +275,19 @@ export class LobbyPage {
   }
 
   private render(state: LobbyState): void {
+    this.lastState = state;
+    const isHost = state.hostPlayerId === this.profile.playerId;
+    this.controlsEl.style.display = isHost ? "flex" : "none";
     for (const slot of state.slots) {
-      this.renderSlot(slot, state.hostPlayerId);
+      this.renderSlot(slot, state.hostPlayerId, isHost);
     }
   }
 
-  private renderSlot(slot: LobbySlot, hostPlayerId: string): void {
+  private renderSlot(
+    slot: LobbySlot,
+    hostPlayerId: string,
+    isHost = false,
+  ): void {
     const el = this.slotEls.get(slot.slotId);
     if (!el) return;
 
@@ -174,6 +303,22 @@ export class LobbyPage {
       empty.textContent = "— empty —";
       empty.style.cssText = "color:#555;font-size:12px;";
       el.appendChild(empty);
+      if (isHost) {
+        const botBtn = document.createElement("button");
+        botBtn.dataset.testid = `lobby-slot-${slot.slotId}-bot`;
+        botBtn.textContent = "+ Bot";
+        botBtn.style.cssText =
+          "margin-top:4px;padding:2px 8px;cursor:pointer;font-family:monospace;" +
+          "font-size:10px;background:#444;color:#ccc;border:1px solid #666;border-radius:3px;";
+        botBtn.addEventListener("click", () => {
+          this.client?.sendCommand({
+            type: "LobbyCommand",
+            cmd: "fillBot",
+            slotId: slot.slotId,
+          });
+        });
+        el.appendChild(botBtn);
+      }
       return;
     }
 
@@ -184,12 +329,28 @@ export class LobbyPage {
       botLabel.textContent = "Practice Bot";
       botLabel.style.cssText = "color:#aa8800;font-size:12px;";
       el.appendChild(botLabel);
+      if (isHost) {
+        const clearBtn = document.createElement("button");
+        clearBtn.dataset.testid = `lobby-slot-${slot.slotId}-clear`;
+        clearBtn.textContent = "✕";
+        clearBtn.style.cssText =
+          "margin-top:4px;padding:2px 8px;cursor:pointer;font-family:monospace;" +
+          "font-size:10px;background:#442222;color:#ccc;border:1px solid #663333;border-radius:3px;";
+        clearBtn.addEventListener("click", () => {
+          this.client?.sendCommand({
+            type: "LobbyCommand",
+            cmd: "clearBot",
+            slotId: slot.slotId,
+          });
+        });
+        el.appendChild(clearBtn);
+      }
       return;
     }
 
     // Human occupant
     const { playerId, displayName, present } = slot.occupant;
-    const isHost = playerId === hostPlayerId;
+    const occupantIsHost = playerId === hostPlayerId;
 
     el.dataset.occupant = "human";
     el.style.borderColor = present ? "#55aa55" : "#666";
@@ -202,7 +363,7 @@ export class LobbyPage {
     nameEl.style.cssText = `color:${present ? "#eee" : "#666"};font-size:13px;`;
     nameRow.appendChild(nameEl);
 
-    if (isHost) {
+    if (occupantIsHost) {
       const hostBadge = document.createElement("span");
       hostBadge.textContent = "Host";
       hostBadge.style.cssText =
