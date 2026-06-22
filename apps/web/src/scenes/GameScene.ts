@@ -2,6 +2,7 @@ import type { MatchLaunch } from "@bb/protocol";
 import {
   CHARACTERS,
   type CharacterDef,
+  type CharacterId,
   createReplay,
   createSimulation,
   DEFAULT_CONFIG,
@@ -60,6 +61,12 @@ import {
   wireFailClosed,
 } from "./reconnectFlow";
 import { bellFromScoreDelta } from "./scoreFeedback";
+
+// Hotseat dev roster (FLI-9): the single character both hotseat slots spawn as,
+// since hotseat has no in-game character picker yet. Change this to test another
+// character's feel/Special locally (e.g. "panda", "drunken-boxer"). Characters
+// are not hashed, so this does not affect the cross-engine determinism contract.
+const HOTSEAT_CHARACTER: CharacterId = "drunken-boxer";
 
 // Distinct colors per player slot (grounded / airborne variants).
 // Slots 0/1 = Team 0 (blue shades, left side); Slots 2/3 = Team 1 (orange/red shades, right side).
@@ -131,6 +138,10 @@ export class GameScene extends Phaser.Scene {
   private captureData: ReplayData | null = null;
   /** Last captured replay JSON (for the Replay button). */
   private lastCaptureJson: string | null = null;
+  /** Per-slot character ids the hotseat sim was built with (set in buildSim).
+   *  Stamped into replay captures so playReplay reproduces the same roster and
+   *  the [replay] determinism hash is meaningful for non-Sifu rosters. */
+  private hotseatCharacterIds: CharacterId[] = [];
 
   // Replay playback state (null when not replaying via startReplay).
   private replayFrames: InputFrame[][] | null = null;
@@ -497,7 +508,12 @@ export class GameScene extends Phaser.Scene {
       },
       getDebugColliders: () => this.sim.getDebugColliders(),
       startCapture: () => {
-        this.captureData = createReplay(1234, FLAT_DOJO.id, "default");
+        this.captureData = createReplay(
+          1234,
+          FLAT_DOJO.id,
+          "default",
+          this.hotseatCharacterIds,
+        );
       },
       stopCapture: () => {
         if (!this.captureData) return null;
@@ -792,14 +808,18 @@ export class GameScene extends Phaser.Scene {
   // ── Sim lifecycle ────────────────────────────────────────────────────────────
 
   private buildSim(config: SimConfig): Simulation {
-    // Phase 2 (FLI-9) dev default: hotseat has no character picker yet, so spawn
-    // Panda for both active slots — Panda's Ground Pound is the only Special
-    // implemented this phase, making it the only one observable in hotseat. The
-    // remaining characters' Specials land in Phase 4. Characters are not hashed,
-    // so this does not affect the cross-engine determinism contract.
+    // Hotseat dev roster (FLI-9): hotseat has no character picker yet, so both
+    // active slots spawn HOTSEAT_CHARACTER. Change that one constant to feel out
+    // a different character / Special in hotseat (e.g. "panda" Ground Pound,
+    // "drunken-boxer" seeded Stagger Stumble). Characters are not hashed, so this
+    // does not affect the cross-engine determinism contract.
     const characters: CharacterDef[] = [];
-    characters[0] = CHARACTERS.panda;
-    characters[2] = CHARACTERS.panda;
+    characters[0] = CHARACTERS[HOTSEAT_CHARACTER];
+    characters[2] = CHARACTERS[HOTSEAT_CHARACTER];
+    // Record the per-slot ids so a replay capture can reproduce this exact roster.
+    this.hotseatCharacterIds = [];
+    this.hotseatCharacterIds[0] = HOTSEAT_CHARACTER;
+    this.hotseatCharacterIds[2] = HOTSEAT_CHARACTER;
     return createSimulation({
       config,
       arena: FLAT_DOJO,

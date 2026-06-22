@@ -1,5 +1,5 @@
 /**
- * stepSpecial — Phase 2 (FLI-9): cooldown Special rule.
+ * stepSpecial — Phase 2/3 (FLI-9): cooldown Special rule.
  *
  * Called once per slot per tick from simulation.ts, AFTER stepStrike, gated by
  * the same start-of-tick wasControllable[s] guard.
@@ -9,8 +9,14 @@
  * and specialCooldown === 0. On activation, set specialCooldown = cooldownTicks and
  * dispatch by special.kind.
  *
- * Currently implemented: "ground-pound" (Panda).
+ * Currently implemented: "ground-pound" (Panda), "stagger-stumble" (Drunken Boxer).
  * All other kinds fall through to `default: break` (no-op placeholder until Phase 4).
+ *
+ * Phase 3: gains an optional `draw` function that advances the sim-wide seeded
+ * PRNG and returns a [0,1) float. Only Drunken Boxer's stagger-stumble consumes it.
+ * The draw ORDER is fixed and identical on both engines — that is what keeps it
+ * deterministic. The default (undefined) preserves Phase-2 behavior for all other
+ * Specials.
  */
 
 import { type Actor, controllable } from "../actor";
@@ -25,6 +31,7 @@ export function stepSpecial(
   rw: RapierWorld,
   slot: number,
   actors: Actor[],
+  draw?: () => number,
 ): void {
   // Cooldown drains every tick regardless of controllable state.
   if (actor.specialCooldown > 0) actor.specialCooldown -= 1;
@@ -91,7 +98,31 @@ export function stepSpecial(
       break;
     }
 
-    // Other kinds implemented in Phases 3–4.
+    case "stagger-stumble": {
+      if (!draw) break; // RNG required; no-op if absent
+      const lungeMax = special.params.lungeMax ?? 5;
+      const angle = draw() * Math.PI * 2; // seeded-random direction
+      const mag = (0.5 + draw() * 0.5) * lungeMax; // seeded-random magnitude
+      // Velocity-kick: apply the lunge as a direct velocity assignment.
+      actor.vx = Math.cos(angle) * mag;
+      actor.vy = Math.max(actor.vy, Math.abs(Math.sin(angle)) * mag * 0.5);
+      // If the lunge overlaps the ball, redirect it on a seeded-random angle.
+      const p = rw.playerPos(slot);
+      const ball = rw.ballPos();
+      if (
+        Math.hypot(ball.x - p.x, ball.y - p.y) <=
+        actor.character.stats.strikeReach + 0.5
+      ) {
+        const ba = draw() * Math.PI * 2;
+        rw.applyBallImpulse(
+          Math.cos(ba) * lungeMax * 2,
+          Math.abs(Math.sin(ba)) * lungeMax * 2,
+        );
+      }
+      break;
+    }
+
+    // Other kinds implemented in Phase 4.
     default:
       break;
   }

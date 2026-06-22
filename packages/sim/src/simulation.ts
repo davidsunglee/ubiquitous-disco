@@ -5,6 +5,7 @@ import type { SimConfig } from "./config";
 import { hashBytes } from "./hash";
 import type { InputFrame } from "./input";
 import { RapierWorld } from "./rapier-world";
+import { nextRng, seedRng } from "./rng";
 import { stepBall } from "./rules/ball";
 import {
   type BellRingState,
@@ -138,6 +139,8 @@ export interface SimSnapshot {
   bellRingArmed: boolean[];
   tick: number;
   match: MatchState;
+  /** Phase-3 (FLI-9): seeded PRNG state for in-process rewind determinism. */
+  rngState: number;
 }
 
 export interface Simulation {
@@ -320,7 +323,9 @@ export function createSimulation(opts: {
       resolved[s],
     );
   }
-  // seed reserved for Phase 3+ seeded RNG; deterministic w/o RNG this phase.
+  // Phase-3 (FLI-9): sim-wide PRNG state, seeded from opts.seed.
+  // Serialized + hashed + restored so rewind/replay stay deterministic.
+  let rngState = seedRng(opts.seed);
 
   // Authoritative tick counter (incremented per step) and the drainable event
   // queue. The Bell Ring debounce state persists across ticks and is hashed.
@@ -364,7 +369,11 @@ export function createSimulation(opts: {
           // Only initiate a strike/special if the actor was controllable at tick START.
           if (wasControllable[s]) {
             stepStrike(actor, input, config, rw, s, actors);
-            stepSpecial(actor, input, config, rw, s, actors);
+            stepSpecial(actor, input, config, rw, s, actors, () => {
+              const r = nextRng(rngState);
+              rngState = r.state;
+              return r.value;
+            });
           } else {
             // Clear charge so it doesn't linger while knocked down.
             actor.charge = 0;
@@ -486,6 +495,9 @@ export function createSimulation(opts: {
         }
         // Re-arm bells after respawn so the next contact can ring.
         bellRing = createBellRingState(arena);
+        // Phase-3 (FLI-9): re-seed the PRNG on round reset so each round
+        // starts from the same deterministic base (seed-independent across rounds).
+        rngState = seedRng(opts.seed);
       }
 
       // Match lifecycle advances EVERY tick (even frozen ones); tick always increments.
@@ -516,17 +528,21 @@ export function createSimulation(opts: {
       return events.splice(0, events.length);
     },
     // Composite hash: Rapier snapshot bytes ‖ serialized actors in activeSlots order
-    // ‖ serialized Bell Ring debounce state ‖ serialized match state. Fixed concatenation
-    // order — any change in field count or type shape must be reflected here.
-    // Note: iterate activeSlots (not the sparse actors[] array) to avoid undefined holes
-    // in the spread when slots are non-contiguous (e.g. 1v1 template [0, 2]).
+    // ‖ serialized Bell Ring debounce state ‖ serialized match state ‖ rngState (Phase 3).
+    // Fixed concatenation order — any change in field count or type shape must be reflected
+    // here. Note: iterate activeSlots (not the sparse actors[] array) to avoid undefined
+    // holes in the spread when slots are non-contiguous (e.g. 1v1 template [0, 2]).
     hashState() {
+      // Serialize rngState as a 4-byte Uint32 (big-endian).
+      const rngBuf = new ArrayBuffer(4);
+      new DataView(rngBuf).setUint32(0, rngState >>> 0);
       return hashBytes(
         rw.takeSnapshot(),
         // biome-ignore lint/style/noNonNullAssertion: actors[s] is always defined for s in activeSlots
         ...activeSlots.map((s) => serializeActor(actors[s]!)),
         serializeBellRingState(bellRing),
         serializeMatchState(match),
+        new Uint8Array(rngBuf), // Phase-3: sim-wide PRNG state appended last
       );
     },
 
@@ -673,6 +689,8 @@ export function createSimulation(opts: {
         tick,
         // Deep-copy match state (scores array must be copied too).
         match: { ...match, scores: [...match.scores] },
+        // Phase-3 (FLI-9): capture current PRNG state for rewind determinism.
+        rngState,
       };
     },
 
@@ -687,6 +705,8 @@ export function createSimulation(opts: {
       tick = snap.tick;
       // Restore match state.
       match = { ...snap.match, scores: [...snap.match.scores] };
+      // Phase-3 (FLI-9): restore PRNG state so rewind stays deterministic.
+      rngState = snap.rngState;
       // Clear any pending events that were queued after the snapshot was taken.
       events.splice(0, events.length);
     },

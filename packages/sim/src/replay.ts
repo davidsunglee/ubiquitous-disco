@@ -14,6 +14,7 @@
  */
 
 import { FLAT_DOJO } from "./arena";
+import { CHARACTERS, type CharacterId } from "./character";
 import { DEFAULT_CONFIG, SIM_CONFIG_VERSION } from "./config";
 import type { InputFrame } from "./input";
 import { createSimulation } from "./simulation";
@@ -23,6 +24,8 @@ export interface ReplayData {
   simConfigVersion: number;
   arenaId: string;
   rosterId: string;
+  /** Per-slot character ids (indexed by slot). Empty/absent → all Sifu (legacy). */
+  characterIds?: CharacterId[];
   /** One row per tick; each row is [slot0Frame, slot1Frame, ...]. */
   inputFrames: InputFrame[][];
 }
@@ -58,6 +61,7 @@ export function playReplay(replay: ReplayData): string {
     config: DEFAULT_CONFIG,
     arena: FLAT_DOJO,
     seed: replay.seed,
+    characters: replay.characterIds?.map((id) => CHARACTERS[id ?? "sifu"]),
   });
 
   for (const row of replay.inputFrames) {
@@ -70,17 +74,23 @@ export function playReplay(replay: ReplayData): string {
 /**
  * Create an empty ReplayData ready to record into, using the current
  * SIM_CONFIG_VERSION and the given arena/roster/seed.
+ *
+ * Phase 3 (FLI-9): pass `characterIds` to carry per-slot character ids so
+ * Specials (especially Drunken Boxer's seeded stagger-stumble) replay
+ * deterministically. Omit or pass `undefined` to preserve all-Sifu behavior.
  */
 export function createReplay(
   seed: number,
   arenaId: string = FLAT_DOJO.id,
   rosterId: string = "default",
+  characterIds?: CharacterId[],
 ): ReplayData {
   return {
     seed,
     simConfigVersion: SIM_CONFIG_VERSION,
     arenaId,
     rosterId,
+    ...(characterIds !== undefined ? { characterIds } : {}),
     inputFrames: [],
   };
 }

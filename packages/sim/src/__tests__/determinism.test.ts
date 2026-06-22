@@ -1,5 +1,6 @@
 import { beforeAll, expect, test } from "vitest";
 import {
+  CHARACTERS,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
@@ -115,4 +116,76 @@ test("held jump rises higher than a tapped jump", () => {
   ];
 
   expect(peak(held)).toBeGreaterThan(peak(tapped));
+});
+
+// ── Phase 3 (FLI-9): seeded RNG determinism ─────────────────────────────────
+
+/**
+ * Build a frame list where slot 0 (Drunken Boxer) fires Stagger Stumble once,
+ * then both players idle.
+ */
+function buildDrunkenBoxerFrames(): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start the match.
+  frames.push(
+    row(
+      frame({ jumpPressed: true, jumpHeld: true }),
+      frame({ jumpPressed: true, jumpHeld: true }),
+    ),
+  );
+  // Settle for 20 ticks.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk toward center (ball).
+  for (let i = 0; i < 10; i++) frames.push(row(frame({ moveX: 1 })));
+  // Fire Stagger Stumble.
+  frames.push(row(frame({ specialPressed: true, specialHeld: true })));
+  // Idle for 40 ticks.
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
+  return frames;
+}
+
+test("Phase 3: same seed + same Drunken-Boxer inputs → same hashState", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerFrames();
+
+  const runOnce = () => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 7777,
+      characters: [drunkenBoxerDef],
+    });
+    for (const f of frames) sim.step(f);
+    return sim.hashState();
+  };
+
+  expect(runOnce()).toBe(runOnce());
+});
+
+test("Phase 3: different seed → different hashState after a Stagger Stumble", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerFrames();
+
+  const runWithSeed = (seed: number) => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed,
+      characters: [drunkenBoxerDef],
+    });
+    for (const f of frames) sim.step(f);
+    return sim.hashState();
+  };
+
+  // Different seeds produce different PRNG sequences → different stagger-stumble
+  // directions → different physics outcomes → different hashes.
+  expect(runWithSeed(1111)).not.toBe(runWithSeed(2222));
 });

@@ -18,9 +18,12 @@ import { beforeAll, expect, test } from "vitest";
 import {
   type BotWorldView,
   CHARACTERS,
+  type CharacterDef,
+  type CharacterId,
   createReplay,
   createSimulation,
   DEFAULT_CONFIG,
+  deserializeReplay,
   EMPTY_INPUT,
   FLAT_DOJO,
   type InputFrame,
@@ -28,6 +31,7 @@ import {
   playReplay,
   recordFrame,
   samplePracticeBotInput,
+  serializeReplay,
 } from "../index";
 
 beforeAll(async () => {
@@ -106,6 +110,28 @@ test("playReplay() called twice on the same ReplayData returns equal hashes", ()
   const hash1 = playReplay(replay);
   const hash2 = playReplay(replay);
   expect(hash1).toBe(hash2);
+});
+
+test("playReplay() survives a serialize→deserialize round-trip of sparse rows", () => {
+  // The hotseat UI captures SPARSE rows (slot 0 and slot 2 set, index 1 a hole),
+  // then serializeReplay() → JSON.stringify() turns the hole into an explicit
+  // `null` before the Replay button feeds it back through deserializeReplay() +
+  // playReplay(). anyStartPressed() must tolerate that null instead of throwing.
+  const replay = createReplay(9999);
+  const sim = newSim();
+  for (const row of scriptedFrameList()) {
+    recordFrame(replay, row);
+    sim.step(row);
+  }
+  const liveHash = sim.hashState();
+
+  // Round-trip through JSON exactly like the capture-download / replay path.
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  // The serialized rows now carry explicit nulls where the sparse holes were.
+  expect(roundTripped.inputFrames[0]?.[1]).toBeNull();
+
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
 });
 
 test("playReplay() hash equals the live capture session's final hashState()", () => {
@@ -462,6 +488,154 @@ test("Panda-Special match: recorded replay plays back to the same hash as the li
   });
   for (const row of replay.inputFrames) replaySim.step(row);
   expect(replaySim.hashState()).toBe(liveHash);
+});
+
+// ── Phase 3 (FLI-9): Drunken Boxer replay determinism ───────────────────────
+
+/**
+ * Build a frame list where slot 0 (Drunken Boxer) fires Stagger Stumble once.
+ * The seeded-random lunge + optional ball redirect must replay bit-identically
+ * through playReplay (which uses the characterIds from ReplayData).
+ */
+function buildDrunkenBoxerSpecialFrames(): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start the match.
+  frames.push(
+    row(
+      frame({ jumpPressed: true, jumpHeld: true }),
+      frame({ jumpPressed: true, jumpHeld: true }),
+    ),
+  );
+  // Settle.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk toward ball.
+  for (let i = 0; i < 10; i++) frames.push(row(frame({ moveX: 1 })));
+  // Fire Stagger Stumble.
+  frames.push(row(frame({ specialPressed: true, specialHeld: true })));
+  // Settle.
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
+  return frames;
+}
+
+test("Drunken Boxer Stagger Stumble: two sims with the same seed + characters produce the same hash", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerSpecialFrames();
+
+  const run = () => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 8080,
+      characters: [drunkenBoxerDef],
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Drunken Boxer Stagger Stumble: playReplay with characterIds replays bit-identically", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerSpecialFrames();
+  const seed = 8080;
+
+  // characterIds array: slot 0 = drunken-boxer, slot 2 = sifu (default).
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "drunken-boxer";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters: [drunkenBoxerDef],
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+
+  const liveHash = liveSim.hashState();
+  const replayHash = playReplay(replay);
+  expect(replayHash).toBe(liveHash);
+});
+
+test("Drunken Boxer Stagger Stumble: playReplay called twice produces the same hash", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerSpecialFrames();
+  const seed = 8080;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "drunken-boxer";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters: [drunkenBoxerDef],
+  });
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+
+  const hash1 = playReplay(replay);
+  const hash2 = playReplay(replay);
+  expect(hash1).toBe(hash2);
+});
+
+test("Drunken Boxer Stagger Stumble: replays bit-identically through a serialize→deserialize round-trip", () => {
+  // This is the exact path the hotseat Capture-download / Replay button uses:
+  // SPARSE rows AND SPARSE characterIds (slot 0 + slot 2 set, index 1 a hole),
+  // JSON-serialized then re-parsed before playReplay(). JSON.stringify
+  // materializes the holes as explicit `null`, which both playReplay's
+  // characterIds map and stepMatch's anyStartPressed must tolerate.
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerSpecialFrames();
+  const seed = 8080;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "drunken-boxer";
+  characterIds[2] = "drunken-boxer";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const characters: CharacterDef[] = [];
+  characters[0] = drunkenBoxerDef;
+  characters[2] = drunkenBoxerDef;
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters,
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  // Round-trip through JSON exactly like Capture-download → Replay button.
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  // Sparse holes at index 1 are now explicit nulls in both arrays.
+  expect(roundTripped.characterIds?.[1]).toBeNull();
+  expect(roundTripped.inputFrames[0]?.[1]).toBeNull();
+
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
 });
 
 // ── getDebugColliders() returns expected shapes ──────────────────────────────
