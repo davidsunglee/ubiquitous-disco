@@ -6,9 +6,9 @@
  * same sessionStorage launch payload intact). Within the grace window, the
  * refreshed client should reclaim the same Player Slot and resume the match.
  *
- * A second scenario exercises the late-reconnect path: the refreshed client
- * waits until the grace window expires, then joins — the remaining client
- * should see the `net-closed` banner with a reconnect-expired message.
+ * A second scenario exercises the late-reconnect path with the E2E server's
+ * shortened grace window: the remaining client sees reconnect-expired, and the
+ * stale launch token cannot create a fresh room after expiry.
  *
  * Requires:
  *   - Vite dev server (5180 / 4173 in CI)
@@ -106,17 +106,8 @@ test("mid-match refresh: refreshed client reclaims same Player Slot within grace
 test("late reconnect: grace window expired → remaining client sees reconnect-expired banner", async ({
   browser,
 }) => {
+  test.setTimeout(45_000);
   test.skip(SKIP, "SKIP_NET_E2E set — worker/server not running");
-
-  // This test relies on the grace window being short enough that closing the
-  // context and waiting longer than the window causes expiry. In E2E, the
-  // server's grace timer (DEFAULT_RECONNECT_CONFIG.reconnectGraceMs = 15s) may
-  // be too long for a CI test. We skip this sub-scenario if the environment
-  // doesn't support it — but keep the structure for manual verification.
-  test.skip(
-    true,
-    "Late-reconnect grace timeout (15s) is too slow for automated CI; verify manually per acceptance script step 7.",
-  );
 
   const hostCtx = await browser.newContext();
   const guestCtx = await browser.newContext();
@@ -133,23 +124,49 @@ test("late reconnect: grace window expired → remaining client sees reconnect-e
   await guest.getByTestId("lobby-name").fill("Bob");
   await guest.getByTestId("lobby-join-code").fill(code);
   await guest.getByTestId("lobby-join").click();
+  await expect(guest.getByTestId("lobby-slots")).toBeVisible({ timeout: 8000 });
   await host.getByTestId("lobby-fill-bots").click();
   await host.getByTestId("lobby-start-match").click();
 
   await expect(host.locator("canvas")).toBeVisible({ timeout: 12000 });
   await expect(guest.locator("canvas")).toBeVisible({ timeout: 12000 });
+  await expect(host.getByTestId("score")).toBeVisible({ timeout: 8000 });
+  await expect(guest.getByTestId("score")).toBeVisible({ timeout: 8000 });
   await host.waitForTimeout(500);
+
+  const guestLaunch = await guest.evaluate(() =>
+    sessionStorage.getItem("bb.launch"),
+  );
+  expect(guestLaunch).not.toBeNull();
+  if (guestLaunch === null) throw new Error("expected guest launch payload");
+  const retainedGuestLaunch: string = guestLaunch;
 
   // Close the guest context (hard disconnect).
   await guestCtx.close();
 
-  // Wait longer than the grace window (15s + buffer).
-  await host.waitForTimeout(20_000);
+  // Wait longer than the E2E grace window (1.5s + buffer).
+  await host.waitForTimeout(3_000);
 
   // Host should see the reconnect-expired banner.
-  await expect(host.getByTestId("net-closed")).toBeVisible({ timeout: 5000 });
+  await expect(host.getByTestId("net-closed")).toBeVisible({ timeout: 8000 });
   const bannerText = await host.getByTestId("net-closed").innerText();
   expect(bannerText).toContain("Reconnect Window Closed");
 
+  // A stale retained launch must join only an existing room; it must not create
+  // a fresh MatchRoom after the original room disposed on grace expiry.
+  const lateCtx = await browser.newContext();
+  await lateCtx.addInitScript((launchJson: string) => {
+    const launch = JSON.parse(launchJson) as { launchId: string };
+    sessionStorage.setItem("bb.launch", launchJson);
+    sessionStorage.setItem("bb.launch.joined", launch.launchId);
+  }, retainedGuestLaunch);
+  const lateGuest = await lateCtx.newPage();
+  await lateGuest.goto("/");
+
+  await expect(lateGuest.getByTestId("net-closed")).toBeVisible({
+    timeout: 8000,
+  });
+
   await hostCtx.close();
+  await lateCtx.close();
 });

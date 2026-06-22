@@ -24,6 +24,7 @@ export default defineConfig({
       env: {
         WORKER_URL: "http://127.0.0.1:8787",
         WORKER_INTERNAL_SECRET: "dev-secret",
+        RECONNECT_GRACE_MS: process.env.E2E_RECONNECT_GRACE_MS ?? "1500",
       },
     },
     {

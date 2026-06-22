@@ -35,6 +35,15 @@ const FIXED_STEP_MS = 1000 / DEFAULT_CONFIG.tickHz; // 33.33ms
 
 const MODE_2V2: PlayerSlotId[] = [0, 1, 2, 3];
 
+function configuredReconnectGraceMs(): number {
+  const raw = process.env.RECONNECT_GRACE_MS;
+  if (raw === undefined) return DEFAULT_RECONNECT_CONFIG.reconnectGraceMs;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_RECONNECT_CONFIG.reconnectGraceMs;
+}
+
 /**
  * Per-reserved-slot state during the Phase 6 reconnect grace window.
  * The slot's source is swapped to `emptySource()` while reserved.
@@ -485,7 +494,7 @@ export class MatchRoom extends Room {
   ): ReturnType<typeof setTimeout> {
     return setTimeout(() => {
       this.onGraceExpired(slot);
-    }, DEFAULT_RECONNECT_CONFIG.reconnectGraceMs);
+    }, configuredReconnectGraceMs());
   }
 
   /**
