@@ -1,0 +1,22 @@
+{
+  "name": "@bb/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run --max-workers=1 --no-isolate --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@bb/protocol": "workspace:*",
+    "partyserver": "^0.5.8",
+    "partysocket": "^1.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.16.18",
+    "@cloudflare/workers-types": "^4.20260620.1",
+    "wrangler": "^4.103.0"
+  }
+}

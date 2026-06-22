@@ -4,5 +4,7 @@ packages:
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
+  sharp: true
+  workerd: true
 minimumReleaseAgeExclude:
   - phaser@4.2.0

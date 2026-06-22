@@ -19,6 +19,15 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
     },
+    {
+      // Cloudflare Worker (via Wrangler dev) for lobby presence tests.
+      // Polls /healthz (returns 200 "ok") so Playwright can confirm the worker
+      // is listening before running lobby e2e tests.
+      command: "pnpm --filter @bb/worker dev",
+      url: "http://127.0.0.1:8787/healthz",
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
   ],
   use: {
     baseURL: process.env.CI ? "http://localhost:4173" : "http://127.0.0.1:5180",

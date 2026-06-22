@@ -11,10 +11,11 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@bb/sim": "workspace:*",
-    "phaser": "^4.2.0",
     "@bb/protocol": "workspace:*",
-    "@colyseus/sdk": "^0.17.43"
+    "@bb/sim": "workspace:*",
+    "@colyseus/sdk": "^0.17.43",
+    "partysocket": "^1.2.0",
+    "phaser": "^4.2.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",

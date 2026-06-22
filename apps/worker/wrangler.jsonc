@@ -1,0 +1,16 @@
+{
+  "name": "bb-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "PrivateLobby", "class_name": "PrivateLobby" }
+      // MATCH_LAUNCH binding added in Phase 5
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PrivateLobby"] }],
+  "vars": {
+    // WORKER_INTERNAL_SECRET added in Phase 5 (dev via vars; prod via secret put)
+  }
+}
