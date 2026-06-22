@@ -133,8 +133,13 @@ function manifest2v2(
   const slots: MatchManifestSlot[] = ([0, 1, 2, 3] as PlayerSlotId[]).map(
     (s) =>
       bots.has(s)
-        ? { slotId: s, kind: "bot" }
-        : { slotId: s, kind: "human", playerId: `p${s}` },
+        ? { slotId: s, kind: "bot" as const, characterId: "sifu" as const }
+        : {
+            slotId: s,
+            kind: "human" as const,
+            playerId: `p${s}`,
+            characterId: "sifu" as const,
+          },
   );
   return manifest(slots, matchLengthTicks);
 }
@@ -732,4 +737,96 @@ test("snapshot broadcast: rapierBytesB64 round-trips to valid Uint8Array", async
   expect(b64.length).toBeGreaterThan(0);
   const bytes = base64ToUint8Array(b64);
   expect(bytes.length).toBe(auth.rapierBytes.length);
+});
+
+// ── Phase 1: character roster (FLI-9) ─────────────────────────────────────────
+
+test("configureFromManifest resolves characters into the sim (non-Sifu slot)", async () => {
+  const { CHARACTERS, resolveCharacter, DEFAULT_CONFIG } = await import(
+    "@bb/sim"
+  );
+  const room = makeRoom();
+  // Give slot 2 a Panda character (distinct from Sifu).
+  const mf: MatchManifest = {
+    launchId: "L1",
+    slots: [
+      { slotId: 0, kind: "human", playerId: "p0", characterId: "sifu" },
+      {
+        slotId: 2,
+        kind: "human",
+        playerId: "p2",
+        characterId: "panda",
+      },
+    ] as MatchManifestSlot[],
+    settings: { mode: "1v1", matchLengthTicks: 5400, arenaId: "flat-dojo" },
+  };
+  claimImpl = async () => ({ ok: true, playerSlotId: 0, manifest: mf });
+
+  const clientA = makeClient("session-a");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA);
+  await room.onJoin(clientA as never, { launchId: "L1", joinToken: "t0" });
+
+  expect(room.isConfigured).toBe(true);
+
+  // Verify the sim resolves panda stats (lower moveSpeed than baseline).
+  const pandaDef = CHARACTERS.panda;
+  const pandaResolved = resolveCharacter(pandaDef, DEFAULT_CONFIG);
+  // Panda's moveSpeed multiplier is 0.84 — so resolved < DEFAULT_CONFIG.movement.moveSpeed.
+  expect(pandaResolved.stats.moveSpeed).toBeLessThan(
+    DEFAULT_CONFIG.movement.moveSpeed,
+  );
+});
+
+test("configureFromManifest: bot source receives resolved stats for its character", async () => {
+  const { CHARACTERS, resolveCharacter, DEFAULT_CONFIG } = await import(
+    "@bb/sim"
+  );
+  const room = makeRoom();
+  // Slot 2 is a Vipra bot (higher dash distance, lower dash cooldown).
+  const mf: MatchManifest = {
+    launchId: "L1",
+    slots: [
+      { slotId: 0, kind: "human", playerId: "p0", characterId: "sifu" },
+      { slotId: 2, kind: "bot", characterId: "vipra" },
+    ] as MatchManifestSlot[],
+    settings: { mode: "1v1", matchLengthTicks: 5400, arenaId: "flat-dojo" },
+  };
+  claimImpl = async () => ({ ok: true, playerSlotId: 0, manifest: mf });
+
+  const clientA = makeClient("session-a");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA);
+  await room.onJoin(clientA as never, { launchId: "L1", joinToken: "t0" });
+
+  expect(room.isConfigured).toBe(true);
+  // Vipra's resolved dashDistance should be > Sifu's baseline.
+  const vipraResolved = resolveCharacter(CHARACTERS.vipra, DEFAULT_CONFIG);
+  expect(vipraResolved.stats.dashDistance).toBeGreaterThan(
+    DEFAULT_CONFIG.dash.distance,
+  );
+  // Bot source exists for slot 2.
+  expect(room.inputSources.get(2)?.isHuman).toBe(false);
+});
+
+test("RoomReady carries per-slot character ids from the manifest", async () => {
+  const room = makeRoom();
+  const mf: MatchManifest = {
+    launchId: "L1",
+    slots: [
+      { slotId: 0, kind: "human", playerId: "p0", characterId: "panda" },
+      { slotId: 2, kind: "human", playerId: "p2", characterId: "vipra" },
+    ] as MatchManifestSlot[],
+    settings: { mode: "1v1", matchLengthTicks: 5400, arenaId: "flat-dojo" },
+  };
+  claimImpl = async () => ({ ok: true, playerSlotId: 0, manifest: mf });
+
+  const clientA = makeClient("session-a");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA);
+  await room.onJoin(clientA as never, { launchId: "L1", joinToken: "t0" });
+
+  const ready = clientA.messages.find((m) => m.type === "RoomReady");
+  const chars = (ready?.payload as { characters?: unknown[] }).characters;
+  expect(chars).toBeDefined();
+  // characters is indexed by slot; slot 0 = panda, slot 2 = vipra.
+  expect((chars as unknown[])[0]).toBe("panda");
+  expect((chars as unknown[])[2]).toBe("vipra");
 });

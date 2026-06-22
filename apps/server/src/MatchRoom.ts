@@ -10,11 +10,14 @@ import {
 } from "@bb/protocol";
 import {
   type BotWorldView,
+  CHARACTERS,
+  type CharacterDef,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
   FLAT_DOJO,
   type InputFrame,
+  resolveCharacter,
   type SimConfig,
   toAuthoritativeState,
 } from "@bb/sim";
@@ -218,11 +221,18 @@ export class MatchRoom extends Room {
       },
     };
 
+    // Resolve per-slot character defs (indexed by slot) from the frozen manifest.
+    const characters: CharacterDef[] = [];
+    for (const s of manifest.slots) {
+      characters[s.slotId] = CHARACTERS[s.characterId];
+    }
+
     this.sim = createSimulation({
       config: this.simConfig,
       arena: FLAT_DOJO,
       seed: 1234,
       activeSlots: this.activeSlots,
+      characters,
     });
 
     const botSlots = new Set<PlayerSlotId>(
@@ -230,7 +240,8 @@ export class MatchRoom extends Room {
     );
     for (const s of this.activeSlots) {
       if (botSlots.has(s)) {
-        this.sources.set(s, botSource(s, this.simConfig));
+        const rc = resolveCharacter(characters[s]!, this.simConfig);
+        this.sources.set(s, botSource(s, this.simConfig, rc.stats));
       } else {
         const buf = new InputBuffer();
         this.buffers.set(s, buf);
@@ -371,6 +382,17 @@ export class MatchRoom extends Room {
     this.seatAndAnnounce(client, claimedSlot);
   }
 
+  /** Build the per-slot character id array (indexed by PlayerSlotId) from the manifest. */
+  private manifestCharacters(): import("@bb/sim").CharacterId[] {
+    const chars: import("@bb/sim").CharacterId[] = [];
+    if (this.manifest) {
+      for (const s of this.manifest.slots) {
+        chars[s.slotId] = s.characterId;
+      }
+    }
+    return chars;
+  }
+
   /** Seat a client at the given slot and send RoomReady (and full=true to all). */
   private seatAndAnnounce(client: Client, slot: PlayerSlotId): void {
     this.slotOf.set(client.sessionId, slot);
@@ -391,6 +413,7 @@ export class MatchRoom extends Room {
       slot,
       full: false,
       slots: this.activeSlots,
+      characters: this.manifestCharacters(),
     });
 
     if (full) {
@@ -403,6 +426,7 @@ export class MatchRoom extends Room {
             slot: s,
             full: true,
             slots: this.activeSlots,
+            characters: this.manifestCharacters(),
           });
         }
       }
@@ -416,8 +440,13 @@ export class MatchRoom extends Room {
       launchId: "legacy-dev",
       slots: MODE_2V2.map((slotId) =>
         bots.has(slotId)
-          ? { slotId, kind: "bot" as const }
-          : { slotId, kind: "human" as const, playerId: `dev-${slotId}` },
+          ? { slotId, kind: "bot" as const, characterId: "sifu" as const }
+          : {
+              slotId,
+              kind: "human" as const,
+              playerId: `dev-${slotId}`,
+              characterId: "sifu" as const,
+            },
       ),
       settings: {
         mode: "2v2",

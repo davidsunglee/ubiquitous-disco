@@ -2,8 +2,13 @@
 
 // Re-export the canonical slot/team vocabulary from @bb/sim so that
 // server and web can import from either package without a circular dep.
-export type { AckBySlot, PlayerSlotId, TeamId } from "@bb/sim";
-export { TEAM_0_SLOTS, TEAM_1_SLOTS, teamForPlayerSlot } from "@bb/sim";
+export type { AckBySlot, CharacterId, PlayerSlotId, TeamId } from "@bb/sim";
+export {
+  CHARACTERS,
+  TEAM_0_SLOTS,
+  TEAM_1_SLOTS,
+  teamForPlayerSlot,
+} from "@bb/sim";
 
 /** @deprecated Use PlayerSlotId. Retained during the 1v1→2v2 migration. */
 export type Slot = import("@bb/sim").PlayerSlotId;
@@ -20,6 +25,8 @@ export interface RoomReady {
    * from this so it always matches the server.
    */
   slots: import("@bb/sim").PlayerSlotId[];
+  /** Per-slot character id (indexed by PlayerSlotId) so prediction matches the server. */
+  characters: import("@bb/sim").CharacterId[];
 }
 
 export interface RoomErrorMsg {

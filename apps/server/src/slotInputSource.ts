@@ -19,6 +19,7 @@ import {
   EMPTY_INPUT,
   type InputFrame,
   type PlayerSlotId,
+  type ResolvedStats,
   type SimConfig,
   samplePracticeBotInput,
 } from "@bb/sim";
@@ -50,10 +51,14 @@ export function humanSource(buffer: InputBuffer): SlotInputSource {
 export function botSource(
   slotId: PlayerSlotId,
   config: SimConfig,
+  stats: Pick<ResolvedStats, "strikeReach" | "dashDistance"> = {
+    strikeReach: config.strike.reach,
+    dashDistance: config.dash.distance,
+  },
 ): SlotInputSource {
   return {
     take(view: BotWorldView) {
-      const input = samplePracticeBotInput(slotId, view, config);
+      const input = samplePracticeBotInput(slotId, view, config, stats);
       // Bot slots never have real seqs; report seq=0 and lastAckedSeq=0.
       return { input, seq: 0 };
     },

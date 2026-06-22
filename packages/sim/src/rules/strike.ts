@@ -63,11 +63,14 @@ export function stepStrike(
   const ball = world.ballPos();
   const bdx = ball.x - player.x;
   const bdy = ball.y - player.y;
-  if (Math.hypot(bdx, bdy) <= s.reach) {
+  const reach = actor.character.stats.strikeReach;
+  if (Math.hypot(bdx, bdy) <= reach) {
     // Charge fraction in [0, 1] across the configured charge window.
     const span = Math.max(1, s.maxChargeTicks - s.minChargeTicks);
     const t = Math.min(1, Math.max(0, (chargeTicks - s.minChargeTicks) / span));
-    let magnitude = s.minImpulse + (s.maxImpulse - s.minImpulse) * t;
+    const minI = actor.character.stats.strikeMinImpulse;
+    const maxI = actor.character.stats.strikeMaxImpulse;
+    let magnitude = minI + (maxI - minI) * t;
 
     // Direction shaping: horizontal from move intent (fall back to facing), and an
     // always-present upward bias so a neutral Strike pops the ball up.
@@ -115,7 +118,7 @@ export function stepStrike(
     const tp = world.playerPos(t);
     const dx = tp.x - player.x;
     const dy = tp.y - player.y;
-    if (Math.hypot(dx, dy) > s.reach + c.playerHitRadius) continue; // out of reach
+    if (Math.hypot(dx, dy) > reach + c.playerHitRadius) continue; // out of reach
 
     // Knockback away from the striker (fall back to facing direction on exact overlap).
     const len = Math.hypot(dx, dy) || 1;

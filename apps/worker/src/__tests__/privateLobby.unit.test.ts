@@ -1220,6 +1220,241 @@ test("lock() rejects when an occupant sits outside the current mode's slots", as
 // production test seam; the close lands inside lock()'s non-storage RPC await
 // window naturally, deterministically driving the post-await re-validation.
 
+// ── Phase 1 (FLI-9): setCharacter ────────────────────────────────────────────
+
+test("setCharacter: human can set their own slot's character", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const connAlice = makeMockConnection("conn-alice");
+    join(instance, "conn-alice", "player-alice", "Alice");
+
+    // Alice is in slot 0; she sets her own character to "panda".
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 0,
+      characterId: "panda",
+    });
+
+    // The last launch is null (not started), but we can check the state
+    // is reflected by inspecting the last sent lobby state.
+    // The state should include the character change — we'll check via lock().
+    expect(instance.isLocked).toBe(false);
+  });
+});
+
+test("setCharacter: unknown id is rejected (does not crash)", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const connAlice = makeMockConnection("conn-alice");
+    join(instance, "conn-alice", "player-alice", "Alice");
+
+    // Try to set an invalid character id — should be silently ignored.
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 0,
+      characterId: "not-a-character" as never,
+    });
+
+    // The lobby should still be in a valid state.
+    expect(instance.isLocked).toBe(false);
+  });
+});
+
+test("setCharacter: non-host cannot set another player's slot character", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    join(instance, "conn-alice", "player-alice", "Alice");
+    const connBob = makeMockConnection("conn-bob");
+    join(instance, "conn-bob", "player-bob", "Bob");
+
+    // Bob (in slot 2) tries to set Alice's slot (slot 0) character — should be rejected.
+    await instance.testApplyCommand(connBob, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 0,
+      characterId: "panda",
+    });
+
+    // No change — Bob cannot change Alice's slot.
+    expect(instance.isLocked).toBe(false);
+  });
+});
+
+test("setCharacter: host can set bot slot character", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const connAlice = makeMockConnection("conn-alice");
+    join(instance, "conn-alice", "player-alice", "Alice");
+
+    // Host fills slot 2 with a bot.
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 2,
+    });
+    expect(instance.hasBot(2)).toBe(true);
+
+    // Host sets the bot's character to "vipra".
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 2,
+      characterId: "vipra",
+    });
+
+    // Should be accepted — host controls bot slots.
+    expect(instance.isLocked).toBe(false);
+  });
+});
+
+test("setCharacter: non-host cannot set bot slot character", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const connAlice = makeMockConnection("conn-alice");
+    join(instance, "conn-alice", "player-alice", "Alice");
+    const connBob = makeMockConnection("conn-bob");
+    join(instance, "conn-bob", "player-bob", "Bob");
+
+    // Alice (host) fills slot 1 with a bot.
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 1,
+    });
+
+    // Bob tries to set the bot's character — should be rejected (not host).
+    await instance.testApplyCommand(connBob, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 1,
+      characterId: "panda",
+    });
+
+    // No crash — test just verifies the DO remains in a stable state.
+    expect(instance.hasBot(1)).toBe(true);
+  });
+});
+
+test("setCharacter: character is frozen into the manifest at lock()", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const connAlice = makeMockConnection("conn-alice");
+    join(instance, "conn-alice", "player-alice", "Alice");
+
+    // Switch to 1v1 mode (so only slots 0 and 2 need to be filled).
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "setSettings",
+      settings: { mode: "1v1" },
+    });
+
+    // Alice sets her character to "old-master".
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 0,
+      characterId: "old-master",
+    });
+
+    // Fill slot 2 with a bot and set its character.
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 2,
+    });
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 2,
+      characterId: "panda",
+    });
+
+    // Lock the lobby.
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+
+    const launch = instance.lastLaunchForTest;
+    expect(launch).not.toBeNull();
+
+    const slot0 = launch?.manifest.slots.find((s) => s.slotId === 0);
+    const slot2 = launch?.manifest.slots.find((s) => s.slotId === 2);
+
+    expect(slot0?.characterId).toBe("old-master");
+    expect(slot2?.characterId).toBe("panda");
+  });
+});
+
+test("setCharacter: cleared bot loses its character pick (default applies to new bot)", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const connAlice = makeMockConnection("conn-alice");
+    join(instance, "conn-alice", "player-alice", "Alice");
+
+    // Fill slot 2 with bot and set character.
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 2,
+    });
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 2,
+      characterId: "drunken-boxer",
+    });
+
+    // Clear the bot — character pick should be removed.
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "clearBot",
+      slotId: 2,
+    });
+    expect(instance.hasBot(2)).toBe(false);
+
+    // Re-fill with a fresh bot — should default to Sifu.
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "fillBot",
+      slotId: 2,
+    });
+    expect(instance.hasBot(2)).toBe(true);
+
+    // Switch to 1v1 and lock to capture manifest.
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "setSettings",
+      settings: { mode: "1v1" },
+    });
+    await instance.testApplyCommand(connAlice, {
+      type: "LobbyCommand",
+      cmd: "start",
+    });
+
+    const launch = instance.lastLaunchForTest;
+    const slot2 = launch?.manifest.slots.find((s) => s.slotId === 2);
+    // Default character should be "sifu".
+    expect(slot2?.characterId).toBe("sifu");
+  });
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**

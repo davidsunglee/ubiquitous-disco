@@ -13,6 +13,7 @@
  * The bot reads only its own position/state and the ball — no shared mutable state.
  */
 
+import type { ResolvedStats } from "../character";
 import type { SimConfig } from "../config";
 import { EMPTY_INPUT, type InputFrame } from "../input";
 import type { PlayerSlotId } from "../team";
@@ -38,6 +39,10 @@ export function samplePracticeBotInput(
   slotId: PlayerSlotId,
   view: BotWorldView,
   config: SimConfig,
+  stats: Pick<ResolvedStats, "strikeReach" | "dashDistance"> = {
+    strikeReach: config.strike.reach,
+    dashDistance: config.dash.distance,
+  },
 ): InputFrame {
   const team = teamForPlayerSlot(slotId);
 
@@ -89,7 +94,7 @@ export function samplePracticeBotInput(
 
   // Strike when the ball is in reach AND the bot is either facing the target Bell
   // or clearing the ball out of a corner (where moveX already points to open play).
-  const inReach = distBall <= config.strike.reach;
+  const inReach = distBall <= stats.strikeReach;
   const facingTargetBell =
     Math.sign(targetBellX - self.x) ===
     Math.sign(moveX || (team === 0 ? 1 : -1));
@@ -103,7 +108,7 @@ export function samplePracticeBotInput(
   // Only dash when not in reach and the ball is far enough to warrant it.
   const wantDash =
     !inReach &&
-    distBall > config.dash.distance &&
+    distBall > stats.dashDistance &&
     !ballDangerous &&
     tick % 18 === 0 &&
     self.grounded;

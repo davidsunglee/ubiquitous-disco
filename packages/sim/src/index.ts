@@ -11,6 +11,20 @@ export { FLAT_DOJO } from "./arena";
 export type { BotWorldView } from "./bot/practiceBot";
 export { samplePracticeBotInput } from "./bot/practiceBot";
 export type {
+  CharacterDef,
+  CharacterId,
+  CharacterStatDeltas,
+  ResolvedCharacter,
+  ResolvedStats,
+  SpecialDef,
+  SpecialKind,
+} from "./character";
+export {
+  CHARACTERS,
+  DEFAULT_RESOLVED_CHARACTER,
+  resolveCharacter,
+} from "./character";
+export type {
   BallConfig,
   CombatConfig,
   DashConfig,

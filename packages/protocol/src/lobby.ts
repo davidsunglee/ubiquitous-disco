@@ -8,7 +8,7 @@
  * no teamId is stored on each LobbySlot (it is derived at read time).
  */
 
-import type { PlayerSlotId } from "@bb/sim";
+import type { CharacterId, PlayerSlotId } from "@bb/sim";
 
 // ── Profile ───────────────────────────────────────────────────────────────────
 
@@ -26,10 +26,12 @@ export interface HumanOccupant {
   displayName: string;
   /** Whether the player's WebSocket connection is currently live. */
   present: boolean;
+  characterId: CharacterId;
 }
 
 export interface BotOccupant {
   kind: "bot";
+  characterId: CharacterId;
 }
 
 export type SlotOccupant = HumanOccupant | BotOccupant;
@@ -89,6 +91,12 @@ export type LobbyCommand =
     }
   | { type: "LobbyCommand"; cmd: "fillBot"; slotId: PlayerSlotId }
   | { type: "LobbyCommand"; cmd: "clearBot"; slotId: PlayerSlotId }
+  | {
+      type: "LobbyCommand";
+      cmd: "setCharacter";
+      slotId: PlayerSlotId;
+      characterId: CharacterId;
+    }
   | {
       type: "LobbyCommand";
       cmd: "setSettings";
@@ -153,6 +161,7 @@ export interface MatchManifestSlot {
   kind: "human" | "bot";
   /** Present for human slots — the lobby playerId that owns this slot. */
   playerId?: string;
+  characterId: CharacterId;
 }
 
 /**

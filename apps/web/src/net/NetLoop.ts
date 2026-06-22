@@ -32,6 +32,8 @@ import type {
   WorldSnapshot,
 } from "@bb/protocol";
 import {
+  CHARACTERS,
+  type CharacterDef,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
@@ -120,6 +122,7 @@ export class NetLoop {
     activeSlots: PlayerSlotId[],
     cb: NetLoopCallbacks,
     transport: SimulatedTransport | null = null,
+    characterIds?: import("@bb/sim").CharacterId[],
   ) {
     this.net = net;
     this.slot = slot;
@@ -127,11 +130,21 @@ export class NetLoop {
     this.cb = cb;
     this.transport = transport;
 
+    // Build the per-slot CharacterDef array from the characterIds passed in RoomReady.
+    const characters: CharacterDef[] = [];
+    if (characterIds) {
+      for (let i = 0; i < characterIds.length; i++) {
+        const id = characterIds[i];
+        if (id) characters[i] = CHARACTERS[id] ?? CHARACTERS.sifu;
+      }
+    }
+
     this.sim = createSimulation({
       config: DEFAULT_CONFIG,
       arena: FLAT_DOJO,
       seed: 1234,
       activeSlots,
+      characters: characterIds ? characters : undefined,
     });
 
     // Build one interpolation buffer per remote slot.

@@ -29,6 +29,7 @@ test("RoomReady round-trips (slot 0, not full, 1v1 template)", () => {
     slot: 0,
     full: false,
     slots: [0, 2],
+    characters: ["sifu", "sifu"],
   };
   expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
 });
@@ -39,6 +40,7 @@ test("RoomReady round-trips (slot 2, full, 1v1 template)", () => {
     slot: 2,
     full: true,
     slots: [0, 2],
+    characters: ["vipra", "panda"],
   };
   expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
 });
@@ -49,8 +51,21 @@ test("RoomReady round-trips (slot 1, full, 2v2 template)", () => {
     slot: 1,
     full: true,
     slots: [0, 1, 2, 3],
+    characters: ["sifu", "monkey-king", "old-master", "drunken-boxer"],
   };
   expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
+});
+
+test("RoomReady preserves per-slot characterIds after round-trip", () => {
+  const m: RoomReady = {
+    type: "RoomReady",
+    slot: 0,
+    full: true,
+    slots: [0, 2],
+    characters: ["panda", "vipra"],
+  };
+  const decoded = deserializeRoomReady(serializeRoomReady(m));
+  expect(decoded.characters).toEqual(["panda", "vipra"]);
 });
 
 // ── PlayerInput ───────────────────────────────────────────────────────────────

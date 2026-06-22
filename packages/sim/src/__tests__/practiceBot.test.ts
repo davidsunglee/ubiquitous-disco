@@ -213,3 +213,74 @@ test("bot output always returns a complete InputFrame (no missing fields)", () =
     expect(frame).toHaveProperty(key);
   }
 });
+
+// ── Phase 1 (FLI-9): per-actor resolved stats ─────────────────────────────────
+
+test("bot uses passed stats.strikeReach — high-reach character strikes from farther than Sifu", () => {
+  // Default Sifu reach = 2; Old Master reach multiplier 1.2 → resolved reach = 2.4.
+  const highReachStats = { strikeReach: 2.4, dashDistance: 3 };
+  const sifuStats = { strikeReach: 2, dashDistance: 3 };
+
+  // Ball at distance 2.2 from bot — in reach for Old Master, out for Sifu.
+  const view: BotWorldView = {
+    tick: 5,
+    self: { x: 0, y: 1, facing: 1, grounded: true },
+    ball: { x: 2.2, y: 1, vx: 0, vy: 0 }, // distance = 2.2
+  };
+
+  const highReachFrame = samplePracticeBotInput(
+    0,
+    view,
+    DEFAULT_CONFIG,
+    highReachStats,
+  );
+  const sifuFrame = samplePracticeBotInput(0, view, DEFAULT_CONFIG, sifuStats);
+
+  // Old Master (high reach) should want to strike; Sifu should not.
+  expect(highReachFrame.strikeHeld).toBe(true);
+  expect(sifuFrame.strikeHeld).toBe(false);
+});
+
+test("bot uses passed stats.dashDistance — low-dash character dashes at shorter distance", () => {
+  // Panda's dashDistance multiplier is 0.85 → resolved dash distance = 2.55.
+  const lowDashStats = { strikeReach: 2, dashDistance: 2.55 };
+  const sifuStats = { strikeReach: 2, dashDistance: 3 };
+
+  // Ball at distance 2.8: beyond Panda's dash distance (2.55) but within Sifu's (3).
+  // Not a strike (out of reach). Not Sifu's dash threshold either (> 3 needed).
+  // Ball at distance 2.0: within both dash distances — both won't dash.
+  // So test with distance 2.7 (< sifu dash 3, > panda dash 2.55, not in reach).
+  const view: BotWorldView = {
+    tick: 18, // tick % 18 === 0 so dash condition fires
+    self: { x: 0, y: 1, facing: 1, grounded: true },
+    ball: { x: 2.7, y: 1, vx: 0, vy: 0 }, // distance = 2.7
+  };
+
+  const lowDashFrame = samplePracticeBotInput(
+    0,
+    view,
+    DEFAULT_CONFIG,
+    lowDashStats,
+  );
+  const sifuFrame = samplePracticeBotInput(0, view, DEFAULT_CONFIG, sifuStats);
+
+  // Sifu: distance 2.7 < dash.distance 3 → won't dash (wantDash = false).
+  // Panda: distance 2.7 > panda dash 2.55 → will dash.
+  expect(lowDashFrame.dashPressed).toBe(true);
+  expect(sifuFrame.dashPressed).toBe(false);
+});
+
+test("bot defaults to config stats when no stats arg given (backward compat)", () => {
+  const view: BotWorldView = {
+    tick: 5,
+    self: { x: -0.5, y: 1, facing: 1, grounded: true },
+    ball: { x: 1, y: 1, vx: 0, vy: 0 }, // within strike reach (reach=2)
+  };
+  // Without stats arg — should behave same as with DEFAULT_CONFIG stats.
+  const frameDefault = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  const frameExplicit = samplePracticeBotInput(0, view, DEFAULT_CONFIG, {
+    strikeReach: DEFAULT_CONFIG.strike.reach,
+    dashDistance: DEFAULT_CONFIG.dash.distance,
+  });
+  expect(frameDefault).toEqual(frameExplicit);
+});

@@ -2,6 +2,11 @@
 // takeSnapshot() (the KinematicCharacterController and these flags live JS-side),
 // so it must be serialized and folded into the composite hashState().
 
+import {
+  DEFAULT_RESOLVED_CHARACTER,
+  type ResolvedCharacter,
+} from "./character";
+
 export interface Actor {
   // Authoritative velocity in world units / second (X right, Y up).
   vx: number;
@@ -29,9 +34,14 @@ export interface Actor {
   // hit so a normal exchange reliably stacks to the Knockdown threshold; once it
   // expires (no contact), stagger bleeds off again (anti-chip).
   staggerDecayDelay: number;
+  /** Resolved per-actor character (stats/special/airJumps). Static config — NOT hashed. */
+  character: ResolvedCharacter;
 }
 
-export function createActor(facing: 1 | -1 = 1): Actor {
+export function createActor(
+  facing: 1 | -1 = 1,
+  character: ResolvedCharacter = DEFAULT_RESOLVED_CHARACTER,
+): Actor {
   return {
     vx: 0,
     vy: 0,
@@ -46,6 +56,7 @@ export function createActor(facing: 1 | -1 = 1): Actor {
     invulnTicks: 0,
     controlLock: false,
     staggerDecayDelay: 0,
+    character,
   };
 }
 

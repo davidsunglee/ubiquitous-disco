@@ -482,12 +482,14 @@ export class GameScene extends Phaser.Scene {
             slot: number;
             full: boolean;
             slots?: PlayerSlotId[];
+            characters?: import("@bb/sim").CharacterId[];
           };
           net.slot = m.slot as PlayerSlotId;
           if (m.full) {
             this.startNetLoop(
               m.slot as PlayerSlotId,
               (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
+              m.characters,
             );
           }
         });
@@ -532,6 +534,7 @@ export class GameScene extends Phaser.Scene {
           slot: number;
           full: boolean;
           slots?: PlayerSlotId[];
+          characters?: import("@bb/sim").CharacterId[];
         };
         net.slot = m.slot as PlayerSlotId;
         this.reconnecting = false;
@@ -543,6 +546,7 @@ export class GameScene extends Phaser.Scene {
           this.startNetLoop(
             m.slot as PlayerSlotId,
             (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
+            m.characters,
           );
         }
       });
@@ -606,6 +610,7 @@ export class GameScene extends Phaser.Scene {
   private startNetLoop(
     slot: PlayerSlotId,
     activeSlots: PlayerSlotId[] = [0, 2],
+    characterIds?: import("@bb/sim").CharacterId[],
   ): void {
     // Idempotency guard (FLI-8 BUG #2): the server re-broadcasts
     // RoomReady{full:true} to ALL present clients whenever any peer reconnects,
@@ -651,6 +656,7 @@ export class GameScene extends Phaser.Scene {
         },
       },
       this.simTransport,
+      characterIds,
     );
     this.netLoop.start();
     console.info(`[net] NetLoop started (slot ${slot})`);

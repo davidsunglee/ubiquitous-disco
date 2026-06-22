@@ -1,5 +1,6 @@
 import { type Actor, controllable, createActor, serializeActor } from "./actor";
 import type { ArenaDef } from "./arena";
+import { CHARACTERS, type CharacterDef, resolveCharacter } from "./character";
 import type { SimConfig } from "./config";
 import { hashBytes } from "./hash";
 import type { InputFrame } from "./input";
@@ -285,6 +286,8 @@ export function createSimulation(opts: {
   seed: number;
   /** Active Player Slots (mode template). Default 1v1 = [0, 2]. */
   activeSlots?: number[];
+  /** Per-slot character defs (indexed by slot). Default = Sifu for every active slot. */
+  characters?: CharacterDef[];
 }): Simulation {
   // Work on a mutable copy so updateConfig() can mutate freely without
   // touching the caller's original DEFAULT_CONFIG object.
@@ -293,6 +296,19 @@ export function createSimulation(opts: {
   const activeSlots = (opts.activeSlots ?? [0, 2])
     .slice()
     .sort((a, b) => a - b);
+  // Per-slot character DEFS retained so updateConfig() can re-resolve multipliers.
+  const characterDefs: CharacterDef[] = [];
+  for (const s of activeSlots) {
+    characterDefs[s] = opts.characters?.[s] ?? CHARACTERS.sifu;
+  }
+  let resolved: import("./character").ResolvedCharacter[] = [];
+  const resolveAll = () => {
+    resolved = [];
+    for (const s of activeSlots) {
+      resolved[s] = resolveCharacter(characterDefs[s]!, config);
+    }
+  };
+  resolveAll();
   const rw = new RapierWorld(config, arena, activeSlots);
   // Sparse actors keyed by slot id. Team 0 (slots 0/1) faces right (+1);
   // Team 1 (slots 2/3) faces left (-1) toward the centre.
@@ -300,6 +316,7 @@ export function createSimulation(opts: {
   for (const s of activeSlots) {
     actors[s] = createActor(
       teamForPlayerSlot(s as 0 | 1 | 2 | 3) === 0 ? 1 : -1,
+      resolved[s],
     );
   }
   // seed reserved for Phase 3+ seeded RNG; deterministic w/o RNG this phase.
@@ -462,6 +479,7 @@ export function createSimulation(opts: {
           // Re-create the actor to clear all velocity/charge state on respawn.
           actors[s] = createActor(
             teamForPlayerSlot(s as 0 | 1 | 2 | 3) === 0 ? 1 : -1,
+            resolved[s],
           );
         }
         // Re-arm bells after respawn so the next contact can ring.
@@ -677,6 +695,13 @@ export function createSimulation(opts: {
       // Physics-construction fields (gravity, tickHz, body sizes) are silently
       // ignored because they would require re-building the Rapier world.
       config = { ...config, ...patch };
+      // Re-resolve per-actor stats so HUD sliders still scale the baseline
+      // (multipliers stay constant). Reassign the live actors' character references.
+      resolveAll();
+      for (const s of activeSlots) {
+        const a = actors[s];
+        if (a) a.character = resolved[s]!;
+      }
     },
   };
 }
