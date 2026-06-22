@@ -21,11 +21,11 @@ test("local 1v1 shows match UI and start prompt clears", async ({ page }) => {
   await expect(page.getByTestId("timer")).toBeAttached();
   // Start prompt is visible before any input.
   await expect(page.getByTestId("start-prompt")).toBeVisible();
-  // Press P1 jump (C) to start the match. Hold it briefly so the 30Hz sim
+  // Press P1 jump (X) to start the match. Hold it briefly so the 30Hz sim
   // accumulator has at least one tick to process the key press.
-  await page.keyboard.down("c");
+  await page.keyboard.down("x");
   await page.waitForTimeout(100); // ~3 sim ticks at 30Hz
-  await page.keyboard.up("c");
+  await page.keyboard.up("x");
   // After starting, the prompt should disappear.
   await expect(page.getByTestId("start-prompt")).toBeHidden();
 });

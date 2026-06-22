@@ -17,22 +17,25 @@ export interface KeyMap {
   jump: number;
   dash: number;
   strike: number;
+  /** Phase 2 (FLI-9): Special action key. */
+  special: number;
 }
 
 const K = Phaser.Input.Keyboard.KeyCodes;
 
-/** P1 keyboard mapping: WASD movement, C=jump, V=dash, B=strike. */
+/** P1 keyboard mapping: WASD movement, Z=strike, X=jump, C=dash, V=special. */
 export const P1_KEYMAP: KeyMap = {
   left: K.A,
   right: K.D,
   up: K.W,
   down: K.S,
-  jump: K.C,
-  dash: K.V,
-  strike: K.B,
+  jump: K.X,
+  dash: K.C,
+  strike: K.Z,
+  special: K.V,
 };
 
-/** P2 keyboard mapping: Arrow keys movement, J=jump, K=dash, L=strike. */
+/** P2 keyboard mapping: Arrow keys movement, H=strike, J=jump, K=dash, L=special. */
 export const P2_KEYMAP: KeyMap = {
   left: K.LEFT,
   right: K.RIGHT,
@@ -40,14 +43,15 @@ export const P2_KEYMAP: KeyMap = {
   down: K.DOWN,
   jump: K.J,
   dash: K.K,
-  strike: K.L,
+  strike: K.H,
+  special: K.L,
 };
 
 /**
  * Networked play: each client controls only its own player on its own machine,
  * so both slots use the same scheme — Arrow keys to move, Z=strike, X=jump,
- * C=dash. The Z/X/C order mirrors the touch action buttons' left→right layout
- * (Strike, Jump, Dash) so keyboard and on-screen controls agree.
+ * C=dash, V=special. The Z/X/C order mirrors the touch action buttons'
+ * left→right layout (Strike, Jump, Dash) so keyboard and on-screen controls agree.
  */
 export const NET_KEYMAP: KeyMap = {
   left: K.LEFT,
@@ -57,6 +61,7 @@ export const NET_KEYMAP: KeyMap = {
   jump: K.X,
   dash: K.C,
   strike: K.Z,
+  special: K.V,
 };
 
 /**
@@ -66,7 +71,12 @@ export const NET_KEYMAP: KeyMap = {
  */
 export class KeyboardAdapter {
   private readonly keys: Record<keyof KeyMap, Phaser.Input.Keyboard.Key>;
-  private prevHeld: HeldState = { jump: false, dash: false, strike: false };
+  private prevHeld: HeldState = {
+    jump: false,
+    dash: false,
+    strike: false,
+    special: false,
+  };
 
   constructor(keyboard: Phaser.Input.Keyboard.KeyboardPlugin, keymap: KeyMap) {
     this.keys = {
@@ -77,6 +87,7 @@ export class KeyboardAdapter {
       jump: keyboard.addKey(keymap.jump),
       dash: keyboard.addKey(keymap.dash),
       strike: keyboard.addKey(keymap.strike),
+      special: keyboard.addKey(keymap.special),
     };
   }
 
@@ -92,6 +103,7 @@ export class KeyboardAdapter {
       jump: k.jump.isDown,
       dash: k.dash.isDown,
       strike: k.strike.isDown,
+      special: k.special.isDown,
     };
 
     const frame = buildInputFrame(move, held, this.prevHeld);

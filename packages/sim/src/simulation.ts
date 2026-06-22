@@ -22,6 +22,7 @@ import {
   stepMatch,
 } from "./rules/match";
 import { stepMovement } from "./rules/movement";
+import { stepSpecial } from "./rules/special";
 import { stepStrike } from "./rules/strike";
 import { teamForPlayerSlot } from "./team";
 
@@ -360,9 +361,10 @@ export function createSimulation(opts: {
           const input = inputs[s];
           if (!actor || !input) continue;
           blinks[s] = stepDash(actor, input, config);
-          // Only initiate a strike if the actor was controllable at tick START.
+          // Only initiate a strike/special if the actor was controllable at tick START.
           if (wasControllable[s]) {
             stepStrike(actor, input, config, rw, s, actors);
+            stepSpecial(actor, input, config, rw, s, actors);
           } else {
             // Clear charge so it doesn't linger while knocked down.
             actor.charge = 0;

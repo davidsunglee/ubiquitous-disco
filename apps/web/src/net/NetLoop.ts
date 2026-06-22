@@ -74,6 +74,14 @@ export interface NetLoopCallbacks {
   onMatchState(m: MatchState): void;
   /** Called when the connection drops or the server closes the match. */
   onDisconnect(): void;
+  /**
+   * Phase 2 (FLI-9): per-tick local cosmetic feedback hook. Fired once per
+   * predicted tick BEFORE the prediction step, with the local slot's input and
+   * the pre-step render state — so detection reads the same still-high charge on
+   * the release tick that the hotseat detect-before-step path does. Cosmetic
+   * only; never affects prediction or the sim.
+   */
+  onLocalTick?(localInput: InputFrame, preStepRender: RenderState): void;
 }
 
 export class NetLoop {
@@ -277,6 +285,13 @@ export class NetLoop {
         );
       }
     }
+
+    // Phase 2 (FLI-9): local cosmetic feedback BEFORE the step, so the release
+    // tick still sees the accumulated charge (mirrors hotseat ordering).
+    this.cb.onLocalTick?.(
+      localInput,
+      this.curRender ?? this.sim.getRenderState(),
+    );
 
     // Step the prediction sim: local slot gets local input, remotes get EMPTY.
     const frames: InputFrame[] = [];

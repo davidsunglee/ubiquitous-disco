@@ -41,7 +41,7 @@ const JOYSTICK_ZONE_X_FRAC = 0.5;
  * single source of truth for both the drawn circle and the tap hit-test, so
  * the tappable area always exactly matches the button you see.
  */
-const BTN_RADIUS = 46;
+const BTN_RADIUS = 40;
 /** Arc pivot (the thumb's pivot point) = bottom-right corner. */
 const BTN_ARC_PIVOT_X_FRAC = 1.0;
 const BTN_ARC_PIVOT_Y_FRAC = 1.0;
@@ -50,10 +50,16 @@ const BTN_ARC_RADIUS_FRAC = 0.42;
 /**
  * Angle (degrees) of each button along the arc, measured from the +X axis going
  * counter-clockwise up from the bottom-right corner (90°=straight up the right
- * edge, 180°=straight left along the bottom edge). Even 30° spacing → even gaps.
- * Strike sits lowest (nearest the thumb's rest); Dash highest.
+ * edge, 180°=straight left along the bottom edge). Even 22.5° spacing → 4 buttons.
+ * Strike sits lowest (nearest the thumb's rest); Special highest.
+ * Phase 2 (FLI-9): added Special as the 4th button.
  */
-const BTN_ARC_ANGLE_DEG = { strike: 165, jump: 135, dash: 105 };
+const BTN_ARC_ANGLE_DEG = {
+  strike: 157.5,
+  jump: 135,
+  dash: 112.5,
+  special: 90,
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -84,17 +90,26 @@ export class TouchAdapter {
   private jumpPointers = new Set<number>();
   private dashPointers = new Set<number>();
   private strikePointers = new Set<number>();
+  /** Phase 2 (FLI-9): Special action button pointers. */
+  private specialPointers = new Set<number>();
 
-  private prevHeld: HeldState = { jump: false, dash: false, strike: false };
+  private prevHeld: HeldState = {
+    jump: false,
+    dash: false,
+    strike: false,
+    special: false,
+  };
 
   /** Graphics object for drawing the touch UI. */
   private gfx!: Phaser.GameObjects.Graphics;
 
-  /** Button label text objects (J / D / S), drawn above the graphics layer. */
+  /** Button label text objects (J / D / S / Q), drawn above the graphics layer. */
   private labels!: {
     jump: Phaser.GameObjects.Text;
     dash: Phaser.GameObjects.Text;
     strike: Phaser.GameObjects.Text;
+    /** Phase 2 (FLI-9): Special button label. */
+    special: Phaser.GameObjects.Text;
   };
 
   /** Whether any touch has been detected (used to show/hide the UI). */
@@ -114,6 +129,7 @@ export class TouchAdapter {
     jump: { x: number; y: number };
     dash: { x: number; y: number };
     strike: { x: number; y: number };
+    special: { x: number; y: number };
   } {
     const pivotX = cw * BTN_ARC_PIVOT_X_FRAC;
     const pivotY = ch * BTN_ARC_PIVOT_Y_FRAC;
@@ -127,6 +143,7 @@ export class TouchAdapter {
       strike: at(BTN_ARC_ANGLE_DEG.strike),
       jump: at(BTN_ARC_ANGLE_DEG.jump),
       dash: at(BTN_ARC_ANGLE_DEG.dash),
+      special: at(BTN_ARC_ANGLE_DEG.special),
     };
   }
 
@@ -135,8 +152,8 @@ export class TouchAdapter {
    * the touch UI graphics.
    */
   create(): void {
-    // Allow up to 4 simultaneous touch points.
-    this.scene.input.addPointer(3);
+    // Allow up to 5 simultaneous touch points (4 action buttons + joystick).
+    this.scene.input.addPointer(4);
 
     const cam = this.scene.cameras.main;
     const cw = cam.width;
@@ -155,12 +172,12 @@ export class TouchAdapter {
       .setDepth(500)
       .setAlpha(0); // hidden until first touch
 
-    // Button labels (J / D / S), pinned just above the graphics layer.
+    // Button labels (J / D / S / Q), pinned just above the graphics layer.
     const makeLabel = (text: string) =>
       this.scene.add
         .text(0, 0, text, {
           fontFamily: "monospace",
-          fontSize: "20px",
+          fontSize: "18px",
           color: "#ffffff",
           fontStyle: "bold",
         })
@@ -172,6 +189,8 @@ export class TouchAdapter {
       jump: makeLabel("J"),
       dash: makeLabel("D"),
       strike: makeLabel("S"),
+      // Phase 2 (FLI-9): Special button — "Q" for "Special".
+      special: makeLabel("Q"),
     };
 
     // Pointer down — determine which element was hit.
@@ -219,6 +238,7 @@ export class TouchAdapter {
       jump: this.jumpPointers.size > 0,
       dash: this.dashPointers.size > 0,
       strike: this.strikePointers.size > 0,
+      special: this.specialPointers.size > 0,
     };
 
     const frame = buildInputFrame(move, held, this.prevHeld);
@@ -257,11 +277,20 @@ export class TouchAdapter {
     this.drawButton(gfx, c.jump.x, c.jump.y, this.jumpPointers.size > 0);
     this.drawButton(gfx, c.dash.x, c.dash.y, this.dashPointers.size > 0);
     this.drawButton(gfx, c.strike.x, c.strike.y, this.strikePointers.size > 0);
+    // Phase 2 (FLI-9): Special button — gold tint to distinguish it.
+    this.drawButton(
+      gfx,
+      c.special.x,
+      c.special.y,
+      this.specialPointers.size > 0,
+      0xffdd44,
+    );
 
     // Position + reveal the labels (centred on each button).
     this.labels.jump.setPosition(c.jump.x, c.jump.y).setAlpha(1);
     this.labels.dash.setPosition(c.dash.x, c.dash.y).setAlpha(1);
     this.labels.strike.setPosition(c.strike.x, c.strike.y).setAlpha(1);
+    this.labels.special.setPosition(c.special.x, c.special.y).setAlpha(1);
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
@@ -290,6 +319,11 @@ export class TouchAdapter {
       this.strikePointers.add(ptr.id);
       return;
     }
+    // Phase 2 (FLI-9): Special button check.
+    if (this.hitButton(px, py, c.special.x, c.special.y)) {
+      this.specialPointers.add(ptr.id);
+      return;
+    }
 
     // A press in the left zone spawns/drives the floating joystick.
     if (px < cw * JOYSTICK_ZONE_X_FRAC && this.joystickPointerId === null) {
@@ -307,6 +341,7 @@ export class TouchAdapter {
     this.jumpPointers.delete(ptr.id);
     this.dashPointers.delete(ptr.id);
     this.strikePointers.delete(ptr.id);
+    this.specialPointers.delete(ptr.id); // Phase 2 (FLI-9)
 
     if (ptr.id === this.joystickPointerId) {
       this.joystickPointerId = null;
@@ -341,9 +376,11 @@ export class TouchAdapter {
     bx: number,
     by: number,
     active: boolean,
+    /** Optional base color (default white); active state brightens it. */
+    baseColor = 0x888888,
   ): void {
     const alpha = active ? 0.7 : 0.3;
-    const fill = active ? 0xffffff : 0x888888;
+    const fill = active ? 0xffffff : baseColor;
     gfx.fillStyle(fill, alpha).fillCircle(bx, by, BTN_RADIUS);
     gfx.lineStyle(2, 0xffffff, 0.5).strokeCircle(bx, by, BTN_RADIUS);
   }
@@ -367,9 +404,11 @@ export function mergeInputFrames(
     jumpHeld: kb.jumpHeld || touch.jumpHeld,
     dashHeld: kb.dashHeld || touch.dashHeld,
     strikeHeld: kb.strikeHeld || touch.strikeHeld,
+    specialHeld: kb.specialHeld || touch.specialHeld,
     jumpPressed: kb.jumpPressed || touch.jumpPressed,
     dashPressed: kb.dashPressed || touch.dashPressed,
     strikePressed: kb.strikePressed || touch.strikePressed,
     strikeReleased: kb.strikeReleased || touch.strikeReleased,
+    specialPressed: kb.specialPressed || touch.specialPressed,
   };
 }

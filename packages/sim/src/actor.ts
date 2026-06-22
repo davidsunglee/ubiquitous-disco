@@ -34,6 +34,8 @@ export interface Actor {
   // hit so a normal exchange reliably stacks to the Knockdown threshold; once it
   // expires (no contact), stagger bleeds off again (anti-chip).
   staggerDecayDelay: number;
+  /** Phase 2 (FLI-9): ticks remaining before another Special is allowed (0 = ready). */
+  specialCooldown: number;
   /** Resolved per-actor character (stats/special/airJumps). Static config — NOT hashed. */
   character: ResolvedCharacter;
 }
@@ -56,6 +58,7 @@ export function createActor(
     invulnTicks: 0,
     controlLock: false,
     staggerDecayDelay: 0,
+    specialCooldown: 0,
     character,
   };
 }
@@ -83,9 +86,11 @@ export function serializeActor(actor: Actor): Uint8Array {
   // Phase 3 appends 21 bytes:
   //   stagger f64 (8) + knockdownTicks i32 (4) + invulnTicks i32 (4) +
   //   controlLock u8 (1) + staggerDecayDelay i32 (4) = 21
-  // Total: 56 bytes.
+  // Phase 2 (FLI-9) appends 4 bytes:
+  //   specialCooldown i32 (4) = 4
+  // Total: 60 bytes.
   const buf = new ArrayBuffer(
-    8 + 8 + 1 + 1 + 4 + 8 + 4 + 1 + 8 + 4 + 4 + 1 + 4,
+    8 + 8 + 1 + 1 + 4 + 8 + 4 + 1 + 8 + 4 + 4 + 1 + 4 + 4,
   );
   const view = new DataView(buf);
   let o = 0;
@@ -116,5 +121,8 @@ export function serializeActor(actor: Actor): Uint8Array {
   view.setUint8(o, actor.controlLock ? 1 : 0);
   o += 1;
   view.setInt32(o, actor.staggerDecayDelay);
+  o += 4;
+  // ── Phase 2 (FLI-9) appended field ──
+  view.setInt32(o, actor.specialCooldown);
   return new Uint8Array(buf);
 }

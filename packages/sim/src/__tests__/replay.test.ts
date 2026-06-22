@@ -17,6 +17,7 @@
 import { beforeAll, expect, test } from "vitest";
 import {
   type BotWorldView,
+  CHARACTERS,
   createReplay,
   createSimulation,
   DEFAULT_CONFIG,
@@ -376,6 +377,88 @@ test("replay with Practice Bot slot: recorded frames replay to the same hash as 
     arena: FLAT_DOJO,
     seed,
     activeSlots: [0, 1, 2, 3],
+  });
+  for (const row of replay.inputFrames) replaySim.step(row);
+  expect(replaySim.hashState()).toBe(liveHash);
+});
+
+// ── Phase 2 (FLI-9): Panda-Special replay determinism ───────────────────────
+
+/**
+ * Build a frame list where slot 0 (Panda) fires its Ground Pound Special once,
+ * then both players idle. This exercises the specialCooldown in the hash path.
+ */
+function buildPandaSpecialFrames(): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start the match.
+  frames.push(
+    row(
+      frame({ jumpPressed: true, jumpHeld: true }),
+      frame({ jumpPressed: true, jumpHeld: true }),
+    ),
+  );
+  // Settle for 20 ticks.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk toward the ball.
+  for (let i = 0; i < 10; i++) frames.push(row(frame({ moveX: 1 })));
+  // Fire Special.
+  frames.push(row(frame({ specialPressed: true, specialHeld: true })));
+  // Idle for 40 ticks.
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
+  return frames;
+}
+
+test("Panda-Special match: two sims with the same characters + frames produce the same hash", () => {
+  const pandaDef = CHARACTERS.panda;
+  const frames = buildPandaSpecialFrames();
+
+  const run = () => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 6161,
+      characters: [pandaDef],
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Panda-Special match: recorded replay plays back to the same hash as the live session", () => {
+  const pandaDef = CHARACTERS.panda;
+  const frames = buildPandaSpecialFrames();
+
+  const replay = createReplay(6161);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 6161,
+    characters: [pandaDef],
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+
+  const liveHash = liveSim.hashState();
+
+  // Replay using a fresh sim with the same character roster.
+  const replaySim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 6161,
+    characters: [pandaDef],
   });
   for (const row of replay.inputFrames) replaySim.step(row);
   expect(replaySim.hashState()).toBe(liveHash);

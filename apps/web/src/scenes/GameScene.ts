@@ -1,5 +1,7 @@
 import type { MatchLaunch } from "@bb/protocol";
 import {
+  CHARACTERS,
+  type CharacterDef,
   createReplay,
   createSimulation,
   DEFAULT_CONFIG,
@@ -93,6 +95,31 @@ export class GameScene extends Phaser.Scene {
    * driven from authoritative score increments instead (see updateMatchHud).
    */
   private prevScores: number[] = [];
+
+  // ── Phase 2 (FLI-9): Special feedback ──────────────────────────────────────
+  /** Per-slot Special press-flash intensity (1 → 0). Cosmetic only. */
+  private specialFlash: number[] = [];
+  /**
+   * Per-slot Special cooldown approximation for the cooldown ring.
+   * Driven by local input presses + elapsed ticks; cosmetic only (no sim coupling).
+   */
+  private localSpecialCooldown: number[] = [];
+  /** Per-slot cooldown total ticks (from last known special activation). */
+  private localSpecialCooldownTotal: number[] = [];
+
+  // ── Phase 2 (FLI-9): Strike-variant text feedback ───────────────────────────
+  /** Strike-variant text pop object (shared; shows SPIKE! / HEADER! / CHARGED!). */
+  private strikeVariantText!: Phaser.GameObjects.Text;
+  /** Alpha fade timer for the strike-variant text pop. */
+  private strikeVariantAlpha = 0;
+  /**
+   * Per-slot strike-variant arc flash: {kind, intensity}.
+   * Cosmetic only — detected from the local InputFrame at strike release.
+   */
+  private strikeArcFlash: Array<{
+    kind: "spike" | "header" | "charged" | null;
+    intensity: number;
+  }> = [];
 
   // ── Phase 5: pause/step/replay state ────────────────────────────────────────
   private paused = false;
@@ -230,6 +257,18 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setAlpha(0)
       // Pin the banner to the viewport so zoom/scroll don't affect it.
+      .setScrollFactor(0);
+
+    // Phase 2 (FLI-9): strike-variant text pop (SPIKE! / HEADER! / CHARGED!).
+    this.strikeVariantText = this.add
+      .text(480, 120, "", {
+        fontFamily: "monospace",
+        fontSize: "28px",
+        color: "#ff8844",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
       .setScrollFactor(0);
 
     // Wire up the HUD bridge so HudScene can control us.
@@ -654,6 +693,14 @@ export class GameScene extends Phaser.Scene {
         onDisconnect: () => {
           console.info("[net] disconnected");
         },
+        // Phase 2 (FLI-9): local strike-variant + special feedback, driven off
+        // the predicted local input before each prediction step (matching the
+        // hotseat detect-before-step timing). Only the local slot gets feedback.
+        onLocalTick: (localInput, preStepRender) => {
+          const localSlot = this.netClient.slot;
+          this.detectStrikeVariantForSlot(localInput, localSlot, preStepRender);
+          this.detectSpecialForSlot(localInput, localSlot);
+        },
       },
       this.simTransport,
       characterIds,
@@ -707,7 +754,20 @@ export class GameScene extends Phaser.Scene {
   // ── Sim lifecycle ────────────────────────────────────────────────────────────
 
   private buildSim(config: SimConfig): Simulation {
-    return createSimulation({ config, arena: FLAT_DOJO, seed: 1234 });
+    // Phase 2 (FLI-9) dev default: hotseat has no character picker yet, so spawn
+    // Panda for both active slots — Panda's Ground Pound is the only Special
+    // implemented this phase, making it the only one observable in hotseat. The
+    // remaining characters' Specials land in Phase 4. Characters are not hashed,
+    // so this does not affect the cross-engine determinism contract.
+    const characters: CharacterDef[] = [];
+    characters[0] = CHARACTERS.panda;
+    characters[2] = CHARACTERS.panda;
+    return createSimulation({
+      config,
+      arena: FLAT_DOJO,
+      seed: 1234,
+      characters,
+    });
   }
 
   private resetSim(): void {
@@ -903,6 +963,10 @@ export class GameScene extends Phaser.Scene {
         recordFrame(this.captureData, inputFrames);
       }
 
+      // Phase 2 (FLI-9): detect strike-variant + special presses before stepping.
+      this.detectStrikeVariantFeedback(inputFrames);
+      this.detectSpecialFeedback(inputFrames);
+
       this.sim.step(inputFrames);
       this.simTick += 1;
       // getRenderState() already returns a fresh object — no clone needed.
@@ -1015,6 +1079,35 @@ export class GameScene extends Phaser.Scene {
     if (this.bellText.alpha > 0) {
       this.bellText.setAlpha(Math.max(0, this.bellText.alpha - decay * 0.8));
     }
+
+    // Phase 2 (FLI-9): decay special flash + strike arc flash + variant text.
+    for (let s = 0; s < this.specialFlash.length; s++) {
+      this.specialFlash[s] = Math.max(
+        0,
+        (this.specialFlash[s] ?? 0) - decay * 3,
+      );
+    }
+    for (let s = 0; s < this.strikeArcFlash.length; s++) {
+      const e = this.strikeArcFlash[s];
+      if (e) e.intensity = Math.max(0, e.intensity - decay * 3);
+    }
+    // Tick down the local special cooldown approximation.
+    const ticksPerSec = DEFAULT_CONFIG.tickHz;
+    const ticksElapsed = (delta / 1000) * ticksPerSec;
+    for (let s = 0; s < this.localSpecialCooldown.length; s++) {
+      this.localSpecialCooldown[s] = Math.max(
+        0,
+        (this.localSpecialCooldown[s] ?? 0) - ticksElapsed,
+      );
+    }
+    // Fade the strike-variant text pop.
+    if (this.strikeVariantAlpha > 0) {
+      this.strikeVariantAlpha = Math.max(
+        0,
+        this.strikeVariantAlpha - decay * 1.2,
+      );
+      this.strikeVariantText.setAlpha(this.strikeVariantAlpha);
+    }
   }
 
   private drawArena(): void {
@@ -1126,6 +1219,33 @@ export class GameScene extends Phaser.Scene {
       }
 
       this.drawChargeFeedback(x, y, halfW, halfH, cp.charge);
+
+      // Phase 2 (FLI-9): Special press-flash + cooldown ring.
+      const sFlash = this.specialFlash[s] ?? 0;
+      const sCooldown = this.localSpecialCooldown[s] ?? 0;
+      const sCooldownTotal = this.localSpecialCooldownTotal[s] ?? 1;
+      this.drawSpecialFeedback(
+        x,
+        y,
+        halfW,
+        halfH,
+        sFlash,
+        sCooldown,
+        sCooldownTotal,
+      );
+
+      // Phase 2 (FLI-9): strike-variant arc flash.
+      const arcEntry = this.strikeArcFlash[s];
+      if (arcEntry?.kind && arcEntry.intensity > 0) {
+        this.drawStrikeArcFlash(
+          x,
+          y,
+          halfW,
+          halfH,
+          arcEntry.kind,
+          arcEntry.intensity,
+        );
+      }
     }
   }
 
@@ -1153,6 +1273,186 @@ export class GameScene extends Phaser.Scene {
     this.gfx
       .lineStyle(2 + t * 3, color, 0.35 + t * 0.5)
       .strokeCircle(cx, cy, ringR);
+  }
+
+  /**
+   * Phase 2 (FLI-9): Special press-flash + cooldown ring.
+   * flash:       1→0 intensity driven by `specialFlash[]`
+   * cooldown:    ticks remaining (approximated locally from press + elapsed)
+   * cooldownTotal: ticks at activation (for the fraction calculation)
+   *
+   * Cooldown ring: a partial arc drawn counter-clockwise, fraction =
+   * 1 - cooldown/cooldownTotal (full circle when ready, shrinks on activation).
+   */
+  private drawSpecialFeedback(
+    x: number,
+    y: number,
+    halfW: number,
+    halfH: number,
+    flash: number,
+    cooldown: number,
+    cooldownTotal: number,
+  ): void {
+    const cx = toScreenX(x);
+    const cy = toScreenY(y + halfH * 0.25);
+    const baseR = Math.max(halfW, halfH) * PX_PER_UNIT;
+    const ringR = baseR + 12;
+
+    // Press flash: gold burst ring.
+    if (flash > 0) {
+      this.gfx
+        .lineStyle(4, 0xffdd44, flash * 0.9)
+        .strokeCircle(cx, cy, ringR + (1 - flash) * 10);
+    }
+
+    // Cooldown ring: partial arc (full = ready; depleting = cooling down).
+    const fraction = cooldownTotal > 0 ? 1 - cooldown / cooldownTotal : 1;
+    if (fraction < 0.999) {
+      // Draw the "remaining" arc in dim gold; ready portion in bright gold.
+      const startAngle = -Math.PI / 2; // top
+      const endAngle = startAngle + fraction * Math.PI * 2;
+      // Draw ready arc (bright gold).
+      if (fraction > 0) {
+        this.gfx.lineStyle(2, 0xffdd44, 0.7);
+        this.gfx.beginPath();
+        this.gfx.arc(cx, cy, ringR, startAngle, endAngle, false);
+        this.gfx.strokePath();
+      }
+      // Draw remaining (cooldown) arc in dim grey.
+      if (fraction < 1) {
+        this.gfx.lineStyle(2, 0x555533, 0.5);
+        this.gfx.beginPath();
+        this.gfx.arc(cx, cy, ringR, endAngle, startAngle + Math.PI * 2, false);
+        this.gfx.strokePath();
+      }
+    } else {
+      // Fully ready: show a dim gold ring so the player knows it's available.
+      this.gfx.lineStyle(1, 0xffdd44, 0.3).strokeCircle(cx, cy, ringR);
+    }
+  }
+
+  /**
+   * Phase 2 (FLI-9): Strike-variant arc flash.
+   * spike = downward red arc, header = upward arc, charged = brighter/larger.
+   */
+  private drawStrikeArcFlash(
+    x: number,
+    y: number,
+    halfW: number,
+    halfH: number,
+    kind: "spike" | "header" | "charged",
+    intensity: number,
+  ): void {
+    const cx = toScreenX(x);
+    const cy = toScreenY(y + halfH * 0.25);
+    const baseR = Math.max(halfW, halfH) * PX_PER_UNIT;
+    const r = baseR + 8 + (1 - intensity) * 14;
+
+    if (kind === "spike") {
+      // Downward red arc (lower half).
+      this.gfx.lineStyle(3, 0xff3322, intensity * 0.9);
+      this.gfx.beginPath();
+      this.gfx.arc(cx, cy, r, 0, Math.PI, false); // bottom semicircle
+      this.gfx.strokePath();
+    } else if (kind === "header") {
+      // Upward cyan arc (upper half).
+      this.gfx.lineStyle(3, 0x44ddff, intensity * 0.9);
+      this.gfx.beginPath();
+      this.gfx.arc(cx, cy, r, Math.PI, Math.PI * 2, false); // top semicircle
+      this.gfx.strokePath();
+    } else {
+      // Charged: full bright orange circle, larger.
+      this.gfx
+        .lineStyle(4, 0xff8800, intensity * 0.9)
+        .strokeCircle(cx, cy, r + 6);
+    }
+  }
+
+  /**
+   * Phase 2 (FLI-9): Detect strike-variant feedback for a single slot from its
+   * input frame + the pre-step render state. Cosmetic only. Shared by the hotseat
+   * loop (per active slot) and the networked path (local slot only).
+   *
+   * `render` MUST be the state BEFORE the slot's step this tick, so the charge
+   * accumulated while holding is still present on the release tick.
+   */
+  private detectStrikeVariantForSlot(
+    inp: InputFrame,
+    slot: number,
+    render: RenderState,
+  ): void {
+    if (!inp.strikeReleased) return;
+    const player = render.players[slot];
+    if (!player) return;
+
+    // Detect variant from the state at release (charge is in the sim render state).
+    // charge > maxChargeTicks*0.85 → CHARGED!
+    // airborne + moveY < 0 → SPIKE!
+    // airborne + moveY >= 0 → HEADER!
+    const charge = player.charge;
+    const maxCharge = DEFAULT_CONFIG.strike.maxChargeTicks;
+    const isAirborne = !player.grounded;
+    let kind: "spike" | "header" | "charged" | null = null;
+    let label = "";
+    let color = "#ff8844";
+
+    if (charge >= maxCharge * 0.85) {
+      kind = "charged";
+      label = "CHARGED!";
+      color = "#ff8800";
+    } else if (isAirborne && inp.moveY < 0) {
+      kind = "spike";
+      label = "SPIKE!";
+      color = "#ff3322";
+    } else if (isAirborne) {
+      kind = "header";
+      label = "HEADER!";
+      color = "#44ddff";
+    }
+
+    if (kind !== null) {
+      this.strikeArcFlash[slot] = { kind, intensity: 1 };
+      // Show the text pop (shared; last writer wins if two players strike simultaneously).
+      this.strikeVariantText.setText(label).setColor(color).setAlpha(1);
+      this.strikeVariantAlpha = 1;
+      console.info(`[strike] P${slot + 1}: ${label}`);
+    }
+  }
+
+  /**
+   * Phase 2 (FLI-9): Detect a Special press for a single slot and update the
+   * local cooldown approximation. Cosmetic only — no sim coupling. Shared by the
+   * hotseat loop and the networked path.
+   */
+  private detectSpecialForSlot(inp: InputFrame, slot: number): void {
+    if (!inp.specialPressed) return;
+    // Only activate if our local cooldown approximation says it's ready.
+    if ((this.localSpecialCooldown[slot] ?? 0) > 0) return;
+    // We don't have per-slot cooldownTicks here (no character access in render).
+    // Use a default approximation based on Panda (130 ticks). This is cosmetic.
+    const approxCooldown = 130;
+    this.specialFlash[slot] = 1;
+    this.localSpecialCooldown[slot] = approxCooldown;
+    this.localSpecialCooldownTotal[slot] = approxCooldown;
+  }
+
+  /**
+   * Hotseat: run strike-variant detection for every collected slot. `inputFrames`
+   * is indexed the same way the sim consumes it; `this.cur` is the pre-step state.
+   */
+  private detectStrikeVariantFeedback(inputFrames: InputFrame[]): void {
+    for (let s = 0; s < inputFrames.length; s++) {
+      const inp = inputFrames[s];
+      if (inp) this.detectStrikeVariantForSlot(inp, s, this.cur);
+    }
+  }
+
+  /** Hotseat: run Special detection for every collected slot. */
+  private detectSpecialFeedback(inputFrames: InputFrame[]): void {
+    for (let s = 0; s < inputFrames.length; s++) {
+      const inp = inputFrames[s];
+      if (inp) this.detectSpecialForSlot(inp, s);
+    }
   }
 
   shutdown(): void {
