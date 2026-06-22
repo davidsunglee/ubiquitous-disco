@@ -217,7 +217,8 @@ export interface LobbyNotice {
   type: "LobbyNotice";
   reason:
     | "absent-human" // one or more required slots hold a disconnected human
-    | "empty-required-slot"; // a mode-required slot has no occupant at all
+    | "empty-required-slot" // a mode-required slot has no occupant at all
+    | "slot-out-of-mode"; // an occupied slot lies outside the current mode's slot set (e.g. slot 1/3 occupied in 1v1)
 }
 
 // ── (De)serializers ───────────────────────────────────────────────────────────

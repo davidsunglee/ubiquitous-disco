@@ -265,10 +265,21 @@ test("LobbyNotice empty-required-slot round-trips", () => {
   expect(decoded.reason).toBe("empty-required-slot");
 });
 
+test("LobbyNotice slot-out-of-mode round-trips", () => {
+  const m: LobbyNotice = {
+    type: "LobbyNotice",
+    reason: "slot-out-of-mode",
+  };
+  const decoded = deserializeLobbyNotice(serializeLobbyNotice(m));
+  expect(decoded.type).toBe("LobbyNotice");
+  expect(decoded.reason).toBe("slot-out-of-mode");
+});
+
 test("LobbyNotice reason union includes all variants", () => {
   const reasons: LobbyNotice["reason"][] = [
     "absent-human",
     "empty-required-slot",
+    "slot-out-of-mode",
   ];
   for (const reason of reasons) {
     const m: LobbyNotice = { type: "LobbyNotice", reason };
