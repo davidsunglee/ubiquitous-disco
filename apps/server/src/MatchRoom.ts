@@ -410,15 +410,22 @@ export class MatchRoom extends Room {
 
     if (slot === undefined) return; // Unknown client — nothing to reserve.
 
-    // Phase 6: if the room is configured and this is a human slot, reserve it
-    // for reconnect instead of immediately fail-closing.
-    if (this.configured && this.sources.get(slot)?.isHuman) {
+    // Phase 6: reserve a human slot for reconnect ONLY when it carries real
+    // launch reclaim credentials (the lobby-launch path sets slotLaunchOptions
+    // on first join). The legacy dev/test direct-connect path has no joinToken
+    // to reclaim with, so it keeps the Plan 1 immediate fail-closed behaviour
+    // (the netcode regression specs depend on a prompt `peer-left`).
+    if (
+      this.configured &&
+      this.sources.get(slot)?.isHuman &&
+      this.slotLaunchOptions.has(slot)
+    ) {
       this.reserveSlot(slot);
       return;
     }
 
-    // Not a reservable slot (bot slot, or room not yet configured) — fall
-    // through to the original fail-closed path.
+    // Bot slot, room not yet configured, or legacy direct-connect (no reclaim
+    // credentials) — fall through to the original fail-closed path.
     this.failClose("peer-left");
   }
 

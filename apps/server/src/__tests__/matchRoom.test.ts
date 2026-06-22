@@ -476,8 +476,10 @@ test("onLeave: double-leave does not double-broadcast (one slot reserved, one tr
 // ── Phase 5: fail-closed disconnect (legacy direct-connect path only) ─────────
 
 test("onLeave broadcasts MatchClosed(peer-left) and disposes (legacy direct-connect)", async () => {
-  // The legacy direct-connect path has no launchId/joinToken — it falls through
-  // to the old fail-close behaviour since there is no reclaim possible.
+  // The legacy direct-connect path has no launchId/joinToken, so the room never
+  // records slotLaunchOptions for the slot — there is no joinToken to reclaim
+  // with. onLeave therefore keeps the Plan 1 immediate fail-closed behaviour:
+  // no reserve, no grace window, a prompt `peer-left` broadcast.
   const room = makeRoom();
   const clientA = makeClient("session-a");
   const clientB = makeClient("session-b");
@@ -490,21 +492,13 @@ test("onLeave broadcasts MatchClosed(peer-left) and disposes (legacy direct-conn
   expect(room.disconnectCalled).toBe(false);
   room.onLeave(clientA as never);
 
-  // Legacy path has slotLaunchOptions empty → emptySource IS isHuman but
-  // the room treats a reserved slot from the legacy path the same way.
-  // However, the legacy path doesn't set slotLaunchOptions so there's no
-  // joinToken to reclaim with. The slot gets reserved (same behaviour).
-  // Grace expiry triggers reconnect-expired or peer-left.
-  // Trigger expiry to verify the room closes.
-  room.testTriggerGraceExpiry(0 as PlayerSlotId);
-
+  // Legacy path: the slot is NOT reserved — the room fail-closes immediately.
+  expect(room.reservedSlotIds).not.toContain(0);
   expect(room.disconnectCalled).toBe(true);
   expect(room.isDisposed).toBe(true);
   const closed = room.broadcastMessages.find((m) => m.type === "MatchClosed");
-  // The reason is reconnect-expired (not peer-left) because the slot was reserved.
-  expect((closed?.payload as { reason: string }).reason).toBe(
-    "reconnect-expired",
-  );
+  // The reason is peer-left (immediate fail-close, no grace window).
+  expect((closed?.payload as { reason: string }).reason).toBe("peer-left");
   expect(clientB.messages.some((m) => m.type === "MatchClosed")).toBe(true);
 });
 
