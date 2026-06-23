@@ -52,6 +52,16 @@ export interface AuthPlayer {
   charge: number;
   knockdownTicks: number;
   invulnTicks: number;
+  // Remaining hashed JS actor fields, restored so a reconciled client matches the
+  // server's hashed actor state exactly (no post-snapshot prediction drift).
+  ticksSinceGrounded: number;
+  dashCooldown: number;
+  airDashAvailable: boolean;
+  stagger: number;
+  controlLock: boolean;
+  staggerDecayDelay: number;
+  specialCooldown: number;
+  airJumpsRemaining: number;
 }
 
 /**
@@ -68,6 +78,8 @@ export interface AuthoritativeState {
   ball: { x: number; y: number; vx: number; vy: number };
   rapierBytes: Uint8Array;
   match: MatchState;
+  /** Phase-3 (FLI-9): seeded PRNG state, restored so seeded Specials don't drift. */
+  rngState: number;
 }
 
 export interface RenderState {
@@ -292,11 +304,20 @@ export function toAuthoritativeState(sim: Simulation): AuthoritativeState {
         charge: p.charge,
         knockdownTicks: actor?.knockdownTicks ?? 0,
         invulnTicks: actor?.invulnTicks ?? 0,
+        ticksSinceGrounded: actor?.ticksSinceGrounded ?? 0,
+        dashCooldown: actor?.dashCooldown ?? 0,
+        airDashAvailable: actor?.airDashAvailable ?? true,
+        stagger: actor?.stagger ?? 0,
+        controlLock: actor?.controlLock ?? false,
+        staggerDecayDelay: actor?.staggerDecayDelay ?? 0,
+        specialCooldown: actor?.specialCooldown ?? 0,
+        airJumpsRemaining: actor?.airJumpsRemaining ?? 0,
       };
     }),
     ball: { x: render.ball.x, y: render.ball.y, ...ballVel },
     rapierBytes: snap.rapierBytes,
     match,
+    rngState: snap.rngState,
   };
 }
 
@@ -651,14 +672,23 @@ export function createSimulation(opts: {
         a.charge = p.charge;
         a.knockdownTicks = p.knockdownTicks;
         a.invulnTicks = p.invulnTicks;
+        a.ticksSinceGrounded = p.ticksSinceGrounded;
+        a.dashCooldown = p.dashCooldown;
+        a.airDashAvailable = p.airDashAvailable;
+        a.stagger = p.stagger;
+        a.controlLock = p.controlLock;
+        a.staggerDecayDelay = p.staggerDecayDelay;
+        a.specialCooldown = p.specialCooldown;
+        a.airJumpsRemaining = p.airJumpsRemaining;
         // Sync kinematic player position (restoreSnapshot already did this via
         // the Rapier snapshot, but write explicitly for clarity and safety).
         rw.setPlayerPosition(i, p.x, p.y);
       }
 
-      // 3. Replace match state and tick counter.
+      // 3. Replace match state, tick counter, and seeded PRNG state.
       match = { ...s.match, scores: [...s.match.scores] };
       tick = s.tick;
+      rngState = s.rngState;
 
       // 4. Clear any pending events (matches restoreSnapshot behavior).
       events.splice(0, events.length);

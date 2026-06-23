@@ -59,20 +59,12 @@ function snapshotFromSim(
   return {
     type: "WorldSnapshot",
     serverTick,
-    players: auth.players.map((p) => ({
-      x: p.x,
-      y: p.y,
-      vx: p.vx,
-      vy: p.vy,
-      facing: p.facing,
-      grounded: p.grounded,
-      charge: p.charge,
-      knockdownTicks: p.knockdownTicks,
-      invulnTicks: p.invulnTicks,
-    })),
+    // auth.players already carries every wire AuthPlayer field.
+    players: auth.players.map((p) => ({ ...p })),
     ball: auth.ball,
     rapierBytesB64: uint8ArrayToBase64(auth.rapierBytes),
     match: auth.match,
+    rngState: auth.rngState,
     lastAckedSeq,
   };
 }

@@ -77,6 +77,16 @@ export interface AuthPlayer {
   charge: number;
   knockdownTicks: number;
   invulnTicks: number;
+  // Remaining hashed JS actor fields so the client can restore the server's full
+  // hashed actor state on reconcile (no post-snapshot prediction drift).
+  ticksSinceGrounded: number;
+  dashCooldown: number;
+  airDashAvailable: boolean;
+  stagger: number;
+  controlLock: boolean;
+  staggerDecayDelay: number;
+  specialCooldown: number;
+  airJumpsRemaining: number;
 }
 
 /**
@@ -100,6 +110,8 @@ export interface WorldSnapshot {
   /** Base64-encoded Rapier world snapshot (rw.takeSnapshot()). Always present. */
   rapierBytesB64: string;
   match: MatchState;
+  /** Seeded PRNG state, restored on reconcile so seeded Specials don't drift. */
+  rngState: number;
   lastAckedSeq: import("@bb/sim").AckBySlot; // index == PlayerSlotId; bot slots carry 0
 }
 
