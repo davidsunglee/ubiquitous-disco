@@ -858,6 +858,33 @@ test("buildBotWorldView carries climbLeft and climbRight for Flat Dojo", () => {
   expect(wv.climbRight?.[0]?.x).toBe(22);
 });
 
+test("buildBotWorldView derives wallInnerX from the active arena's right wall (all arenas)", () => {
+  // The bot's corner-awareness uses wallInnerX as the inner face of the right
+  // side wall. It must match the actual outer-wall face for EVERY arena, not a
+  // stale flat-dojo default — otherwise the bot thinks it is cornered across
+  // most of the arena and refuses to advance toward its target Bell.
+  const cases: { arenaId: string; expected: number }[] = [
+    { arenaId: "flat-dojo", expected: 35.5 },
+    { arenaId: "pillared-temple", expected: 41.5 },
+    { arenaId: "twin-ledge", expected: 47.5 },
+  ];
+
+  for (const { arenaId, expected } of cases) {
+    const room = makeRoom();
+    const mf = manifest2v2([3]);
+    mf.settings.arenaId = arenaId;
+    room.testConfigureFromManifest(mf);
+
+    const wv = (
+      room as unknown as {
+        buildBotWorldView(): { arena: { wallInnerX: number } };
+      }
+    ).buildBotWorldView();
+
+    expect(wv.arena.wallInnerX).toBe(expected);
+  }
+});
+
 test("tickOnce threads the attacking-side climb into the bot slot view (Flat Dojo)", () => {
   // Slot 3 is on Team 1 (attacks left), so its climb should be climbLeft.
   // Slot 0 is on Team 0 (attacks right), so its climb should be climbRight.

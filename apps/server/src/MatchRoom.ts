@@ -222,15 +222,15 @@ export class MatchRoom extends Room {
     const rightBell = this.activeArena.bells.find((b) => b.id === "right");
     const leftBellX = leftBell?.hitZone.x ?? -9;
     const rightBellX = rightBell?.hitZone.x ?? 9;
-    // wallInnerX: the inner face of the rightmost wall collider.
-    // We find the wall with the largest x, then subtract its halfW.
-    let wallInnerX = 11.5;
-    for (const c of this.activeArena.colliders) {
-      const face = c.x - c.halfW; // inner face of a right-side wall = x - halfW
-      if (c.x > 0 && face > 0 && face < wallInnerX + c.halfW) {
-        wallInnerX = face;
-      }
-    }
+    // wallInnerX: the inner face of the right side wall, authored on the ArenaDef.
+    // Falls back to deriving the rightmost collider face for arenas without
+    // authored bounds (legacy/test fixtures).
+    const wallInnerX =
+      this.activeArena.bounds?.rightWallInnerX ??
+      this.activeArena.colliders.reduce(
+        (max, c) => (c.x > 0 ? Math.max(max, c.x - c.halfW) : max),
+        0,
+      );
 
     return {
       tick: this.serverTick,

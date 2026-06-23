@@ -46,10 +46,22 @@ export interface ArenaClimb {
   right: ClimbWaypoint[];
 }
 
+/**
+ * Inner faces of the two side walls (world X). Authored alongside the wall
+ * colliders so consumers (e.g. the practice bot's corner awareness) read a typed
+ * value instead of scanning colliders. Not part of hashed sim state.
+ */
+export interface ArenaBounds {
+  leftWallInnerX: number;
+  rightWallInnerX: number;
+}
+
 export interface ArenaDef {
   id: string;
   colliders: ColliderDef[]; // inserted in array order (determinism contract)
   bells: BellDef[]; // tested in array order (determinism contract)
+  /** Inner faces of the side walls (world X). Optional for legacy/test fixtures. */
+  bounds?: ArenaBounds;
   /** Per-slot spawn points indexed by Player Slot id (0..3). */
   playerSpawns: { x: number; y: number }[];
   /** @deprecated Use playerSpawns[0] instead. Kept for compatibility. */
@@ -70,6 +82,8 @@ export type ArenaId = "flat-dojo" | "pillared-temple" | "twin-ledge";
 // overhang lip (underside 10). Mirror-symmetric about x=0.
 export const FLAT_DOJO: ArenaDef = {
   id: "flat-dojo",
+  // Side walls at x=±36, halfW 0.5 → inner faces at ∓35.5.
+  bounds: { leftWallInnerX: -35.5, rightWallInnerX: 35.5 },
   colliders: [
     // floor: top surface at y = 0 (72 units wide)
     { kind: "box", x: 0, y: -0.5, halfW: 36, halfH: 0.5 },
@@ -136,6 +150,8 @@ export const FLAT_DOJO: ArenaDef = {
 // ≈ 6.6u reach) clears them, but a bare floor single-jump (apex 3.6u) cannot.
 export const PILLARED_TEMPLE: ArenaDef = {
   id: "pillared-temple",
+  // Side walls at x=±42, halfW 0.5 → inner faces at ∓41.5.
+  bounds: { leftWallInnerX: -41.5, rightWallInnerX: 41.5 },
   colliders: [
     // floor (84 units wide)
     { kind: "box", x: 0, y: -0.5, halfW: 42, halfH: 0.5 },
@@ -181,6 +197,8 @@ export const PILLARED_TEMPLE: ArenaDef = {
 // Mirror-symmetric about x=0.
 export const TWIN_LEDGE: ArenaDef = {
   id: "twin-ledge",
+  // Side walls at x=±48, halfW 0.5 → inner faces at ∓47.5.
+  bounds: { leftWallInnerX: -47.5, rightWallInnerX: 47.5 },
   colliders: [
     // floor (96 units wide)
     { kind: "box", x: 0, y: -0.5, halfW: 48, halfH: 0.5 },
