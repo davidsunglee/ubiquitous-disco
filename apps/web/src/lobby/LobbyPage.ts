@@ -602,8 +602,16 @@ export class LobbyPage {
   private makeStatTable(): HTMLElement {
     const wrap = document.createElement("div");
     wrap.dataset.testid = "lobby-stat-table";
+    // flex-shrink:0 is required: this element sets overflow-x:auto, which makes
+    // the browser compute overflow-y to `auto` too (the CSS rule that a
+    // non-visible overflow on one axis forces the other off `visible`). In the
+    // root's flex *column*, a non-visible block-axis overflow zeroes the flex
+    // item's automatic minimum height — so when the lobby content exceeds the
+    // root's max-height:100vh (smaller viewports / CI), this table would shrink
+    // to 0 height and read as `hidden`. Pinning flex-shrink keeps its natural
+    // height; the root's overflow-y:auto scrolls instead.
     wrap.style.cssText =
-      "width:100%;max-width:560px;overflow-x:auto;font-family:monospace;font-size:10px;";
+      "flex-shrink:0;width:100%;max-width:560px;overflow-x:auto;font-family:monospace;font-size:10px;";
 
     const table = document.createElement("table");
     table.style.cssText = "border-collapse:collapse;width:100%;color:#ccc;";
