@@ -381,6 +381,15 @@ export function createSimulation(opts: {
         // ── Gameplay rules run ONLY in live phases ──
         const blinks: (DashBlink | null)[] = [];
 
+        // Reset the per-tick hit-attribution before any strikes resolve, so a
+        // knockdown is only ever credited to a striker who hit THIS tick. Enforces
+        // the "transient/per-tick" contract for lastHitBy (Phase 7 friendly-fire
+        // telemetry) instead of relying on it being overwritten every tick.
+        // Not serialized / not hashed — hashState is unaffected.
+        for (const a of actors) {
+          if (a) a.lastHitBy = -1;
+        }
+
         // Snapshot start-of-tick state for each slot before any strikes resolve.
         // This ensures:
         //  (a) A slot that was already knocked down before this tick cannot

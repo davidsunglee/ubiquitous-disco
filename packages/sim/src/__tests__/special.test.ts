@@ -170,6 +170,42 @@ test("specialCooldown drains while the actor is knocked down (recovery)", () => 
   expect(after.specialCooldown).toBe(49);
 });
 
+test("lastHitBy is reset at tick start (no stale friendly-fire attribution)", () => {
+  // lastHitBy is per-tick hit attribution for the friendly-fire telemetry. A
+  // stale value from an earlier tick must not survive into a tick where no hit
+  // lands — otherwise a future non-strike knockdown source would mis-credit it.
+  const pandaDef = CHARACTERS.panda;
+  const sim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 7272,
+    characters: [pandaDef],
+  });
+
+  // Start the match so the gameplay rules run.
+  const startRow: InputFrame[] = [];
+  startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+  startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+  sim.step(startRow);
+
+  // Inject a stale attribution onto slot 0.
+  const snap = sim.takeSnapshot();
+  const a0 = snap.actors[0];
+  if (!a0) throw new Error("expected actor 0");
+  a0.lastHitBy = 2;
+  sim.restoreSnapshot(snap);
+
+  // Step a tick with no strikes.
+  const idleRow: InputFrame[] = [];
+  idleRow[0] = EMPTY_INPUT;
+  idleRow[2] = EMPTY_INPUT;
+  sim.step(idleRow);
+
+  const after = sim.takeSnapshot().actors[0];
+  if (!after) throw new Error("expected actor 0 after step");
+  expect(after.lastHitBy).toBe(-1);
+});
+
 // ── Reset on respawn ─────────────────────────────────────────────────────────
 
 test("specialCooldown is zeroed on round reset (actor rebuild)", () => {
