@@ -271,7 +271,9 @@ export class MatchRoom extends Room {
     // Resolve per-slot character defs (indexed by slot) from the frozen manifest.
     const characters: CharacterDef[] = [];
     for (const s of manifest.slots) {
-      characters[s.slotId] = CHARACTERS[s.characterId];
+      // Fall back to Sifu for an unknown characterId (schema drift / future id)
+      // so the match degrades instead of crashing — mirrors the client guard.
+      characters[s.slotId] = CHARACTERS[s.characterId] ?? CHARACTERS.sifu;
     }
 
     // Resolve the arena from the manifest settings (falls back to FLAT_DOJO).

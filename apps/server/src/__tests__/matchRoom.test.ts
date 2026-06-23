@@ -834,6 +834,25 @@ test("RoomReady carries per-slot character ids from the manifest", async () => {
   expect((chars as unknown[])[2]).toBe("vipra");
 });
 
+test("configureFromManifest falls back to Sifu for an unknown characterId (no crash)", () => {
+  // Schema drift / a renamed-or-future CharacterId / a new manifest writer must
+  // degrade to Sifu rather than crash the match (the client already guards this).
+  const room = makeRoom();
+  const mf: MatchManifest = {
+    launchId: "L-bad",
+    slots: [
+      { slotId: 0, kind: "human", playerId: "p0", characterId: "sifu" },
+      { slotId: 2, kind: "bot", characterId: "not-a-character" as never },
+    ] as MatchManifestSlot[],
+    settings: { mode: "1v1", matchLengthTicks: 5400, arenaId: "flat-dojo" },
+  };
+
+  expect(() => room.testConfigureFromManifest(mf)).not.toThrow();
+  expect(room.isConfigured).toBe(true);
+  // The bot slot is still backed by a bot source (resolved against the fallback).
+  expect(room.inputSources.get(2)?.isHuman).toBe(false);
+});
+
 // ── Phase 2 (FLI-9): bot climb path threading ──────────────────────────────────
 
 test("buildBotWorldView carries climbLeft and climbRight for Flat Dojo", () => {
