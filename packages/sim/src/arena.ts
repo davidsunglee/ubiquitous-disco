@@ -129,9 +129,11 @@ export const FLAT_DOJO: ArenaDef = {
   },
 };
 
-// Pillared Temple: 84-unit-wide arena with two pairs of interior pillars
-// creating lane structure. Mirror-symmetric about x=0. Bells set higher to
-// reward aerial play.
+// Pillared Temple: 84-unit-wide arena with two pairs of low interior hurdles
+// creating lane structure. Mirror-symmetric about x=0. Pillars are short
+// jumpable hurdles (tops at 2.0u and 3.0u) staggered ascending toward the bell.
+// Bells are lowered to y=5.5 so a floor jump + air-dash (apex ~3.6 + dash 3.0
+// ≈ 6.6u reach) clears them, but a bare floor single-jump (apex 3.6u) cannot.
 export const PILLARED_TEMPLE: ArenaDef = {
   id: "pillared-temple",
   colliders: [
@@ -141,12 +143,12 @@ export const PILLARED_TEMPLE: ArenaDef = {
     { kind: "box", x: -42, y: 5, halfW: 0.5, halfH: 6 },
     // right wall: inner face at x = 41.5
     { kind: "box", x: 42, y: 5, halfW: 0.5, halfH: 6 },
-    // inner pillar pair: tall columns flanking centre
-    { kind: "box", x: -12, y: 3, halfW: 0.6, halfH: 3 },
-    { kind: "box", x: 12, y: 3, halfW: 0.6, halfH: 3 },
-    // outer pillar pair: tall columns toward the bells
-    { kind: "box", x: -28, y: 3, halfW: 0.6, halfH: 3 },
-    { kind: "box", x: 28, y: 3, halfW: 0.6, halfH: 3 },
+    // inner pillar pair: low hurdles flanking centre; top surface y = 2.0
+    { kind: "box", x: -12, y: 1.0, halfW: 0.6, halfH: 1.0 },
+    { kind: "box", x: 12, y: 1.0, halfW: 0.6, halfH: 1.0 },
+    // outer pillar pair: slightly taller hurdles toward the bells; top surface y = 3.0
+    { kind: "box", x: -28, y: 1.5, halfW: 0.6, halfH: 1.5 },
+    { kind: "box", x: 28, y: 1.5, halfW: 0.6, halfH: 1.5 },
     // ceiling
     { kind: "box", x: 0, y: 11.5, halfW: 42, halfH: 0.5 },
   ],
@@ -154,14 +156,14 @@ export const PILLARED_TEMPLE: ArenaDef = {
     {
       id: "left",
       defends: "left",
-      art: { kind: "box", x: -36, y: 6.5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: -36, y: 6.5, radius: 0.8 },
+      art: { kind: "box", x: -36, y: 5.5, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: -36, y: 5.5, radius: 0.8 },
     },
     {
       id: "right",
       defends: "right",
-      art: { kind: "box", x: 36, y: 6.5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: 36, y: 6.5, radius: 0.8 },
+      art: { kind: "box", x: 36, y: 5.5, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: 36, y: 5.5, radius: 0.8 },
     },
   ],
   playerSpawns: [
