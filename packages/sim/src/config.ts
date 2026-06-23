@@ -85,15 +85,15 @@ export const DEFAULT_CONFIG: SimConfig = {
   },
   player: { halfW: 0.4, halfH: 0.8 },
   movement: {
-    moveSpeed: 6,
-    jumpSpeed: 12, // FLI-9 tall redesign: feet apex ≈ 3.6u so a single jump lands a low ledge
-    gravityScale: 1,
-    jumpCutMultiplier: 0.4,
-    coyoteTicks: 4,
+    moveSpeed: 7.2,
+    jumpSpeed: 16.5, // FLI-11 floaty: feet apex ≈ 9.08u (gravityScale 0.75) — a single jump clears the y=6 Bell
+    gravityScale: 0.75,
+    jumpCutMultiplier: 0.65,
+    coyoteTicks: 5,
   },
   dash: {
-    distance: 3,
-    cooldownTicks: 18,
+    distance: 2.4,
+    cooldownTicks: 22,
   },
   strike: {
     minChargeTicks: 1,

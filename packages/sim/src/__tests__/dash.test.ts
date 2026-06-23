@@ -1,11 +1,14 @@
 import { beforeAll, expect, test } from "vitest";
 import {
+  type ArenaDef,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
   FLAT_DOJO,
   type InputFrame,
   initSim,
+  PILLARED_TEMPLE,
+  TWIN_LEDGE,
 } from "../index";
 
 beforeAll(async () => {
@@ -72,9 +75,9 @@ test("Dash is gated by its cooldown", () => {
 // never let held walk/jump velocity drive the player into geometry afterward.
 const PHW = DEFAULT_CONFIG.player.halfW;
 const PHH = DEFAULT_CONFIG.player.halfH;
-function staticPenetration(px: number, py: number): number {
+function staticPenetration(arena: ArenaDef, px: number, py: number): number {
   let worst = 0;
-  for (const c of FLAT_DOJO.colliders) {
+  for (const c of arena.colliders) {
     const ox = PHW + c.halfW - Math.abs(px - c.x);
     const oy = PHH + c.halfH - Math.abs(py - c.y);
     if (ox > 1e-4 && oy > 1e-4) worst = Math.max(worst, Math.min(ox, oy));
@@ -84,12 +87,22 @@ function staticPenetration(px: number, py: number): number {
 
 // Run a scripted lead-in, then a dash, then a settle; assert the player never
 // penetrates static geometry by more than the controller's skin offset.
-function worstPenetrationThrough(lead: InputFrame[], settle = 25): number {
-  const sim = newSim();
+function worstPenetrationThrough(
+  arena: ArenaDef,
+  lead: InputFrame[],
+  settle = 25,
+): number {
+  const sim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena,
+    seed: 1234,
+  });
+  // Advance past preRound so gameplay rules run.
+  sim.step([frame({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
   let worst = 0;
   const track = () => {
     const p = sim.getRenderState().players[0];
-    if (p) worst = Math.max(worst, staticPenetration(p.x, p.y));
+    if (p) worst = Math.max(worst, staticPenetration(arena, p.x, p.y));
   };
   for (const f of lead) {
     sim.step([f, EMPTY_INPUT]);
@@ -106,6 +119,7 @@ const SKIN = 0.02; // controller offset (0.01) plus numeric slop
 
 test("a downward Tele-Dash is clamped by the floor, not through it", () => {
   // Jump, then blink straight down into the floor (top surface at y = 0).
+  // Flat Dojo: floor at y=0 (retained from the original layout).
   const lead: InputFrame[] = [];
   for (let i = 0; i < 10; i++) lead.push(EMPTY_INPUT);
   lead.push(frame({ jumpPressed: true, jumpHeld: true }));
@@ -113,38 +127,42 @@ test("a downward Tele-Dash is clamped by the floor, not through it", () => {
   lead.push(
     frame({ moveY: -1, dashPressed: true, dashHeld: true, jumpHeld: true }),
   );
-  expect(worstPenetrationThrough(lead)).toBeLessThan(SKIN);
+  expect(worstPenetrationThrough(FLAT_DOJO, lead)).toBeLessThan(SKIN);
 });
 
 test("a sideways Tele-Dash is clamped by a suspended platform's face", () => {
-  // Walk toward the right overhang (x ∈ [6,10]), jump to its height, then blink
-  // right into its left face while holding right (the held walk must not push in).
+  // Walk toward the outer pillar in PILLARED_TEMPLE (x=±28, top y=3.0).
+  // From spawn at x=-4, walk right toward the right inner pillar (x=12)
+  // then jump to its height and blink right into the outer pillar face (x=28).
+  // With moveSpeed 7.2 (0.24u/tick), ~68 ticks reach x≈12; jump up and dash right.
   const lead: InputFrame[] = [];
   for (let i = 0; i < 10; i++) lead.push(EMPTY_INPUT);
-  for (let i = 0; i < 33; i++) lead.push(frame({ moveX: 1 }));
+  for (let i = 0; i < 55; i++) lead.push(frame({ moveX: 1 }));
   lead.push(frame({ jumpPressed: true, jumpHeld: true, moveX: 1 }));
   for (let i = 0; i < 10; i++) lead.push(frame({ jumpHeld: true, moveX: 1 }));
   lead.push(
     frame({ moveX: 1, dashPressed: true, dashHeld: true, jumpHeld: true }),
   );
-  expect(worstPenetrationThrough(lead)).toBeLessThan(SKIN);
+  expect(worstPenetrationThrough(PILLARED_TEMPLE, lead)).toBeLessThan(SKIN);
 });
 
 test("an upward Tele-Dash is clamped by a suspended platform's underside", () => {
-  // Stand under the overhang (underside at y = 3) and blink straight up into it;
-  // the full-distance blink must stop at the underside, not punch through.
+  // Walk under the inner ledge in TWIN_LEDGE (inner underside ≈ y=2.0).
+  // Walk right from spawn, then blink straight up into the inner ledge underside.
+  // With moveSpeed 7.2 (0.24u/tick), ~55 ticks puts the player near x=9 under the
+  // inner ledge (x=±16, halfW=4, underside y=2.5-0.5=2.0).
   const lead: InputFrame[] = [];
   for (let i = 0; i < 10; i++) lead.push(EMPTY_INPUT);
-  for (let i = 0; i < 70; i++) lead.push(frame({ moveX: 1 }));
+  for (let i = 0; i < 40; i++) lead.push(frame({ moveX: 1 }));
   lead.push(frame({ moveY: 1, dashPressed: true, dashHeld: true }));
-  expect(worstPenetrationThrough(lead)).toBeLessThan(SKIN);
+  expect(worstPenetrationThrough(TWIN_LEDGE, lead)).toBeLessThan(SKIN);
 });
 
 test("exactly one air-dash per airtime, reset on landing", () => {
   const sim = newSim();
   for (let i = 0; i < 10; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
 
-  // Jump straight up (full-height, ~33 ticks of airtime).
+  // Jump straight up (full-height, longer airtime due to floaty physics).
   step0(sim, frame({ jumpPressed: true, jumpHeld: true }));
   step0(sim, frame({ jumpHeld: true }));
   expect(sim.getRenderState().players[0]?.grounded).toBe(false);
@@ -174,7 +192,11 @@ test("exactly one air-dash per airtime, reset on landing", () => {
   expect(Math.abs(b1 - b0)).toBeLessThan(DEFAULT_CONFIG.dash.distance * 0.5);
 
   // Land, then the air-dash budget is available again.
-  for (let i = 0; i < 80; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+  // Extended settle loop for the longer floaty airtime.
+  for (let i = 0; i < 120; i++) {
+    sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+    if (sim.getRenderState().players[0]?.grounded) break;
+  }
   expect(sim.getRenderState().players[0]?.grounded).toBe(true);
 
   // Jump and immediately air-dash to prove the budget reset on landing.

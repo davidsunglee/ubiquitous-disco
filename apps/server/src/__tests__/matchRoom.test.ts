@@ -855,10 +855,13 @@ test("configureFromManifest falls back to Sifu for an unknown characterId (no cr
 
 // ── Phase 2 (FLI-9): bot climb path threading ──────────────────────────────────
 
-test("buildBotWorldView carries climbLeft and climbRight for Flat Dojo", () => {
-  // Flat Dojo has botClimb defined; verify the shared world view includes both sides.
+test("buildBotWorldView carries climbLeft and climbRight for Twin Ledge", () => {
+  // FLI-11: FLAT_DOJO is now a flat open court without botClimb. Use TWIN_LEDGE
+  // (which retains its botClimb) to verify the shared world view includes both sides.
   const room = makeRoom();
-  room.testConfigureFromManifest(manifest2v2([3])); // slot 3 is bot
+  const mf = manifest2v2([3]);
+  mf.settings.arenaId = "twin-ledge";
+  room.testConfigureFromManifest(mf);
 
   // Access the private method via casting.
   const wv = (
@@ -870,11 +873,11 @@ test("buildBotWorldView carries climbLeft and climbRight for Flat Dojo", () => {
     }
   ).buildBotWorldView();
 
-  // Flat Dojo botClimb: left path starts at x=-22, right path starts at x=22.
+  // Twin Ledge botClimb: left path starts at x=-16, right path starts at x=16.
   expect(wv.climbLeft).toBeDefined();
   expect(wv.climbRight).toBeDefined();
-  expect(wv.climbLeft?.[0]?.x).toBe(-22);
-  expect(wv.climbRight?.[0]?.x).toBe(22);
+  expect(wv.climbLeft?.[0]?.x).toBe(-16);
+  expect(wv.climbRight?.[0]?.x).toBe(16);
 });
 
 test("buildBotWorldView derives wallInnerX from the active arena's right wall (all arenas)", () => {
@@ -904,11 +907,14 @@ test("buildBotWorldView derives wallInnerX from the active arena's right wall (a
   }
 });
 
-test("tickOnce threads the attacking-side climb into the bot slot view (Flat Dojo)", () => {
+test("tickOnce threads the attacking-side climb into the bot slot view (Twin Ledge)", () => {
+  // FLI-11: FLAT_DOJO no longer has a botClimb (it's a flat open court). Use
+  // TWIN_LEDGE (which retains its botClimb) to cover the climb-threading path.
   // Slot 3 is on Team 1 (attacks left), so its climb should be climbLeft.
-  // Slot 0 is on Team 0 (attacks right), so its climb should be climbRight.
   const room = makeRoom();
-  room.testConfigureFromManifest(manifest2v2([3])); // slot 3 is bot
+  const mf = manifest2v2([3]);
+  mf.settings.arenaId = "twin-ledge";
+  room.testConfigureFromManifest(mf);
 
   // Intercept the view passed to the bot source's take() by wrapping the source.
   let capturedView: import("@bb/sim").BotWorldView | undefined;
@@ -928,9 +934,9 @@ test("tickOnce threads the attacking-side climb into the bot slot view (Flat Doj
   const drive = room as unknown as { tickOnce(): void };
   drive.tickOnce();
 
-  // Slot 3 = Team 1 → attacks left bell → climb should be climbLeft (x=-22 first).
+  // Slot 3 = Team 1 → attacks left bell → climb should be climbLeft (x=-16 first in Twin Ledge).
   expect(capturedView?.arena?.climb).toBeDefined();
-  expect(capturedView?.arena?.climb?.[0]?.x).toBe(-22);
+  expect(capturedView?.arena?.climb?.[0]?.x).toBe(-16);
 });
 
 // ── Phase 7 (FLI-9): balance telemetry MatchSummary ──────────────────────────

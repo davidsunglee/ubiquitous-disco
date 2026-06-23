@@ -356,9 +356,10 @@ test("aerial variant does not change player-vs-player knockback", () => {
     }
 
     if (airborne) {
-      // Get slot 0 airborne.
+      // Get slot 0 airborne — one jump tick is enough; two ticks under the
+      // new floaty physics (jumpSpeed=16.5) raises the player too far for the
+      // reach check to connect at the typical approach distance.
       sim.step(r(frame({ jumpPressed: true, jumpHeld: true })));
-      sim.step(r(frame({ jumpHeld: true })));
     }
 
     const x2Before = sim.getRenderState().players[2]?.x ?? 0;
