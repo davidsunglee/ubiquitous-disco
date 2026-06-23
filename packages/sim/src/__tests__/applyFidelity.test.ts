@@ -87,11 +87,12 @@ function buildForkFrames(): {
   // Start the match.
   step([f({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
 
-  // Let the ball fall and settle on the floor (~40 ticks is enough).
-  for (let i = 0; i < 40; i++) step([EMPTY_INPUT, EMPTY_INPUT]);
+  // FLI-11 Phase 2: ball gravityScale 0.32 — ball falls slowly from y=6.
+  // Use 90 ticks so the ball has time to descend, bounce, and settle near the floor.
+  for (let i = 0; i < 90; i++) step([EMPTY_INPUT, EMPTY_INPUT]);
 
   // Walk right until within strike reach of the (settled) ball.
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 80; i++) {
     const s = sim.getRenderState();
     const p = s.players[0];
     const b = s.ball;
@@ -101,20 +102,23 @@ function buildForkFrames(): {
     step([f({ moveX: 1 }), EMPTY_INPUT]);
   }
 
-  // Full-charge upward strike (maxChargeTicks = 24; hold for 22 + release).
+  // Full-charge upward strike: press, hold for (maxChargeTicks − 2) ticks, release.
+  const holdTicks = Math.max(1, DEFAULT_CONFIG.strike.maxChargeTicks - 2);
   step([
     f({ moveX: 1, moveY: 1, strikeHeld: true, strikePressed: true }),
     EMPTY_INPUT,
   ]);
-  for (let i = 0; i < 22; i++) {
+  for (let i = 0; i < holdTicks; i++) {
     step([f({ moveX: 1, moveY: 1, strikeHeld: true }), EMPTY_INPUT]);
   }
   step([f({ moveX: 1, moveY: 1, strikeReleased: true }), EMPTY_INPUT]);
 
-  // Fork immediately after strike release — ball is in fast upward flight.
-  // Let it fly a couple of ticks to confirm it's actually moving.
-  step([EMPTY_INPUT, EMPTY_INPUT]);
-  step([EMPTY_INPUT, EMPTY_INPUT]);
+  // Walk the player AWAY from the ball so the ball is in free flight (not in
+  // contact with the player body) at the fork point. FLI-11 Phase 2: with
+  // gravityScale=0.32 the ball rises slowly, so we move the player left to
+  // break contact, then let the ball travel freely for 20 ticks before forking.
+  for (let i = 0; i < 5; i++) step([f({ moveX: -1 }), EMPTY_INPUT]);
+  for (let i = 0; i < 20; i++) step([EMPTY_INPUT, EMPTY_INPUT]);
 
   const forkTick = frames.length;
 

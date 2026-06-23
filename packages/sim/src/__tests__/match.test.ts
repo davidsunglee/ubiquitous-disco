@@ -67,10 +67,13 @@ function ringBell(
     r[2] = EMPTY_INPUT;
     return r;
   };
-  for (let i = 0; i < 30; i++) sim.step(emptyRow());
+  // FLI-11 Phase 2: ball gravityScale lowered to 0.32 — ball falls much more
+  // slowly from y=5 in COMPACT_DOJO. Use 90 settle ticks so the ball has time
+  // to descend and bounce to reachable height before the driver walks in.
+  for (let i = 0; i < 90; i++) sim.step(emptyRow());
   // Walk driver toward ball.
   const moveX = driverSlot === 0 ? 1 : -1;
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 80; i++) {
     const row = emptyRow();
     row[driverSlot] = frame({ moveX });
     sim.step(row);
@@ -366,12 +369,13 @@ test("2v2: ringing the right Bell credits Team 0 (opposing Team 1 defends)", () 
   sim.step(startRow);
   expect(sim.getMatchState().phase).toBe("playing");
 
-  // Settle.
-  for (let i = 0; i < 30; i++) sim.step(emptyRow2v2());
+  // FLI-11 Phase 2: ball gravityScale 0.32 — floaty ball falls slowly from y=5;
+  // use 90 settle ticks so the ball descends to reachable height.
+  for (let i = 0; i < 90; i++) sim.step(emptyRow2v2());
 
   // Walk slot 0 toward ball and release a charged right-ward Strike.
   const moveX = 1;
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 80; i++) {
     const r = emptyRow2v2();
     r[0] = frame({ moveX });
     sim.step(r);

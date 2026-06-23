@@ -25,8 +25,8 @@ import {
 // Golden hash computed on V8 (Node 22 / Vitest 4.1.9, @dimforge/rapier2d-deterministic-compat 0.19.x).
 // If Bun/JSC diverges, this fails under `bun --bun vitest run`.
 // To regenerate: run this test with EXPECTED_HASH = "PLACEHOLDER" and read the console output.
-// FLI-11 Phase 1: FLAT_DOJO rebuilt as flat open court + movement/dash feel values changed.
-const EXPECTED_HASH = "9f9c64f4";
+// FLI-11 Phase 2: ball feel values changed (radius 0.38, restitution 0.82, gravityScale 0.32, mass 0.35, maxSpeed 22, playerPush 6).
+const EXPECTED_HASH = "178cbfc5";
 
 beforeAll(async () => {
   await initSim();

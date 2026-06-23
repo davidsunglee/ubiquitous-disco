@@ -242,45 +242,35 @@ test("airborne + neutral/up near the ball produces a header redirect (ball goes 
   expect(aHeader).toBeGreaterThan(gPop);
 });
 
-test("airborne + down produces a downward spike (lower peak than grounded neutral)", () => {
-  // Grounded neutral strike gives the ball an upward pop.
-  // Airborne + down spike cancels the pop and drives the ball downward.
-  // After a spike the ball's peak height should be LOWER than after a neutral strike.
+test("airborne + down produces a downward spike (ball velocity is downward immediately after release)", () => {
+  // Grounded neutral strike gives the ball an upward pop (positive vy).
+  // Airborne + down spike drives the ball downward (negative vy).
+  // FLI-11 Phase 2: the bouncier ball (restitution 0.82) bounces high off the
+  // floor after a spike, so peak-height comparison no longer reliably distinguishes
+  // spike from neutral. Instead we assert the *immediate* post-strike velocity
+  // direction: spike → vy < 0; neutral → vy > 0.
 
-  const groundedNeutralHeight = (): number => {
+  // Grounded neutral: ball should have positive vy right after.
+  const neutralVy = (): number => {
     const sim = newSim();
     approachBall(sim);
-    const y0 = sim.getRenderState().ball.y;
     sim.step([frame({ strikeHeld: true, strikePressed: true }), EMPTY_INPUT]);
     sim.step([frame({ strikeReleased: true }), EMPTY_INPUT]);
-    let peak = y0;
-    for (let i = 0; i < 60; i++) {
-      sim.step([EMPTY_INPUT, EMPTY_INPUT]);
-      peak = Math.max(peak, sim.getRenderState().ball.y);
-    }
-    return peak - y0;
+    return sim.getBallVel().vy;
   };
 
-  const aerialSpikeHeight = (): number => {
+  // Aerial downward spike: ball should have negative vy right after.
+  const spikeVy = (): number => {
     const sim = newSim();
     const wasAirborne = aerialStrikeNearBall(sim, -1); // moveY = -1 → spike path
     expect(wasAirborne).toBe(true);
-    const y0 = sim.getRenderState().ball.y;
-    let peak = y0;
-    for (let i = 0; i < 60; i++) {
-      sim.step([EMPTY_INPUT, EMPTY_INPUT]);
-      peak = Math.max(peak, sim.getRenderState().ball.y);
-    }
-    return peak - y0;
+    return sim.getBallVel().vy;
   };
 
-  const neutral = groundedNeutralHeight();
-  const spike = aerialSpikeHeight();
-
-  // Neutral strike moves the ball upward.
-  expect(neutral).toBeGreaterThan(0.05);
-  // Spike peak is lower than the neutral pop.
-  expect(spike).toBeLessThan(neutral);
+  // Neutral pops the ball upward.
+  expect(neutralVy()).toBeGreaterThan(0);
+  // Spike drives the ball downward.
+  expect(spikeVy()).toBeLessThan(0);
 });
 
 test("grounded strike is unchanged (regression)", () => {

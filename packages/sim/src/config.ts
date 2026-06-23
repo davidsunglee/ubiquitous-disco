@@ -75,13 +75,13 @@ export const DEFAULT_CONFIG: SimConfig = {
   tickHz: 30,
   gravityY: -20,
   ball: {
-    radius: 0.3,
-    restitution: 0.6,
-    linearDamping: 0.05,
-    gravityScale: 1,
-    mass: 0.5,
-    maxSpeed: 30,
-    playerPush: 4,
+    radius: 0.38,
+    restitution: 0.82,
+    linearDamping: 0.1,
+    gravityScale: 0.32, // FLI-11: effective gravity ≈ −6.4 u/s² — much floatier; tune up to 0.38–0.42 later
+    mass: 0.35, // lighter → impulses hit harder
+    maxSpeed: 22,
+    playerPush: 6,
   },
   player: { halfW: 0.4, halfH: 0.8 },
   movement: {
