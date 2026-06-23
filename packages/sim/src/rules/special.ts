@@ -4,9 +4,11 @@
  * Called once per slot per tick from simulation.ts, AFTER stepStrike, gated by
  * the same start-of-tick wasControllable[s] guard.
  *
- * Decrement specialCooldown every tick (always, even while knocked down — so the
- * cooldown drains during recovery). Gate activation on: controllable, specialPressed,
- * and specialCooldown === 0. On activation, set specialCooldown = cooldownTicks and
+ * The cooldown drains every tick (always, even while knocked down — so the
+ * cooldown drains during recovery) via `tickSpecialCooldown`, which simulation.ts
+ * calls for every active slot OUTSIDE the controllable gate. stepSpecial itself
+ * only handles activation, gated on: controllable, specialPressed, and
+ * specialCooldown === 0. On activation, set specialCooldown = cooldownTicks and
  * dispatch by special.kind.
  *
  * Phase 2: "ground-pound" (Panda)
@@ -35,6 +37,15 @@ export interface SpecialBlink {
   y: number;
 }
 
+/**
+ * Drain one tick off the Special cooldown. Called for EVERY active slot every
+ * tick, regardless of controllable state, so the cooldown keeps draining while
+ * the actor is knocked down (recovery). Must run outside the controllable gate.
+ */
+export function tickSpecialCooldown(actor: Actor): void {
+  if (actor.specialCooldown > 0) actor.specialCooldown -= 1;
+}
+
 export function stepSpecial(
   actor: Actor,
   input: InputFrame,
@@ -44,9 +55,6 @@ export function stepSpecial(
   actors: Actor[],
   draw?: () => number,
 ): SpecialBlink | null {
-  // Cooldown drains every tick regardless of controllable state.
-  if (actor.specialCooldown > 0) actor.specialCooldown -= 1;
-
   // Activation gates: must be controllable, pressing special this tick, and cooldown ready.
   if (!controllable(actor)) return null;
   if (!input.specialPressed || actor.specialCooldown > 0) return null;

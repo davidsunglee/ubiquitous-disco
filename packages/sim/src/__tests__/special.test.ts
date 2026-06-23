@@ -131,6 +131,45 @@ test("specialCooldown decrements each tick and reaches 0", () => {
   expect(runWithSpecial()).not.toBe(runWithoutSpecial());
 });
 
+test("specialCooldown drains while the actor is knocked down (recovery)", () => {
+  // The cooldown must drain every tick even while knocked down, so a repeatedly
+  // staggered player isn't stuck with a frozen cooldown past its ready time.
+  const pandaDef = CHARACTERS.panda;
+  const sim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 6161,
+    characters: [pandaDef],
+  });
+
+  // Start the match (jump on tick 0) so the gameplay rules run.
+  const startRow: InputFrame[] = [];
+  startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+  startRow[2] = frame({ jumpPressed: true, jumpHeld: true });
+  sim.step(startRow);
+
+  // Inject a knocked-down slot 0 carrying a live cooldown via the snapshot API.
+  const snap = sim.takeSnapshot();
+  const a0 = snap.actors[0];
+  if (!a0) throw new Error("expected actor 0");
+  a0.knockdownTicks = 30; // stays > 0 after one step → not controllable
+  a0.specialCooldown = 50;
+  sim.restoreSnapshot(snap);
+
+  // Step once with no input.
+  const idleRow: InputFrame[] = [];
+  idleRow[0] = EMPTY_INPUT;
+  idleRow[2] = EMPTY_INPUT;
+  sim.step(idleRow);
+
+  const after = sim.takeSnapshot().actors[0];
+  if (!after) throw new Error("expected actor 0 after step");
+  // The actor was still knocked down during the step (so it was non-controllable),
+  // yet its cooldown must have drained by one tick.
+  expect(after.knockdownTicks).toBeGreaterThan(0);
+  expect(after.specialCooldown).toBe(49);
+});
+
 // ── Reset on respawn ─────────────────────────────────────────────────────────
 
 test("specialCooldown is zeroed on round reset (actor rebuild)", () => {

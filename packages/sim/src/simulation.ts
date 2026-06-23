@@ -24,7 +24,11 @@ import {
   stepMatch,
 } from "./rules/match";
 import { stepMovement } from "./rules/movement";
-import { type SpecialBlink, stepSpecial } from "./rules/special";
+import {
+  type SpecialBlink,
+  stepSpecial,
+  tickSpecialCooldown,
+} from "./rules/special";
 import { stepStrike } from "./rules/strike";
 import { teamForPlayerSlot } from "./team";
 
@@ -379,6 +383,9 @@ export function createSimulation(opts: {
           const input = inputs[s];
           if (!actor || !input) continue;
           blinks[s] = stepDash(actor, input, config);
+          // Drain the Special cooldown every tick, even while knocked down, so it
+          // keeps recovering during knockdown (outside the controllable gate).
+          tickSpecialCooldown(actor);
           // Only initiate a strike/special if the actor was controllable at tick START.
           if (wasControllable[s]) {
             stepStrike(actor, input, config, rw, s, actors);
