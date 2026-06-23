@@ -137,12 +137,26 @@ export class Reconciler {
               charge: p.charge,
               knockdownTicks: p.knockdownTicks,
               invulnTicks: p.invulnTicks,
+              ticksSinceGrounded: p.ticksSinceGrounded,
+              dashCooldown: p.dashCooldown,
+              airDashAvailable: p.airDashAvailable,
+              stagger: p.stagger,
+              controlLock: p.controlLock,
+              staggerDecayDelay: p.staggerDecayDelay,
+              specialCooldown: p.specialCooldown,
+              airJumpsRemaining: p.airJumpsRemaining,
             }
           : p,
       ),
       ball: snap.ball,
       rapierBytes,
       match: snap.match,
+      bellRing: {
+        armed: [...snap.bellRing.armed],
+        radiusBonus: snap.bellRing.radiusBonus,
+        rampTicks: snap.bellRing.rampTicks,
+      },
+      rngState: snap.rngState,
     };
     this.sim.applyAuthoritativeState(authState);
 

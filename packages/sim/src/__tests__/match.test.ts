@@ -12,10 +12,13 @@ import {
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
-  FLAT_DOJO,
   type InputFrame,
   initSim,
 } from "../index";
+// Bell-ring/scoring tests strike the ball into a bell; use the compact fixture
+// (bells at x=±9) so a single Strike reaches the bell on the large production
+// arenas the ball-to-bell distance is far beyond Strike range.
+import { COMPACT_DOJO } from "./fixtures/compactArena";
 
 beforeAll(async () => {
   await initSim();
@@ -40,7 +43,7 @@ function newSim(matchOverride: Record<string, unknown> = {}) {
     ...DEFAULT_CONFIG,
     match: { ...DEFAULT_CONFIG.match, ...matchOverride },
   };
-  return createSimulation({ config, arena: FLAT_DOJO, seed: 11 });
+  return createSimulation({ config, arena: COMPACT_DOJO, seed: 11 });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -272,8 +275,8 @@ test("after bellPause → resetting → positions are reset and play resumes", (
   // Players should be near their spawn positions after reset.
   // 1v1 [0, 2] template: slot 0 at spawn[0]=-4, slot 2 at spawn[2]=4.
   const { players } = sim.getRenderState();
-  expect(players[0]?.x).toBeCloseTo(FLAT_DOJO.playerSpawns[0]?.x ?? -4, 1);
-  expect(players[2]?.x).toBeCloseTo(FLAT_DOJO.playerSpawns[2]?.x ?? 4, 1);
+  expect(players[0]?.x).toBeCloseTo(COMPACT_DOJO.playerSpawns[0]?.x ?? -4, 1);
+  expect(players[2]?.x).toBeCloseTo(COMPACT_DOJO.playerSpawns[2]?.x ?? 4, 1);
 });
 
 test("golden goal: a bell ring during goldenGoal → complete with winner", () => {
@@ -314,7 +317,7 @@ function new2v2(matchOverride: Record<string, unknown> = {}) {
   };
   return createSimulation({
     config,
-    arena: FLAT_DOJO,
+    arena: COMPACT_DOJO,
     seed: 11,
     activeSlots: [0, 1, 2, 3],
   });

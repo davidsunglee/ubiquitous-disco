@@ -170,6 +170,70 @@ describe("applyAuthoritativeState", () => {
     expect(cr.ball.y).toBeCloseTo(sr.ball.y, 4);
   });
 
+  test("restores all hashed actor fields + rngState (no post-reconcile drift)", () => {
+    // The NetLoop re-steps after applying a snapshot and replays pending inputs,
+    // so any hashed actor field NOT restored keeps its locally-predicted value and
+    // drifts from the server (mispredicted Special readiness, an extra air jump,
+    // divergent seeded lunges). Round-trip every hashed JS field + rngState.
+    const serverSim = newSim();
+    serverSim.step([f({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT]);
+    for (let i = 0; i < 10; i++) serverSim.step([EMPTY_INPUT, EMPTY_INPUT]);
+
+    // Inject distinctive hashed state into the server via the snapshot API.
+    const snap = serverSim.takeSnapshot();
+    const a0 = snap.actors[0];
+    if (!a0) throw new Error("expected actor 0");
+    a0.specialCooldown = 42;
+    a0.airJumpsRemaining = 1;
+    a0.dashCooldown = 7;
+    a0.stagger = 3.5;
+    a0.staggerDecayDelay = 5;
+    a0.ticksSinceGrounded = 9;
+    a0.airDashAvailable = false;
+    snap.rngState = 0x1234_abcd;
+    serverSim.restoreSnapshot(snap);
+
+    const auth = toAuthoritativeState(serverSim);
+    const serverActor = serverSim.takeSnapshot().actors[0];
+    if (!serverActor) throw new Error("expected server actor 0");
+
+    // Apply to a fresh client whose actor fields + rngState differ.
+    const clientSim = newSim();
+    clientSim.applyAuthoritativeState(auth);
+    const clientSnap = clientSim.takeSnapshot();
+    const clientActor = clientSnap.actors[0];
+    if (!clientActor) throw new Error("expected client actor 0");
+
+    expect(clientActor.specialCooldown).toBe(serverActor.specialCooldown);
+    expect(clientActor.airJumpsRemaining).toBe(serverActor.airJumpsRemaining);
+    expect(clientActor.dashCooldown).toBe(serverActor.dashCooldown);
+    expect(clientActor.stagger).toBe(serverActor.stagger);
+    expect(clientActor.staggerDecayDelay).toBe(serverActor.staggerDecayDelay);
+    expect(clientActor.ticksSinceGrounded).toBe(serverActor.ticksSinceGrounded);
+    expect(clientActor.airDashAvailable).toBe(serverActor.airDashAvailable);
+    expect(clientSnap.rngState).toBe(snap.rngState);
+  });
+
+  test("restores Bell Ring debounce and Golden Goal ramp state", () => {
+    const serverSim = newSim();
+    const snap = serverSim.takeSnapshot();
+    snap.bellRingArmed = snap.bellRingArmed.map((_, i) => i % 2 === 1);
+    snap.bellRingState = {
+      radiusBonus: 1.25,
+      rampTicks: 17,
+    };
+    serverSim.restoreSnapshot(snap);
+
+    const auth = toAuthoritativeState(serverSim);
+    const clientSim = newSim();
+    clientSim.applyAuthoritativeState(auth);
+    const clientSnap = clientSim.takeSnapshot();
+
+    expect(clientSnap.bellRingArmed).toEqual(snap.bellRingArmed);
+    expect(clientSnap.bellRingState).toEqual(snap.bellRingState);
+    expect(clientSim.getBellHitRadii()).toEqual(serverSim.getBellHitRadii());
+  });
+
   test("pending events are cleared after apply", () => {
     // Drain some events by running a match that generates them.
     const serverSim = newSim();

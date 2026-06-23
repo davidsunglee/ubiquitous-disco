@@ -1,11 +1,14 @@
 import { type Actor, controllable, createActor, serializeActor } from "./actor";
 import type { ArenaDef } from "./arena";
+import { CHARACTERS, type CharacterDef, resolveCharacter } from "./character";
 import type { SimConfig } from "./config";
 import { hashBytes } from "./hash";
 import type { InputFrame } from "./input";
 import { RapierWorld } from "./rapier-world";
+import { nextRng, seedRng } from "./rng";
 import { stepBall } from "./rules/ball";
 import {
+  advancePressureRamp,
   type BellRingState,
   createBellRingState,
   serializeBellRingState,
@@ -21,6 +24,11 @@ import {
   stepMatch,
 } from "./rules/match";
 import { stepMovement } from "./rules/movement";
+import {
+  type SpecialBlink,
+  stepSpecial,
+  tickSpecialCooldown,
+} from "./rules/special";
 import { stepStrike } from "./rules/strike";
 import { teamForPlayerSlot } from "./team";
 
@@ -44,6 +52,16 @@ export interface AuthPlayer {
   charge: number;
   knockdownTicks: number;
   invulnTicks: number;
+  // Remaining hashed JS actor fields, restored so a reconciled client matches the
+  // server's hashed actor state exactly (no post-snapshot prediction drift).
+  ticksSinceGrounded: number;
+  dashCooldown: number;
+  airDashAvailable: boolean;
+  stagger: number;
+  controlLock: boolean;
+  staggerDecayDelay: number;
+  specialCooldown: number;
+  airJumpsRemaining: number;
 }
 
 /**
@@ -60,6 +78,10 @@ export interface AuthoritativeState {
   ball: { x: number; y: number; vx: number; vy: number };
   rapierBytes: Uint8Array;
   match: MatchState;
+  /** Bell Ring debounce + Golden Goal pressure ramp state. */
+  bellRing: BellRingState;
+  /** Phase-3 (FLI-9): seeded PRNG state, restored so seeded Specials don't drift. */
+  rngState: number;
 }
 
 export interface RenderState {
@@ -95,7 +117,8 @@ export type SimEvent =
     }
   | {
       type: "knockdown";
-      slot: number;
+      slot: number; // the target slot that was knocked down
+      bySlot: number; // Phase 7: striker slot that dealt it (-1 if unattributed)
       tick: number;
     }
   | {
@@ -134,8 +157,12 @@ export interface SimSnapshot {
   rapierBytes: Uint8Array;
   actors: Actor[];
   bellRingArmed: boolean[];
+  /** Phase-6 (FLI-9): full bell ring state snapshot (includes radiusBonus + rampTicks). */
+  bellRingState?: { radiusBonus: number; rampTicks: number };
   tick: number;
   match: MatchState;
+  /** Phase-3 (FLI-9): seeded PRNG state for in-process rewind determinism. */
+  rngState: number;
 }
 
 export interface Simulation {
@@ -200,6 +227,14 @@ export interface Simulation {
    * The pending event queue is cleared (mirrors restoreSnapshot).
    */
   applyAuthoritativeState(s: AuthoritativeState): void;
+
+  /**
+   * Return the current effective hit-zone radius for each Bell (in arena order).
+   * During Golden Goal the base radius grows by radiusBonus; outside Golden Goal
+   * this equals the arena's static radius. Used by the renderer to draw the live
+   * grown hit-zone without coupling the render layer to bellRing internals.
+   */
+  getBellHitRadii(): number[];
 
   /**
    * Return all physics/scoring shapes in world units so the debug overlay can
@@ -271,11 +306,25 @@ export function toAuthoritativeState(sim: Simulation): AuthoritativeState {
         charge: p.charge,
         knockdownTicks: actor?.knockdownTicks ?? 0,
         invulnTicks: actor?.invulnTicks ?? 0,
+        ticksSinceGrounded: actor?.ticksSinceGrounded ?? 0,
+        dashCooldown: actor?.dashCooldown ?? 0,
+        airDashAvailable: actor?.airDashAvailable ?? true,
+        stagger: actor?.stagger ?? 0,
+        controlLock: actor?.controlLock ?? false,
+        staggerDecayDelay: actor?.staggerDecayDelay ?? 0,
+        specialCooldown: actor?.specialCooldown ?? 0,
+        airJumpsRemaining: actor?.airJumpsRemaining ?? 0,
       };
     }),
     ball: { x: render.ball.x, y: render.ball.y, ...ballVel },
     rapierBytes: snap.rapierBytes,
     match,
+    bellRing: {
+      armed: [...snap.bellRingArmed],
+      radiusBonus: snap.bellRingState?.radiusBonus ?? 0,
+      rampTicks: snap.bellRingState?.rampTicks ?? 0,
+    },
+    rngState: snap.rngState,
   };
 }
 
@@ -285,6 +334,8 @@ export function createSimulation(opts: {
   seed: number;
   /** Active Player Slots (mode template). Default 1v1 = [0, 2]. */
   activeSlots?: number[];
+  /** Per-slot character defs (indexed by slot). Default = Sifu for every active slot. */
+  characters?: CharacterDef[];
 }): Simulation {
   // Work on a mutable copy so updateConfig() can mutate freely without
   // touching the caller's original DEFAULT_CONFIG object.
@@ -293,6 +344,20 @@ export function createSimulation(opts: {
   const activeSlots = (opts.activeSlots ?? [0, 2])
     .slice()
     .sort((a, b) => a - b);
+  // Per-slot character DEFS retained so updateConfig() can re-resolve multipliers.
+  const characterDefs: CharacterDef[] = [];
+  for (const s of activeSlots) {
+    characterDefs[s] = opts.characters?.[s] ?? CHARACTERS.sifu;
+  }
+  let resolved: import("./character").ResolvedCharacter[] = [];
+  const resolveAll = () => {
+    resolved = [];
+    for (const s of activeSlots) {
+      const def = characterDefs[s] ?? CHARACTERS.sifu;
+      resolved[s] = resolveCharacter(def, config);
+    }
+  };
+  resolveAll();
   const rw = new RapierWorld(config, arena, activeSlots);
   // Sparse actors keyed by slot id. Team 0 (slots 0/1) faces right (+1);
   // Team 1 (slots 2/3) faces left (-1) toward the centre.
@@ -300,9 +365,12 @@ export function createSimulation(opts: {
   for (const s of activeSlots) {
     actors[s] = createActor(
       teamForPlayerSlot(s as 0 | 1 | 2 | 3) === 0 ? 1 : -1,
+      resolved[s],
     );
   }
-  // seed reserved for Phase 3+ seeded RNG; deterministic w/o RNG this phase.
+  // Phase-3 (FLI-9): sim-wide PRNG state, seeded from opts.seed.
+  // Serialized + hashed + restored so rewind/replay stay deterministic.
+  let rngState = seedRng(opts.seed);
 
   // Authoritative tick counter (incremented per step) and the drainable event
   // queue. The Bell Ring debounce state persists across ticks and is hashed.
@@ -319,6 +387,15 @@ export function createSimulation(opts: {
       if (isLivePhase(match) && match.pauseTicks === 0) {
         // ── Gameplay rules run ONLY in live phases ──
         const blinks: (DashBlink | null)[] = [];
+
+        // Reset the per-tick hit-attribution before any strikes resolve, so a
+        // knockdown is only ever credited to a striker who hit THIS tick. Enforces
+        // the "transient/per-tick" contract for lastHitBy (Phase 7 friendly-fire
+        // telemetry) instead of relying on it being overwritten every tick.
+        // Not serialized / not hashed — hashState is unaffected.
+        for (const a of actors) {
+          if (a) a.lastHitBy = -1;
+        }
 
         // Snapshot start-of-tick state for each slot before any strikes resolve.
         // This ensures:
@@ -343,9 +420,34 @@ export function createSimulation(opts: {
           const input = inputs[s];
           if (!actor || !input) continue;
           blinks[s] = stepDash(actor, input, config);
-          // Only initiate a strike if the actor was controllable at tick START.
+          // Drain the Special cooldown every tick, even while knocked down, so it
+          // keeps recovering during knockdown (outside the controllable gate).
+          tickSpecialCooldown(actor);
+          // Only initiate a strike/special if the actor was controllable at tick START.
           if (wasControllable[s]) {
             stepStrike(actor, input, config, rw, s, actors);
+            const sb: SpecialBlink | null = stepSpecial(
+              actor,
+              input,
+              config,
+              rw,
+              s,
+              actors,
+              () => {
+                const r = nextRng(rngState);
+                rngState = r.state;
+                return r.value;
+              },
+            );
+            // Combine blink-style Special displacement with any dash blink.
+            // (Same-tick dash+special is rare but we sum the displacements so the
+            // movement sweep clamps both against geometry in one authoritative move.)
+            if (sb) {
+              const existing = blinks[s];
+              blinks[s] = existing
+                ? { x: existing.x + sb.x, y: existing.y + sb.y }
+                : sb;
+            }
           } else {
             // Clear charge so it doesn't linger while knocked down.
             actor.charge = 0;
@@ -369,7 +471,12 @@ export function createSimulation(opts: {
             });
           }
           if (newlyDown) {
-            events.push({ type: "knockdown", slot: t, tick });
+            events.push({
+              type: "knockdown",
+              slot: t,
+              bySlot: a.lastHitBy,
+              tick,
+            });
           }
         }
 
@@ -416,6 +523,8 @@ export function createSimulation(opts: {
         }
         // Bell Ring detection runs after the world step, when the ball position is
         // current for this tick.
+        // Phase-6 (FLI-9): advance the overtime pressure ramp during Golden Goal.
+        if (match.phase === "goldenGoal") advancePressureRamp(bellRing, config);
         const ball = rw.ballPos();
         const hits = stepBellRing(
           arena,
@@ -462,10 +571,14 @@ export function createSimulation(opts: {
           // Re-create the actor to clear all velocity/charge state on respawn.
           actors[s] = createActor(
             teamForPlayerSlot(s as 0 | 1 | 2 | 3) === 0 ? 1 : -1,
+            resolved[s],
           );
         }
         // Re-arm bells after respawn so the next contact can ring.
         bellRing = createBellRingState(arena);
+        // Phase-3 (FLI-9): re-seed the PRNG on round reset so each round
+        // starts from the same deterministic base (seed-independent across rounds).
+        rngState = seedRng(opts.seed);
       }
 
       // Match lifecycle advances EVERY tick (even frozen ones); tick always increments.
@@ -496,23 +609,31 @@ export function createSimulation(opts: {
       return events.splice(0, events.length);
     },
     // Composite hash: Rapier snapshot bytes ‖ serialized actors in activeSlots order
-    // ‖ serialized Bell Ring debounce state ‖ serialized match state. Fixed concatenation
-    // order — any change in field count or type shape must be reflected here.
-    // Note: iterate activeSlots (not the sparse actors[] array) to avoid undefined holes
-    // in the spread when slots are non-contiguous (e.g. 1v1 template [0, 2]).
+    // ‖ serialized Bell Ring debounce state ‖ serialized match state ‖ rngState (Phase 3).
+    // Fixed concatenation order — any change in field count or type shape must be reflected
+    // here. Note: iterate activeSlots (not the sparse actors[] array) to avoid undefined
+    // holes in the spread when slots are non-contiguous (e.g. 1v1 template [0, 2]).
     hashState() {
+      // Serialize rngState as a 4-byte Uint32 (big-endian).
+      const rngBuf = new ArrayBuffer(4);
+      new DataView(rngBuf).setUint32(0, rngState >>> 0);
       return hashBytes(
         rw.takeSnapshot(),
         // biome-ignore lint/style/noNonNullAssertion: actors[s] is always defined for s in activeSlots
         ...activeSlots.map((s) => serializeActor(actors[s]!)),
         serializeBellRingState(bellRing),
         serializeMatchState(match),
+        new Uint8Array(rngBuf), // Phase-3: sim-wide PRNG state appended last
       );
     },
 
     getMatchState(): MatchState {
       // Return a shallow copy with a cloned scores array to prevent external mutation.
       return { ...match, scores: [...match.scores] };
+    },
+
+    getBellHitRadii(): number[] {
+      return arena.bells.map((b) => b.hitZone.radius + bellRing.radiusBonus);
     },
 
     getBallVel(): { vx: number; vy: number } {
@@ -567,14 +688,28 @@ export function createSimulation(opts: {
         a.charge = p.charge;
         a.knockdownTicks = p.knockdownTicks;
         a.invulnTicks = p.invulnTicks;
+        a.ticksSinceGrounded = p.ticksSinceGrounded;
+        a.dashCooldown = p.dashCooldown;
+        a.airDashAvailable = p.airDashAvailable;
+        a.stagger = p.stagger;
+        a.controlLock = p.controlLock;
+        a.staggerDecayDelay = p.staggerDecayDelay;
+        a.specialCooldown = p.specialCooldown;
+        a.airJumpsRemaining = p.airJumpsRemaining;
         // Sync kinematic player position (restoreSnapshot already did this via
         // the Rapier snapshot, but write explicitly for clarity and safety).
         rw.setPlayerPosition(i, p.x, p.y);
       }
 
-      // 3. Replace match state and tick counter.
+      // 3. Replace match state, Bell Ring state, tick counter, and seeded PRNG state.
       match = { ...s.match, scores: [...s.match.scores] };
+      bellRing = {
+        armed: [...s.bellRing.armed],
+        radiusBonus: s.bellRing.radiusBonus,
+        rampTicks: s.bellRing.rampTicks,
+      };
       tick = s.tick;
+      rngState = s.rngState;
 
       // 4. Clear any pending events (matches restoreSnapshot behavior).
       events.splice(0, events.length);
@@ -650,9 +785,16 @@ export function createSimulation(opts: {
         // Deep-copy each actor so the snapshot is independent of future mutations.
         actors: actors.map((a) => ({ ...a })),
         bellRingArmed: [...bellRing.armed],
+        // Phase-6 (FLI-9): capture full bell ring state for accurate rewind.
+        bellRingState: {
+          radiusBonus: bellRing.radiusBonus,
+          rampTicks: bellRing.rampTicks,
+        },
         tick,
         // Deep-copy match state (scores array must be copied too).
         match: { ...match, scores: [...match.scores] },
+        // Phase-3 (FLI-9): capture current PRNG state for rewind determinism.
+        rngState,
       };
     },
 
@@ -661,12 +803,18 @@ export function createSimulation(opts: {
       rw.restoreSnapshot(snap.rapierBytes);
       // Restore JS-side actors.
       actors = snap.actors.map((a) => ({ ...a }));
-      // Restore Bell Ring debounce state.
-      bellRing = { armed: [...snap.bellRingArmed] };
+      // Restore Bell Ring debounce state (including Phase-6 overtime ramp fields).
+      bellRing = {
+        armed: [...snap.bellRingArmed],
+        radiusBonus: snap.bellRingState?.radiusBonus ?? 0,
+        rampTicks: snap.bellRingState?.rampTicks ?? 0,
+      };
       // Restore tick counter.
       tick = snap.tick;
       // Restore match state.
       match = { ...snap.match, scores: [...snap.match.scores] };
+      // Phase-3 (FLI-9): restore PRNG state so rewind stays deterministic.
+      rngState = snap.rngState;
       // Clear any pending events that were queued after the snapshot was taken.
       events.splice(0, events.length);
     },
@@ -677,6 +825,14 @@ export function createSimulation(opts: {
       // Physics-construction fields (gravity, tickHz, body sizes) are silently
       // ignored because they would require re-building the Rapier world.
       config = { ...config, ...patch };
+      // Re-resolve per-actor stats so HUD sliders still scale the baseline
+      // (multipliers stay constant). Reassign the live actors' character references.
+      resolveAll();
+      for (const s of activeSlots) {
+        const a = actors[s];
+        const r = resolved[s];
+        if (a && r) a.character = r;
+      }
     },
   };
 }

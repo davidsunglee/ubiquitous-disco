@@ -29,6 +29,8 @@ test("RoomReady round-trips (slot 0, not full, 1v1 template)", () => {
     slot: 0,
     full: false,
     slots: [0, 2],
+    characters: ["sifu", "sifu"],
+    arenaId: "flat-dojo",
   };
   expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
 });
@@ -39,6 +41,8 @@ test("RoomReady round-trips (slot 2, full, 1v1 template)", () => {
     slot: 2,
     full: true,
     slots: [0, 2],
+    characters: ["vipra", "panda"],
+    arenaId: "flat-dojo",
   };
   expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
 });
@@ -49,8 +53,24 @@ test("RoomReady round-trips (slot 1, full, 2v2 template)", () => {
     slot: 1,
     full: true,
     slots: [0, 1, 2, 3],
+    characters: ["sifu", "monkey-king", "old-master", "drunken-boxer"],
+    arenaId: "pillared-temple",
   };
   expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
+});
+
+test("RoomReady preserves per-slot characterIds after round-trip", () => {
+  const m: RoomReady = {
+    type: "RoomReady",
+    slot: 0,
+    full: true,
+    slots: [0, 2],
+    characters: ["panda", "vipra"],
+    arenaId: "twin-ledge",
+  };
+  const decoded = deserializeRoomReady(serializeRoomReady(m));
+  expect(decoded.characters).toEqual(["panda", "vipra"]);
+  expect(decoded.arenaId).toBe("twin-ledge");
 });
 
 // ── PlayerInput ───────────────────────────────────────────────────────────────
@@ -106,6 +126,14 @@ function makeSnapshot(): WorldSnapshot {
         charge: 0,
         knockdownTicks: 0,
         invulnTicks: 0,
+        ticksSinceGrounded: 0,
+        dashCooldown: 0,
+        airDashAvailable: true,
+        stagger: 0,
+        controlLock: false,
+        staggerDecayDelay: 0,
+        specialCooldown: 0,
+        airJumpsRemaining: 1,
       },
       {
         x: -1.5,
@@ -117,6 +145,14 @@ function makeSnapshot(): WorldSnapshot {
         charge: 5,
         knockdownTicks: 0,
         invulnTicks: 3,
+        ticksSinceGrounded: 4,
+        dashCooldown: 7,
+        airDashAvailable: false,
+        stagger: 2.5,
+        controlLock: false,
+        staggerDecayDelay: 5,
+        specialCooldown: 42,
+        airJumpsRemaining: 0,
       },
     ],
     ball: { x: 0, y: 3, vx: 4, vy: 8 },
@@ -130,6 +166,12 @@ function makeSnapshot(): WorldSnapshot {
       winner: -1,
       timerExpired: false,
     },
+    bellRing: {
+      armed: [true, false],
+      radiusBonus: 0.25,
+      rampTicks: 7,
+    },
+    rngState: 0x1234_abcd,
     lastAckedSeq: [5, 0, 4, 0],
   };
 }

@@ -17,17 +17,25 @@
 import { beforeAll, expect, test } from "vitest";
 import {
   type BotWorldView,
+  CHARACTERS,
+  type CharacterDef,
+  type CharacterId,
   createReplay,
   createSimulation,
   DEFAULT_CONFIG,
+  deserializeReplay,
   EMPTY_INPUT,
   FLAT_DOJO,
   type InputFrame,
   initSim,
+  PILLARED_TEMPLE,
   playReplay,
   recordFrame,
   samplePracticeBotInput,
+  serializeReplay,
+  TWIN_LEDGE,
 } from "../index";
+import { COMPACT_DOJO } from "./fixtures/compactArena";
 
 beforeAll(async () => {
   await initSim();
@@ -107,6 +115,28 @@ test("playReplay() called twice on the same ReplayData returns equal hashes", ()
   expect(hash1).toBe(hash2);
 });
 
+test("playReplay() survives a serialize→deserialize round-trip of sparse rows", () => {
+  // The hotseat UI captures SPARSE rows (slot 0 and slot 2 set, index 1 a hole),
+  // then serializeReplay() → JSON.stringify() turns the hole into an explicit
+  // `null` before the Replay button feeds it back through deserializeReplay() +
+  // playReplay(). anyStartPressed() must tolerate that null instead of throwing.
+  const replay = createReplay(9999);
+  const sim = newSim();
+  for (const row of scriptedFrameList()) {
+    recordFrame(replay, row);
+    sim.step(row);
+  }
+  const liveHash = sim.hashState();
+
+  // Round-trip through JSON exactly like the capture-download / replay path.
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  // The serialized rows now carry explicit nulls where the sparse holes were.
+  expect(roundTripped.inputFrames[0]?.[1]).toBeNull();
+
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
 test("playReplay() hash equals the live capture session's final hashState()", () => {
   const replay = createReplay(9999);
   const sim = newSim();
@@ -120,6 +150,29 @@ test("playReplay() hash equals the live capture session's final hashState()", ()
   const liveHash = sim.hashState();
   const replayHash = playReplay(replay);
   expect(replayHash).toBe(liveHash);
+});
+
+test("playReplay() reproduces the live hash on the new arenas (resolves arenaId)", () => {
+  // arenaId is load-bearing: playReplay must resolve it and build the sim on the
+  // captured arena, not hardcode flat-dojo. Round-trip on both new arenas.
+  for (const arena of [PILLARED_TEMPLE, TWIN_LEDGE]) {
+    const replay = createReplay(9999, arena.id);
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena,
+      seed: 9999,
+    });
+    const frames = scriptedFrameList();
+
+    for (const row of frames) {
+      recordFrame(replay, row);
+      sim.step(row);
+    }
+
+    const liveHash = sim.hashState();
+    expect(() => playReplay(replay)).not.toThrow();
+    expect(playReplay(replay)).toBe(liveHash);
+  }
 });
 
 test("two independent live runs with the same frames produce the same hash", () => {
@@ -379,6 +432,584 @@ test("replay with Practice Bot slot: recorded frames replay to the same hash as 
   });
   for (const row of replay.inputFrames) replaySim.step(row);
   expect(replaySim.hashState()).toBe(liveHash);
+});
+
+// ── Phase 2 (FLI-9): Panda-Special replay determinism ───────────────────────
+
+/**
+ * Build a frame list where slot 0 (Panda) fires its Ground Pound Special once,
+ * then both players idle. This exercises the specialCooldown in the hash path.
+ */
+function buildPandaSpecialFrames(): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start the match.
+  frames.push(
+    row(
+      frame({ jumpPressed: true, jumpHeld: true }),
+      frame({ jumpPressed: true, jumpHeld: true }),
+    ),
+  );
+  // Settle for 20 ticks.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk toward the ball.
+  for (let i = 0; i < 10; i++) frames.push(row(frame({ moveX: 1 })));
+  // Fire Special.
+  frames.push(row(frame({ specialPressed: true, specialHeld: true })));
+  // Idle for 40 ticks.
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
+  return frames;
+}
+
+test("Panda-Special match: two sims with the same characters + frames produce the same hash", () => {
+  const pandaDef = CHARACTERS.panda;
+  const frames = buildPandaSpecialFrames();
+
+  const run = () => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 6161,
+      characters: [pandaDef],
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Panda-Special match: recorded replay plays back to the same hash as the live session", () => {
+  const pandaDef = CHARACTERS.panda;
+  const frames = buildPandaSpecialFrames();
+
+  const replay = createReplay(6161);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 6161,
+    characters: [pandaDef],
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+
+  const liveHash = liveSim.hashState();
+
+  // Replay using a fresh sim with the same character roster.
+  const replaySim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed: 6161,
+    characters: [pandaDef],
+  });
+  for (const row of replay.inputFrames) replaySim.step(row);
+  expect(replaySim.hashState()).toBe(liveHash);
+});
+
+// ── Phase 3 (FLI-9): Drunken Boxer replay determinism ───────────────────────
+
+/**
+ * Build a frame list where slot 0 (Drunken Boxer) fires Stagger Stumble once.
+ * The seeded-random lunge + optional ball redirect must replay bit-identically
+ * through playReplay (which uses the characterIds from ReplayData).
+ */
+function buildDrunkenBoxerSpecialFrames(): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start the match.
+  frames.push(
+    row(
+      frame({ jumpPressed: true, jumpHeld: true }),
+      frame({ jumpPressed: true, jumpHeld: true }),
+    ),
+  );
+  // Settle.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk toward ball.
+  for (let i = 0; i < 10; i++) frames.push(row(frame({ moveX: 1 })));
+  // Fire Stagger Stumble.
+  frames.push(row(frame({ specialPressed: true, specialHeld: true })));
+  // Settle.
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
+  return frames;
+}
+
+test("Drunken Boxer Stagger Stumble: two sims with the same seed + characters produce the same hash", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerSpecialFrames();
+
+  const run = () => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 8080,
+      characters: [drunkenBoxerDef],
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Drunken Boxer Stagger Stumble: playReplay with characterIds replays bit-identically", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerSpecialFrames();
+  const seed = 8080;
+
+  // characterIds array: slot 0 = drunken-boxer, slot 2 = sifu (default).
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "drunken-boxer";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters: [drunkenBoxerDef],
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+
+  const liveHash = liveSim.hashState();
+  const replayHash = playReplay(replay);
+  expect(replayHash).toBe(liveHash);
+});
+
+test("Drunken Boxer Stagger Stumble: playReplay called twice produces the same hash", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerSpecialFrames();
+  const seed = 8080;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "drunken-boxer";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters: [drunkenBoxerDef],
+  });
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+
+  const hash1 = playReplay(replay);
+  const hash2 = playReplay(replay);
+  expect(hash1).toBe(hash2);
+});
+
+test("Drunken Boxer Stagger Stumble: replays bit-identically through a serialize→deserialize round-trip", () => {
+  // This is the exact path the hotseat Capture-download / Replay button uses:
+  // SPARSE rows AND SPARSE characterIds (slot 0 + slot 2 set, index 1 a hole),
+  // JSON-serialized then re-parsed before playReplay(). JSON.stringify
+  // materializes the holes as explicit `null`, which both playReplay's
+  // characterIds map and stepMatch's anyStartPressed must tolerate.
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerSpecialFrames();
+  const seed = 8080;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "drunken-boxer";
+  characterIds[2] = "drunken-boxer";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const characters: CharacterDef[] = [];
+  characters[0] = drunkenBoxerDef;
+  characters[2] = drunkenBoxerDef;
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters,
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  // Round-trip through JSON exactly like Capture-download → Replay button.
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  // Sparse holes at index 1 are now explicit nulls in both arrays.
+  expect(roundTripped.characterIds?.[1]).toBeNull();
+  expect(roundTripped.inputFrames[0]?.[1]).toBeNull();
+
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
+// ── Phase 4 (FLI-9): replay determinism for remaining four Specials ──────────
+
+/**
+ * Generic helper: build frames where slot 0 (given character) fires Special once,
+ * then idles. Returns a deterministic replay for any of the six characters.
+ */
+function buildSpecialFrames(walkTicks = 10): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start.
+  frames.push(
+    row(
+      frame({ jumpPressed: true, jumpHeld: true }),
+      frame({ jumpPressed: true, jumpHeld: true }),
+    ),
+  );
+  // Settle.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk.
+  for (let i = 0; i < walkTicks; i++) frames.push(row(frame({ moveX: 1 })));
+  // Fire Special.
+  frames.push(row(frame({ specialPressed: true, specialHeld: true })));
+  // Idle.
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
+  return frames;
+}
+
+test("Phase 4: Sifu Palm Burst replay is deterministic (two sims, same hash)", () => {
+  const sifuDef = CHARACTERS.sifu;
+  const frames = buildSpecialFrames();
+
+  const run = () => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 1111,
+      characters: [sifuDef],
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 4: Sifu Palm Burst replay round-trips through serialize→deserialize", () => {
+  const sifuDef = CHARACTERS.sifu;
+  const frames = buildSpecialFrames();
+  const seed = 1112;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "sifu";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters: [sifuDef],
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
+test("Phase 4: Vipra Phantom Rush replay is deterministic (two sims, same hash)", () => {
+  const vipraDef = CHARACTERS.vipra;
+  const frames = buildSpecialFrames();
+
+  const run = () => {
+    const characters: CharacterDef[] = [];
+    characters[0] = vipraDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 2111,
+      characters,
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 4: Vipra Phantom Rush replay round-trips through serialize→deserialize", () => {
+  const vipraDef = CHARACTERS.vipra;
+  const frames = buildSpecialFrames();
+  const seed = 2112;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "vipra";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const characters: CharacterDef[] = [];
+  characters[0] = vipraDef;
+  characters[2] = CHARACTERS.sifu;
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters,
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
+test("Phase 4: Monkey King replay is deterministic (two sims, same hash)", () => {
+  const mkDef = CHARACTERS["monkey-king"];
+  const frames = buildSpecialFrames();
+
+  const run = () => {
+    const characters: CharacterDef[] = [];
+    characters[0] = mkDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 3111,
+      characters,
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 4: Monkey King replay round-trips through serialize→deserialize", () => {
+  const mkDef = CHARACTERS["monkey-king"];
+  const frames = buildSpecialFrames();
+  const seed = 3112;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "monkey-king";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const characters: CharacterDef[] = [];
+  characters[0] = mkDef;
+  characters[2] = CHARACTERS.sifu;
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters,
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
+test("Phase 4: Old Master Repulse Field replay is deterministic (two sims, same hash)", () => {
+  const omDef = CHARACTERS["old-master"];
+  const frames = buildSpecialFrames();
+
+  const run = () => {
+    const characters: CharacterDef[] = [];
+    characters[0] = omDef;
+    characters[2] = CHARACTERS.sifu;
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 4111,
+      characters,
+    });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 4: Old Master Repulse Field replay round-trips through serialize→deserialize", () => {
+  const omDef = CHARACTERS["old-master"];
+  const frames = buildSpecialFrames();
+  const seed = 4112;
+
+  const characterIds: CharacterId[] = [];
+  characterIds[0] = "old-master";
+  characterIds[2] = "sifu";
+
+  const replay = createReplay(seed, FLAT_DOJO.id, "default", characterIds);
+  const characters: CharacterDef[] = [];
+  characters[0] = omDef;
+  characters[2] = CHARACTERS.sifu;
+  const liveSim = createSimulation({
+    config: DEFAULT_CONFIG,
+    arena: FLAT_DOJO,
+    seed,
+    characters,
+  });
+
+  for (const row of frames) {
+    recordFrame(replay, row);
+    liveSim.step(row);
+  }
+  const liveHash = liveSim.hashState();
+
+  const roundTripped = deserializeReplay(serializeReplay(replay));
+  expect(() => playReplay(roundTripped)).not.toThrow();
+  expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
+// ── Phase 6 (FLI-9): Overtime Pressure Ramp replay determinism ──────────────
+
+/**
+ * A session that drives the sim through Golden Goal with a fast ramp config so
+ * radiusBonus advances within the test frame count. Both players are idle so
+ * the match goes to Golden Goal at timer expiry (0-0 tie).
+ * The captured radiusBonus + rampTicks must replay bit-identically.
+ */
+function buildGoldenGoalRampFrames(): {
+  frames: InputFrame[][];
+  config: typeof DEFAULT_CONFIG;
+} {
+  const fastConfig = {
+    ...DEFAULT_CONFIG,
+    match: {
+      ...DEFAULT_CONFIG.match,
+      lengthTicks: 5,
+      scoringPauseTicks: 0,
+      resetTicks: 0,
+      goldenGoal: true,
+    },
+    overtime: { rampIntervalTicks: 3, rampStepRadius: 0.4, rampMaxBonus: 1.6 },
+  };
+
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start.
+  frames.push(row(frame({ jumpPressed: true, jumpHeld: true })));
+  // Idle for 50 ticks (covers timer expiry + several ramp intervals).
+  for (let i = 0; i < 50; i++) frames.push(row(EMPTY_INPUT));
+
+  return { frames, config: fastConfig };
+}
+
+test("Phase 6: overtime ramp — two independent sims produce the same hash", () => {
+  const { frames, config } = buildGoldenGoalRampFrames();
+
+  const run = () => {
+    const sim = createSimulation({ config, arena: COMPACT_DOJO, seed: 7070 });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 6: overtime ramp — live hash matches replay (two fresh sims, same frames)", () => {
+  const { frames, config } = buildGoldenGoalRampFrames();
+
+  // Live run.
+  const liveSim = createSimulation({ config, arena: COMPACT_DOJO, seed: 7071 });
+  for (const row of frames) liveSim.step(row);
+  const liveHash = liveSim.hashState();
+
+  // Replay run (separate sim, same frames in order).
+  const replaySim = createSimulation({
+    config,
+    arena: COMPACT_DOJO,
+    seed: 7071,
+  });
+  for (const row of frames) replaySim.step(row);
+  expect(replaySim.hashState()).toBe(liveHash);
+});
+
+test("Phase 6: overtime ramp grows above base radius during Golden Goal", () => {
+  const { frames, config } = buildGoldenGoalRampFrames();
+  const sim = createSimulation({ config, arena: COMPACT_DOJO, seed: 7072 });
+  for (const row of frames) sim.step(row);
+
+  // After running through the frames the sim should be in Golden Goal
+  // with at least some ramp growth (rampIntervalTicks=3, 50 idle ticks).
+  expect(sim.getMatchState().phase).toBe("goldenGoal");
+  const radii = sim.getBellHitRadii();
+  const baseRadius = COMPACT_DOJO.bells[0]?.hitZone.radius ?? 0.8;
+  for (const r of radii) {
+    expect(r).toBeGreaterThan(baseRadius);
+  }
+});
+
+test("Phase 6: overtime ramp cap is respected (never exceeds rampMaxBonus)", () => {
+  const { config } = buildGoldenGoalRampFrames();
+
+  // Very long session — many ramp intervals — cap must hold.
+  const longFrames: InputFrame[][] = [];
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+  longFrames.push(row(frame({ jumpPressed: true, jumpHeld: true })));
+  for (let i = 0; i < 500; i++) longFrames.push(row(EMPTY_INPUT));
+
+  const sim = createSimulation({ config, arena: COMPACT_DOJO, seed: 7073 });
+  for (const row of longFrames) sim.step(row);
+
+  const radii = sim.getBellHitRadii();
+  const baseRadius = COMPACT_DOJO.bells[0]?.hitZone.radius ?? 0.8;
+  for (const r of radii) {
+    expect(r).toBeLessThanOrEqual(
+      baseRadius + config.overtime.rampMaxBonus + 1e-9,
+    );
+  }
 });
 
 // ── getDebugColliders() returns expected shapes ──────────────────────────────

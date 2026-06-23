@@ -1,8 +1,8 @@
 import { beforeAll, expect, test } from "vitest";
-import { FLAT_DOJO } from "../arena";
 import { DEFAULT_CONFIG } from "../config";
 import { initSim } from "../rapier";
 import { RapierWorld } from "../rapier-world";
+import { COMPACT_DOJO } from "./fixtures/compactArena";
 
 beforeAll(async () => {
   await initSim();
@@ -15,8 +15,9 @@ beforeAll(async () => {
 // the ball inside the arena (right wall inner face at x = 11.5; ball radius 0.3
 // → center stays ≤ ~11.2, modulo a little restitution overlap).
 test("a hard-struck ball does not tunnel through the wall (CCD)", () => {
-  // FLAT_DOJO already has playerSpawns, so this uses the updated arena directly.
-  const rw = new RapierWorld(DEFAULT_CONFIG, FLAT_DOJO);
+  // Compact fixture (wall inner face at x = 11.5) so the ball reaches the wall
+  // within the frame budget — production arenas are far wider.
+  const rw = new RapierWorld(DEFAULT_CONFIG, COMPACT_DOJO);
   // Worst-case burst: clamped maxSpeed plus a full strike impulse toward the wall.
   const burst = DEFAULT_CONFIG.ball.maxSpeed + 32;
   rw.setBallVel(burst, 0); // straight at the right wall

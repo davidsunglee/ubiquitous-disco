@@ -3,19 +3,27 @@ import {
   DEFAULT_RECONNECT_CONFIG,
   type MatchClosed,
   type MatchManifest,
+  type MatchSummary,
   type PlayerInput,
   type PlayerSlotId,
   uint8ArrayToBase64,
   type WorldSnapshot,
 } from "@bb/protocol";
 import {
+  type ArenaDef,
   type BotWorldView,
+  CHARACTERS,
+  type CharacterDef,
+  type ClimbWaypoint,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
   FLAT_DOJO,
   type InputFrame,
+  resolveArena,
+  resolveCharacter,
   type SimConfig,
+  teamForPlayerSlot,
   toAuthoritativeState,
 } from "@bb/sim";
 import { type Client, Room } from "@colyseus/core";
@@ -65,6 +73,8 @@ export class MatchRoom extends Room {
 
   private slotOf = new Map<string, PlayerSlotId>();
   private activeSlots: PlayerSlotId[] = MODE_2V2;
+  /** The resolved arena for the current match (set in configureFromManifest). */
+  private activeArena: ArenaDef = FLAT_DOJO;
   /** Set to true once disconnect() has been called so double-dispose is avoided. */
   private roomDisposed = false;
 
@@ -122,6 +132,23 @@ export class MatchRoom extends Room {
   >();
 
   /**
+   * Phase 7 (FLI-9): balance telemetry counters, drained from SimEvents each
+   * tick. Aggregated outside the deterministic sim core — no hash impact.
+   */
+  private tele = {
+    bellRings: 0,
+    knockdowns: 0,
+    /** FF knockdowns: attributed via the knockdown event's striker slot (bySlot). */
+    friendlyFireKnockdowns: 0,
+    /** Tick at which the first "playing" phase began (set when phase→playing). */
+    startTick: 0,
+    /** Tick at which matchEnd was observed. */
+    endTick: 0,
+    /** Number of disconnect events observed (slot reservations). */
+    disconnects: 0,
+  };
+
+  /**
    * onCreate runs before any onJoin. The sim + input sources are NOT built here
    * — they depend on the launch manifest, which is only known after the first
    * client's claim succeeds (configureFromManifest). The simulation interval is
@@ -170,6 +197,9 @@ export class MatchRoom extends Room {
     tick: number;
     ball: { x: number; y: number; vx: number; vy: number };
     selves: (BotWorldView["self"] | undefined)[];
+    arena: { leftBellX: number; rightBellX: number; wallInnerX: number };
+    climbLeft?: ClimbWaypoint[];
+    climbRight?: ClimbWaypoint[];
   } {
     const render = this.sim.getRenderState();
     const ballVel = this.sim.getBallVel();
@@ -185,6 +215,23 @@ export class MatchRoom extends Room {
         };
       }
     }
+
+    // Derive arena geometry for bots from the resolved ArenaDef.
+    // Bells: leftBellX = first bell with id "left", rightBellX = first with id "right".
+    const leftBell = this.activeArena.bells.find((b) => b.id === "left");
+    const rightBell = this.activeArena.bells.find((b) => b.id === "right");
+    const leftBellX = leftBell?.hitZone.x ?? -9;
+    const rightBellX = rightBell?.hitZone.x ?? 9;
+    // wallInnerX: the inner face of the right side wall, authored on the ArenaDef.
+    // Falls back to deriving the rightmost collider face for arenas without
+    // authored bounds (legacy/test fixtures).
+    const wallInnerX =
+      this.activeArena.bounds?.rightWallInnerX ??
+      this.activeArena.colliders.reduce(
+        (max, c) => (c.x > 0 ? Math.max(max, c.x - c.halfW) : max),
+        0,
+      );
+
     return {
       tick: this.serverTick,
       ball: {
@@ -194,6 +241,9 @@ export class MatchRoom extends Room {
         vy: ballVel.vy,
       },
       selves,
+      arena: { leftBellX, rightBellX, wallInnerX },
+      climbLeft: this.activeArena.botClimb?.left,
+      climbRight: this.activeArena.botClimb?.right,
     };
   }
 
@@ -218,11 +268,23 @@ export class MatchRoom extends Room {
       },
     };
 
+    // Resolve per-slot character defs (indexed by slot) from the frozen manifest.
+    const characters: CharacterDef[] = [];
+    for (const s of manifest.slots) {
+      // Fall back to Sifu for an unknown characterId (schema drift / future id)
+      // so the match degrades instead of crashing — mirrors the client guard.
+      characters[s.slotId] = CHARACTERS[s.characterId] ?? CHARACTERS.sifu;
+    }
+
+    // Resolve the arena from the manifest settings (falls back to FLAT_DOJO).
+    this.activeArena = resolveArena(manifest.settings.arenaId);
+
     this.sim = createSimulation({
       config: this.simConfig,
-      arena: FLAT_DOJO,
+      arena: this.activeArena,
       seed: 1234,
       activeSlots: this.activeSlots,
+      characters,
     });
 
     const botSlots = new Set<PlayerSlotId>(
@@ -230,7 +292,9 @@ export class MatchRoom extends Room {
     );
     for (const s of this.activeSlots) {
       if (botSlots.has(s)) {
-        this.sources.set(s, botSource(s, this.simConfig));
+        // biome-ignore lint/style/noNonNullAssertion: botSlots is derived from manifest.slots which always has a character for each slot
+        const rc = resolveCharacter(characters[s]!, this.simConfig);
+        this.sources.set(s, botSource(s, this.simConfig, rc.stats));
       } else {
         const buf = new InputBuffer();
         this.buffers.set(s, buf);
@@ -258,11 +322,14 @@ export class MatchRoom extends Room {
       const src = this.sources.get(s);
       if (!src) continue;
       const self = worldView.selves[s];
+      const attackingClimb =
+        teamForPlayerSlot(s) === 0 ? worldView.climbRight : worldView.climbLeft;
       const view: BotWorldView = {
         tick: worldView.tick,
         ball: worldView.ball,
         // Provide a neutral self-view if the slot somehow has no render state.
         self: self ?? { x: 0, y: 0, facing: 1, grounded: false },
+        arena: { ...worldView.arena, climb: attackingClimb },
       };
       const taken = src.take(view);
       inputRow[s] = taken.input ?? EMPTY_INPUT;
@@ -270,6 +337,32 @@ export class MatchRoom extends Room {
     }
     this.sim.step(inputRow);
     this.serverTick += 1;
+
+    // Phase 7 (FLI-9): drain SimEvents and aggregate balance telemetry.
+    // The server did not drain events before this phase — only the client did.
+    for (const ev of this.sim.drainEvents()) {
+      if (ev.type === "bellRing") {
+        this.tele.bellRings += 1;
+      } else if (ev.type === "knockdown") {
+        this.tele.knockdowns += 1;
+        // Friendly-fire attribution (Phase 7, §7.2 escalation): the knockdown event
+        // carries the striker slot (`bySlot`, -1 if unattributed). A knockdown is
+        // friendly fire when the striker and target are on the same team. Event-only
+        // attribution — no hashed-state change.
+        if (
+          ev.bySlot >= 0 &&
+          teamForPlayerSlot(ev.bySlot as PlayerSlotId) ===
+            teamForPlayerSlot(ev.slot as PlayerSlotId)
+        ) {
+          this.tele.friendlyFireKnockdowns += 1;
+        }
+      } else if (ev.type === "matchPhase" && ev.phase === "playing") {
+        this.tele.startTick = this.serverTick;
+      } else if (ev.type === "matchEnd") {
+        this.tele.endTick = this.serverTick;
+        this.emitMatchSummary(ev.winner, ev.scores);
+      }
+    }
 
     if (this.serverTick % SNAPSHOT_EVERY === 0) {
       const auth = toAuthoritativeState(this.sim);
@@ -284,6 +377,8 @@ export class MatchRoom extends Room {
         ball: auth.ball,
         rapierBytesB64,
         match: auth.match,
+        bellRing: auth.bellRing,
+        rngState: auth.rngState,
         lastAckedSeq,
       };
 
@@ -371,6 +466,72 @@ export class MatchRoom extends Room {
     this.seatAndAnnounce(client, claimedSlot);
   }
 
+  /**
+   * Phase 7 (FLI-9): build and emit the structured MatchSummary.
+   *
+   * Called once per match when the server drains a "matchEnd" SimEvent.
+   * Writes a structured log (console.info JSON) and broadcasts to all clients.
+   *
+   * Network-quality fields (RTT, jitter) are unavailable server-side without
+   * per-client round-trip sampling; they are left as 0 here. Clients that have
+   * live RTT data (from periodic `room.ping()` sampling) can supplement their
+   * local display with actual RTT values.
+   */
+  private emitMatchSummary(winner: number | "tie", scores: number[]): void {
+    const mf = this.manifest;
+    if (!mf) return; // no manifest → not a launched match
+
+    const botSlotIds = mf.slots
+      .filter((s) => s.kind === "bot")
+      .map((s) => s.slotId);
+    const mode = mf.settings.mode;
+
+    const summary: MatchSummary = {
+      type: "MatchSummary",
+      launchId: mf.launchId,
+      arenaId: mf.settings.arenaId,
+      mode,
+      durationTicks:
+        this.tele.endTick > 0
+          ? this.tele.endTick - this.tele.startTick
+          : this.serverTick,
+      scores: [...scores],
+      winner,
+      slots: mf.slots.map((s) => ({
+        slotId: s.slotId,
+        characterId: s.characterId,
+        isBot: s.kind === "bot",
+      })),
+      bellRings: this.tele.bellRings,
+      knockdowns: this.tele.knockdowns,
+      friendlyFireKnockdowns: this.tele.friendlyFireKnockdowns,
+      botSlots: botSlotIds,
+      net: {
+        rttMs: 0,
+        jitterMs: 0,
+        reconciliationCorrections: 0,
+        disconnects: this.tele.disconnects,
+      },
+    };
+
+    // Structured server-side log (queryable by ops/balance tooling).
+    console.info(JSON.stringify(summary));
+
+    // Broadcast to all connected clients so they can render the overlay.
+    this.broadcast("MatchSummary", summary);
+  }
+
+  /** Build the per-slot character id array (indexed by PlayerSlotId) from the manifest. */
+  private manifestCharacters(): import("@bb/sim").CharacterId[] {
+    const chars: import("@bb/sim").CharacterId[] = [];
+    if (this.manifest) {
+      for (const s of this.manifest.slots) {
+        chars[s.slotId] = s.characterId;
+      }
+    }
+    return chars;
+  }
+
   /** Seat a client at the given slot and send RoomReady (and full=true to all). */
   private seatAndAnnounce(client: Client, slot: PlayerSlotId): void {
     this.slotOf.set(client.sessionId, slot);
@@ -391,6 +552,8 @@ export class MatchRoom extends Room {
       slot,
       full: false,
       slots: this.activeSlots,
+      characters: this.manifestCharacters(),
+      arenaId: this.activeArena.id,
     });
 
     if (full) {
@@ -403,6 +566,8 @@ export class MatchRoom extends Room {
             slot: s,
             full: true,
             slots: this.activeSlots,
+            characters: this.manifestCharacters(),
+            arenaId: this.activeArena.id,
           });
         }
       }
@@ -416,8 +581,13 @@ export class MatchRoom extends Room {
       launchId: "legacy-dev",
       slots: MODE_2V2.map((slotId) =>
         bots.has(slotId)
-          ? { slotId, kind: "bot" as const }
-          : { slotId, kind: "human" as const, playerId: `dev-${slotId}` },
+          ? { slotId, kind: "bot" as const, characterId: "sifu" as const }
+          : {
+              slotId,
+              kind: "human" as const,
+              playerId: `dev-${slotId}`,
+              characterId: "sifu" as const,
+            },
       ),
       settings: {
         mode: "2v2",
@@ -463,6 +633,9 @@ export class MatchRoom extends Room {
    *   On expiry, fail-closes the room with `reconnect-expired`.
    */
   private reserveSlot(slot: PlayerSlotId): void {
+    // Phase 7: count human disconnects for the match summary net block.
+    this.tele.disconnects += 1;
+
     // Save the original human source and replace with empty source.
     const originalSource = this.sources.get(slot);
     if (originalSource) {

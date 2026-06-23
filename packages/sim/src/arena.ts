@@ -35,59 +35,227 @@ export interface BellDef {
   hitZone: CircleZone; // pure-geometric Bell Ring detection target
 }
 
+/** A platform top the bot stands on while climbing toward a bell. */
+export interface ClimbWaypoint {
+  x: number;
+  surfaceY: number;
+}
+/** Per-side ordered climb paths (floor → … → bell column). */
+export interface ArenaClimb {
+  left: ClimbWaypoint[];
+  right: ClimbWaypoint[];
+}
+
+/**
+ * Inner faces of the two side walls (world X). Authored alongside the wall
+ * colliders so consumers (e.g. the practice bot's corner awareness) read a typed
+ * value instead of scanning colliders. Not part of hashed sim state.
+ */
+export interface ArenaBounds {
+  leftWallInnerX: number;
+  rightWallInnerX: number;
+}
+
 export interface ArenaDef {
   id: string;
   colliders: ColliderDef[]; // inserted in array order (determinism contract)
   bells: BellDef[]; // tested in array order (determinism contract)
+  /** Inner faces of the side walls (world X). Optional for legacy/test fixtures. */
+  bounds?: ArenaBounds;
   /** Per-slot spawn points indexed by Player Slot id (0..3). */
   playerSpawns: { x: number; y: number }[];
   /** @deprecated Use playerSpawns[0] instead. Kept for compatibility. */
   playerSpawn: { x: number; y: number };
   ballSpawn: { x: number; y: number };
+  /** Optional bot climb ladder per side (absent → bot uses ground+jump only). */
+  botClimb?: ArenaClimb;
 }
 
-// Flat Dojo: a flat floor, two side walls, and a low overhang/ledge the player
-// can move under and bump into. Two elevated Bells flank the arena. Authored in
-// world units (X right, Y up).
+/** The set of available arena ids. */
+export type ArenaId = "flat-dojo" | "pillared-temple" | "twin-ledge";
+
+// Flat Dojo: a wide flat floor, two side walls, and a two-step platform ladder
+// climbing to a bell tucked under an overhang. Two elevated Bells flank the arena.
+// Authored in world units (X right, Y up).
+// FLI-9 (tall redesign): 72 units wide × 16u tall. A two-step ladder (low step
+// top 3.0, main ledge top 6.0) climbs to a bell at y=8.5 tucked under an
+// overhang lip (underside 10). Mirror-symmetric about x=0.
 export const FLAT_DOJO: ArenaDef = {
   id: "flat-dojo",
+  // Side walls at x=±36, halfW 0.5 → inner faces at ∓35.5.
+  bounds: { leftWallInnerX: -35.5, rightWallInnerX: 35.5 },
   colliders: [
-    // floor: top surface at y = 0
-    { kind: "box", x: 0, y: -0.5, halfW: 12, halfH: 0.5 },
-    // left wall: inner face at x = -11.5
-    { kind: "box", x: -12, y: 4, halfW: 0.5, halfH: 5 },
-    // right wall: inner face at x = 11.5
-    { kind: "box", x: 12, y: 4, halfW: 0.5, halfH: 5 },
-    // low overhang/ledge on the right side (underside at y = 3)
-    { kind: "box", x: 8, y: 3.5, halfW: 2, halfH: 0.5 },
-    // ceiling: underside at y = 9, meeting the wall tops to close the box so a
-    // hard upward Strike can't loft the ball out over the walls (ball has CCD,
-    // so it can't tunnel through either)
-    { kind: "box", x: 0, y: 9.5, halfW: 12, halfH: 0.5 },
+    // floor: top surface at y = 0 (72 units wide)
+    { kind: "box", x: 0, y: -0.5, halfW: 36, halfH: 0.5 },
+    // left wall: inner face at x = -35.5, spans y 0→16
+    { kind: "box", x: -36, y: 8, halfW: 0.5, halfH: 8 },
+    // right wall: inner face at x = 35.5, spans y 0→16
+    { kind: "box", x: 36, y: 8, halfW: 0.5, halfH: 8 },
+    // LEFT low step (mirrored): top surface y = 3.0
+    { kind: "box", x: -22, y: 2.5, halfW: 2.5, halfH: 0.5 },
+    // RIGHT low step (mirrored): top surface y = 3.0
+    { kind: "box", x: 22, y: 2.5, halfW: 2.5, halfH: 0.5 },
+    // LEFT main ledge (mirrored): top surface y = 6.0
+    { kind: "box", x: -29, y: 5.5, halfW: 3.0, halfH: 0.5 },
+    // RIGHT main ledge (mirrored): top surface y = 6.0
+    { kind: "box", x: 29, y: 5.5, halfW: 3.0, halfH: 0.5 },
+    // LEFT overhang lip (mirrored): underside y = 10, caps the bell pocket
+    { kind: "box", x: -30, y: 10.5, halfW: 4.5, halfH: 0.5 },
+    // RIGHT overhang lip (mirrored): underside y = 10
+    { kind: "box", x: 30, y: 10.5, halfW: 4.5, halfH: 0.5 },
+    // ceiling: underside at y = 16, closes the box (ball CCD prevents tunnelling)
+    { kind: "box", x: 0, y: 16.5, halfW: 36, halfH: 0.5 },
   ],
   bells: [
-    // Left Bell: elevated near the left wall, defends the left side.
+    // Left Bell: tucked in the overhang pocket, defends the left side.
     {
       id: "left",
       defends: "left",
-      art: { kind: "box", x: -9, y: 5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: -9, y: 5, radius: 0.8 },
+      art: { kind: "box", x: -31, y: 8.5, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: -31, y: 8.5, radius: 0.8 },
     },
-    // Right Bell: elevated near the right wall (clear of the x=8 overhang),
-    // defends the right side.
+    // Right Bell: tucked in the overhang pocket, defends the right side.
     {
       id: "right",
       defends: "right",
-      art: { kind: "box", x: 9, y: 5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: 9, y: 5, radius: 0.8 },
+      art: { kind: "box", x: 31, y: 8.5, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: 31, y: 8.5, radius: 0.8 },
     },
   ],
   playerSpawns: [
-    { x: -4, y: 1 }, // slot 0 — Team 0 (left)   [unchanged: 1v1 anchor]
+    // Teams face off near the centre ball, then push outward toward the bells.
+    { x: -4, y: 1 }, // slot 0 — Team 0 (left)
     { x: -7, y: 1 }, // slot 1 — Team 0 (left)
-    { x: 4, y: 1 }, // slot 2 — Team 1 (right)  [unchanged: 1v1 anchor]
+    { x: 4, y: 1 }, // slot 2 — Team 1 (right)
     { x: 7, y: 1 }, // slot 3 — Team 1 (right)
   ],
   playerSpawn: { x: -4, y: 1 }, // deprecated alias for slot 0
-  ballSpawn: { x: 0, y: 5 },
+  ballSpawn: { x: 0, y: 6 },
+  botClimb: {
+    left: [
+      { x: -22, surfaceY: 3.0 },
+      { x: -29, surfaceY: 6.0 },
+    ],
+    right: [
+      { x: 22, surfaceY: 3.0 },
+      { x: 29, surfaceY: 6.0 },
+    ],
+  },
 };
+
+// Pillared Temple: 84-unit-wide arena with two pairs of low interior hurdles
+// creating lane structure. Mirror-symmetric about x=0. Pillars are short
+// jumpable hurdles (tops at 2.0u and 3.0u) staggered ascending toward the bell.
+// Bells are lowered to y=5.5 so a floor jump + air-dash (apex ~3.6 + dash 3.0
+// ≈ 6.6u reach) clears them, but a bare floor single-jump (apex 3.6u) cannot.
+export const PILLARED_TEMPLE: ArenaDef = {
+  id: "pillared-temple",
+  // Side walls at x=±42, halfW 0.5 → inner faces at ∓41.5.
+  bounds: { leftWallInnerX: -41.5, rightWallInnerX: 41.5 },
+  colliders: [
+    // floor (84 units wide)
+    { kind: "box", x: 0, y: -0.5, halfW: 42, halfH: 0.5 },
+    // left wall: inner face at x = -41.5
+    { kind: "box", x: -42, y: 5, halfW: 0.5, halfH: 6 },
+    // right wall: inner face at x = 41.5
+    { kind: "box", x: 42, y: 5, halfW: 0.5, halfH: 6 },
+    // inner pillar pair: low hurdles flanking centre; top surface y = 2.0
+    { kind: "box", x: -12, y: 1.0, halfW: 0.6, halfH: 1.0 },
+    { kind: "box", x: 12, y: 1.0, halfW: 0.6, halfH: 1.0 },
+    // outer pillar pair: slightly taller hurdles toward the bells; top surface y = 3.0
+    { kind: "box", x: -28, y: 1.5, halfW: 0.6, halfH: 1.5 },
+    { kind: "box", x: 28, y: 1.5, halfW: 0.6, halfH: 1.5 },
+    // ceiling
+    { kind: "box", x: 0, y: 11.5, halfW: 42, halfH: 0.5 },
+  ],
+  bells: [
+    {
+      id: "left",
+      defends: "left",
+      art: { kind: "box", x: -36, y: 5.5, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: -36, y: 5.5, radius: 0.8 },
+    },
+    {
+      id: "right",
+      defends: "right",
+      art: { kind: "box", x: 36, y: 5.5, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: 36, y: 5.5, radius: 0.8 },
+    },
+  ],
+  playerSpawns: [
+    { x: -4, y: 1 }, // slot 0 — Team 0 (left)
+    { x: -8, y: 1 }, // slot 1 — Team 0 (left)
+    { x: 4, y: 1 }, // slot 2 — Team 1 (right)
+    { x: 8, y: 1 }, // slot 3 — Team 1 (right)
+  ],
+  playerSpawn: { x: -4, y: 1 },
+  ballSpawn: { x: 0, y: 6 },
+};
+
+// Twin Ledge: 96-unit-wide open floor with stepped symmetric side ledges (a
+// low inner step and a wide outer main ledge) for platforming up to the bells.
+// Mirror-symmetric about x=0.
+export const TWIN_LEDGE: ArenaDef = {
+  id: "twin-ledge",
+  // Side walls at x=±48, halfW 0.5 → inner faces at ∓47.5.
+  bounds: { leftWallInnerX: -47.5, rightWallInnerX: 47.5 },
+  colliders: [
+    // floor (96 units wide)
+    { kind: "box", x: 0, y: -0.5, halfW: 48, halfH: 0.5 },
+    // left wall: inner face at x = -47.5
+    { kind: "box", x: -48, y: 5, halfW: 0.5, halfH: 6 },
+    // right wall: inner face at x = 47.5
+    { kind: "box", x: 48, y: 5, halfW: 0.5, halfH: 6 },
+    // inner ledge pair: low stepping platforms
+    { kind: "box", x: -16, y: 2.5, halfW: 4, halfH: 0.5 },
+    { kind: "box", x: 16, y: 2.5, halfW: 4, halfH: 0.5 },
+    // outer ledge pair: wide main platforms near the bells
+    { kind: "box", x: -34, y: 4, halfW: 5, halfH: 0.5 },
+    { kind: "box", x: 34, y: 4, halfW: 5, halfH: 0.5 },
+    // ceiling
+    { kind: "box", x: 0, y: 11.5, halfW: 48, halfH: 0.5 },
+  ],
+  bells: [
+    {
+      id: "left",
+      defends: "left",
+      art: { kind: "box", x: -40, y: 6, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: -40, y: 6, radius: 0.8 },
+    },
+    {
+      id: "right",
+      defends: "right",
+      art: { kind: "box", x: 40, y: 6, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: 40, y: 6, radius: 0.8 },
+    },
+  ],
+  playerSpawns: [
+    { x: -4, y: 1 }, // slot 0 — Team 0 (left)
+    { x: -7, y: 1 }, // slot 1 — Team 0 (left)
+    { x: 4, y: 1 }, // slot 2 — Team 1 (right)
+    { x: 7, y: 1 }, // slot 3 — Team 1 (right)
+  ],
+  playerSpawn: { x: -4, y: 1 },
+  ballSpawn: { x: 0, y: 6 },
+  botClimb: {
+    left: [
+      { x: -16, surfaceY: 3.0 },
+      { x: -34, surfaceY: 4.5 },
+    ],
+    right: [
+      { x: 16, surfaceY: 3.0 },
+      { x: 34, surfaceY: 4.5 },
+    ],
+  },
+};
+
+/** Registry of all available arenas, keyed by ArenaId. */
+export const ARENAS: Record<ArenaId, ArenaDef> = {
+  "flat-dojo": FLAT_DOJO,
+  "pillared-temple": PILLARED_TEMPLE,
+  "twin-ledge": TWIN_LEDGE,
+};
+
+/** Resolve an arena by id, falling back to FLAT_DOJO for unknown ids. */
+export const resolveArena = (id: string): ArenaDef =>
+  ARENAS[id as ArenaId] ?? FLAT_DOJO;

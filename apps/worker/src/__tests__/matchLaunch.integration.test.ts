@@ -55,6 +55,7 @@ async function seedLaunch(
       slotId,
       kind: "human" as const,
       playerId: `p${slotId}`,
+      characterId: "sifu" as const,
     })),
     settings: { mode: "2v2", matchLengthTicks: 5400, arenaId: "flat-dojo" },
   };

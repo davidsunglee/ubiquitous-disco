@@ -14,6 +14,7 @@
  *   lobby-slots           — wrapper around all four seat elements
  *   lobby-slot-{0..3}     — individual seat elements
  *   lobby-fill-bots       — fill all empty seats with bots (Host only)
+ *   lobby-mode            — match-mode <select> ("1v1" | "2v2") (Host only)
  *   lobby-match-length    — match-length <select> (Host only)
  *   lobby-start-match     — start the match (Host only)
  *   lobby-slot-{n}-bot    — fill that empty seat with a bot (Host only)
@@ -21,12 +22,17 @@
  */
 
 import type {
+  CharacterId,
   LobbySlot,
   LobbyState,
   MatchLaunch,
   PlayerSlotId,
 } from "@bb/protocol";
-import { MATCH_LENGTH_DEFAULT_TICKS, teamForPlayerSlot } from "@bb/protocol";
+import {
+  CHARACTERS,
+  MATCH_LENGTH_DEFAULT_TICKS,
+  teamForPlayerSlot,
+} from "@bb/protocol";
 import { LobbyClient } from "./LobbyClient";
 import { saveLaunch } from "./launchHandoff";
 import { loadProfile } from "./profile";
@@ -40,6 +46,24 @@ const REQUIRED_SLOTS_BY_MODE: Record<"1v1" | "2v2", readonly PlayerSlotId[]> = {
   "2v2": [0, 1, 2, 3],
 };
 
+export function isLobbyStartable(state: LobbyState): boolean {
+  const required =
+    REQUIRED_SLOTS_BY_MODE[state.settings.mode] ??
+    REQUIRED_SLOTS_BY_MODE["2v2"];
+  const allowed = new Set<PlayerSlotId>(required);
+
+  for (const slot of state.slots) {
+    if (slot.occupant !== null && !allowed.has(slot.slotId)) return false;
+  }
+
+  for (const slotId of required) {
+    const slot = state.slots.find((s) => s.slotId === slotId);
+    if (!slot || slot.occupant === null) return false; // empty slot
+    if (slot.occupant.kind === "human" && !slot.occupant.present) return false; // absent human
+  }
+  return true;
+}
+
 /** Match-length options exposed in the Host picker (2:00–5:00 @ 30 Hz). */
 const LENGTH_OPTIONS: { label: string; ticks: number }[] = [
   { label: "2:00", ticks: 3600 },
@@ -49,6 +73,13 @@ const LENGTH_OPTIONS: { label: string; ticks: number }[] = [
   { label: "5:00", ticks: 9000 },
 ];
 
+/** Arena options for the host picker. */
+const ARENA_OPTIONS: { label: string; id: string }[] = [
+  { label: "Flat Dojo", id: "flat-dojo" },
+  { label: "Pillared Temple", id: "pillared-temple" },
+  { label: "Twin Ledge", id: "twin-ledge" },
+];
+
 export class LobbyPage {
   private root!: HTMLElement;
   private client: LobbyClient | null = null;
@@ -56,7 +87,9 @@ export class LobbyPage {
   private codeEl!: HTMLElement;
   private profile = loadProfile();
   private controlsEl!: HTMLElement;
+  private modeSelect!: HTMLSelectElement;
   private lengthSelect!: HTMLSelectElement;
+  private arenaSelect!: HTMLSelectElement;
   private startBtn!: HTMLButtonElement;
   private startHint!: HTMLElement;
   /** Latest known lobby state (used by seat-button handlers). */
@@ -66,9 +99,15 @@ export class LobbyPage {
     const profile = this.profile;
 
     this.root = document.createElement("div");
+    // max-height:100vh + overflow-y:auto make the lobby scroll *internally*: the
+    // overlay's #lobby-container is position:fixed (viewport-height), so once the
+    // content (slots + stat table + host controls) exceeds the viewport, the
+    // Start button would otherwise overflow below the fold with no way to scroll
+    // to it. box-sizing keeps the 32px padding inside the 100vh budget.
     this.root.style.cssText =
       "display:flex;flex-direction:column;align-items:center;" +
-      "min-height:100vh;background:#1a1a1a;color:#eee;font-family:monospace;padding:32px 16px;gap:24px;" +
+      "min-height:100vh;max-height:100vh;overflow-y:auto;box-sizing:border-box;" +
+      "background:#1a1a1a;color:#eee;font-family:monospace;padding:32px 16px;gap:24px;" +
       "pointer-events:auto;";
 
     // Title + code display
@@ -127,6 +166,10 @@ export class LobbyPage {
     teamsRow.appendChild(team1Col);
     this.root.appendChild(teamsRow);
 
+    // Stat table — always visible so players can compare before lock().
+    const statTable = this.makeStatTable();
+    this.root.appendChild(statTable);
+
     // Host controls (shown only when the local player is the Host).
     this.controlsEl = this.makeHostControls();
     this.root.appendChild(this.controlsEl);
@@ -159,6 +202,36 @@ export class LobbyPage {
       "display:none;flex-direction:column;gap:12px;align-items:center;" +
       "border-top:1px solid #333;padding-top:16px;width:100%;max-width:560px;";
 
+    // Match mode picker.
+    const modeRow = document.createElement("div");
+    modeRow.style.cssText = "display:flex;gap:8px;align-items:center;";
+    const modeLabel = document.createElement("label");
+    modeLabel.textContent = "Match mode:";
+    modeLabel.style.cssText = "font-size:12px;color:#aaa;";
+    modeRow.appendChild(modeLabel);
+
+    this.modeSelect = document.createElement("select");
+    this.modeSelect.dataset.testid = "lobby-mode";
+    this.modeSelect.style.cssText =
+      "padding:4px 8px;font-family:monospace;font-size:12px;" +
+      "background:#222;color:#eee;border:1px solid #555;border-radius:4px;";
+    for (const mode of ["1v1", "2v2"] as const) {
+      const o = document.createElement("option");
+      o.value = mode;
+      o.textContent = mode;
+      if (mode === "2v2") o.selected = true;
+      this.modeSelect.appendChild(o);
+    }
+    this.modeSelect.addEventListener("change", () => {
+      this.client?.sendCommand({
+        type: "LobbyCommand",
+        cmd: "setSettings",
+        settings: { mode: this.modeSelect.value as "1v1" | "2v2" },
+      });
+    });
+    modeRow.appendChild(this.modeSelect);
+    wrap.appendChild(modeRow);
+
     // Match length picker.
     const lengthRow = document.createElement("div");
     lengthRow.style.cssText = "display:flex;gap:8px;align-items:center;";
@@ -188,6 +261,36 @@ export class LobbyPage {
     });
     lengthRow.appendChild(this.lengthSelect);
     wrap.appendChild(lengthRow);
+
+    // Arena picker.
+    const arenaRow = document.createElement("div");
+    arenaRow.style.cssText = "display:flex;gap:8px;align-items:center;";
+    const arenaLabel = document.createElement("label");
+    arenaLabel.textContent = "Arena:";
+    arenaLabel.style.cssText = "font-size:12px;color:#aaa;";
+    arenaRow.appendChild(arenaLabel);
+
+    this.arenaSelect = document.createElement("select");
+    this.arenaSelect.dataset.testid = "lobby-arena";
+    this.arenaSelect.style.cssText =
+      "padding:4px 8px;font-family:monospace;font-size:12px;" +
+      "background:#222;color:#eee;border:1px solid #555;border-radius:4px;";
+    for (const opt of ARENA_OPTIONS) {
+      const o = document.createElement("option");
+      o.value = opt.id;
+      o.textContent = opt.label;
+      if (opt.id === "flat-dojo") o.selected = true;
+      this.arenaSelect.appendChild(o);
+    }
+    this.arenaSelect.addEventListener("change", () => {
+      this.client?.sendCommand({
+        type: "LobbyCommand",
+        cmd: "setSettings",
+        settings: { arenaId: this.arenaSelect.value },
+      });
+    });
+    arenaRow.appendChild(this.arenaSelect);
+    wrap.appendChild(arenaRow);
 
     // Action buttons.
     const btnRow = document.createElement("div");
@@ -301,22 +404,31 @@ export class LobbyPage {
    * a bot (no absent humans, no empty required slots).
    */
   private isStartable(state: LobbyState): boolean {
-    const required =
-      REQUIRED_SLOTS_BY_MODE[state.settings.mode] ??
-      REQUIRED_SLOTS_BY_MODE["2v2"];
-    for (const slotId of required) {
-      const slot = state.slots.find((s) => s.slotId === slotId);
-      if (!slot || slot.occupant === null) return false; // empty slot
-      if (slot.occupant.kind === "human" && !slot.occupant.present)
-        return false; // absent human
-    }
-    return true;
+    return isLobbyStartable(state);
   }
 
   private render(state: LobbyState): void {
     this.lastState = state;
     const isHost = state.hostPlayerId === this.profile.playerId;
     this.controlsEl.style.display = isHost ? "flex" : "none";
+
+    // Sync host-control selects from authoritative server state so they never
+    // drift from a multi-tab or server-clamped value.
+    if (isHost) {
+      if (this.modeSelect.value !== state.settings.mode) {
+        this.modeSelect.value = state.settings.mode;
+      }
+      const tickStr = String(state.settings.matchLengthTicks);
+      if (this.lengthSelect.value !== tickStr) {
+        this.lengthSelect.value = tickStr;
+      }
+      if (
+        state.settings.arenaId &&
+        this.arenaSelect.value !== state.settings.arenaId
+      ) {
+        this.arenaSelect.value = state.settings.arenaId;
+      }
+    }
 
     // Update the Start button enabled/disabled state.
     if (isHost) {
@@ -327,8 +439,17 @@ export class LobbyPage {
       this.startHint.style.display = startable ? "none" : "block";
     }
 
+    const modeSlots = new Set<PlayerSlotId>(
+      REQUIRED_SLOTS_BY_MODE[state.settings.mode],
+    );
     for (const slot of state.slots) {
-      this.renderSlot(slot, state.hostPlayerId, isHost);
+      this.renderSlot(
+        slot,
+        state.hostPlayerId,
+        isHost,
+        this.profile.playerId,
+        modeSlots,
+      );
     }
   }
 
@@ -344,9 +465,16 @@ export class LobbyPage {
     slot: LobbySlot,
     hostPlayerId: string,
     isHost = false,
+    localPlayerId = "",
+    modeSlots: Set<PlayerSlotId> = new Set([0, 1, 2, 3]),
   ): void {
     const el = this.slotEls.get(slot.slotId);
     if (!el) return;
+
+    // Dim slots that are outside the current mode (e.g. slots 1 & 3 in 1v1).
+    const inMode = modeSlots.has(slot.slotId);
+    el.style.opacity = inMode ? "1" : "0.35";
+    el.dataset.inMode = inMode ? "true" : "false";
 
     // Clear existing occupant content (keep the slot label).
     const slotLabel = el.firstChild as HTMLElement;
@@ -357,10 +485,11 @@ export class LobbyPage {
       el.dataset.occupant = "empty";
       el.style.borderColor = "#444";
       const empty = document.createElement("span");
-      empty.textContent = "— empty —";
+      empty.textContent = inMode ? "— empty —" : "— n/a —";
       empty.style.cssText = "color:#555;font-size:12px;";
       el.appendChild(empty);
-      if (isHost) {
+      // Only show the bot button for in-mode empty slots.
+      if (isHost && inMode) {
         const botBtn = document.createElement("button");
         botBtn.dataset.testid = `lobby-slot-${slot.slotId}-bot`;
         botBtn.textContent = "+ Bot";
@@ -387,6 +516,12 @@ export class LobbyPage {
       botLabel.style.cssText = "color:#aa8800;font-size:12px;";
       el.appendChild(botLabel);
       if (isHost) {
+        // Character picker for bot slots (host-controlled).
+        const sel = this.makeCharacterSelect(
+          slot.slotId,
+          slot.occupant.characterId,
+        );
+        el.appendChild(sel);
         const clearBtn = document.createElement("button");
         clearBtn.dataset.testid = `lobby-slot-${slot.slotId}-clear`;
         clearBtn.textContent = "✕";
@@ -406,8 +541,9 @@ export class LobbyPage {
     }
 
     // Human occupant
-    const { playerId, displayName, present } = slot.occupant;
+    const { playerId, displayName, present, characterId } = slot.occupant;
     const occupantIsHost = playerId === hostPlayerId;
+    const isOwnSeat = playerId === localPlayerId;
 
     el.dataset.occupant = "human";
     el.style.borderColor = present ? "#55aa55" : "#666";
@@ -435,6 +571,107 @@ export class LobbyPage {
     presenceEl.textContent = present ? "online" : "disconnected";
     presenceEl.style.cssText = `color:${present ? "#55aa55" : "#aa5555"};font-size:10px;`;
     el.appendChild(presenceEl);
+
+    // Character picker for own seat.
+    if (isOwnSeat) {
+      const sel = this.makeCharacterSelect(slot.slotId, characterId);
+      el.appendChild(sel);
+    }
+  }
+
+  /** Build a character <select> for a given slot. */
+  private makeCharacterSelect(
+    slotId: PlayerSlotId,
+    currentCharacterId: CharacterId,
+  ): HTMLSelectElement {
+    const sel = document.createElement("select");
+    sel.dataset.testid = `lobby-slot-${slotId}-character`;
+    sel.style.cssText =
+      "margin-top:4px;padding:2px 6px;font-family:monospace;font-size:10px;" +
+      "background:#222;color:#eee;border:1px solid #555;border-radius:3px;";
+    for (const id of Object.keys(CHARACTERS) as CharacterId[]) {
+      const o = document.createElement("option");
+      o.value = id;
+      o.textContent = CHARACTERS[id].displayName;
+      if (id === currentCharacterId) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.addEventListener("change", () => {
+      this.client?.sendCommand({
+        type: "LobbyCommand",
+        cmd: "setCharacter",
+        slotId,
+        characterId: sel.value as CharacterId,
+      });
+    });
+    return sel;
+  }
+
+  /** Build the stat comparison table for all six characters. */
+  private makeStatTable(): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.dataset.testid = "lobby-stat-table";
+    // flex-shrink:0 is required: this element sets overflow-x:auto, which makes
+    // the browser compute overflow-y to `auto` too (the CSS rule that a
+    // non-visible overflow on one axis forces the other off `visible`). In the
+    // root's flex *column*, a non-visible block-axis overflow zeroes the flex
+    // item's automatic minimum height — so when the lobby content exceeds the
+    // root's max-height:100vh (smaller viewports / CI), this table would shrink
+    // to 0 height and read as `hidden`. Pinning flex-shrink keeps its natural
+    // height; the root's overflow-y:auto scrolls instead.
+    wrap.style.cssText =
+      "flex-shrink:0;width:100%;max-width:560px;overflow-x:auto;font-family:monospace;font-size:10px;";
+
+    const table = document.createElement("table");
+    table.style.cssText = "border-collapse:collapse;width:100%;color:#ccc;";
+
+    // Header row
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    const headers = [
+      "Character",
+      "Speed",
+      "Jump",
+      "Dash Dist",
+      "Dash CD",
+      "Strike",
+      "Reach",
+    ];
+    for (const h of headers) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      th.style.cssText =
+        "padding:3px 6px;text-align:left;color:#ffe066;border-bottom:1px solid #444;";
+      headerRow.appendChild(th);
+    }
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    // One row per character
+    const tbody = document.createElement("tbody");
+    for (const [, def] of Object.entries(CHARACTERS)) {
+      const s = def.stats;
+      const tr = document.createElement("tr");
+      const cells = [
+        def.displayName,
+        `×${s.moveSpeed.toFixed(2)}`,
+        `×${s.jumpSpeed.toFixed(2)}`,
+        `×${s.dashDistance.toFixed(2)}`,
+        `×${s.dashCooldown.toFixed(2)}`,
+        `×${s.strikeImpulse.toFixed(2)}`,
+        `×${s.strikeReach.toFixed(2)}`,
+      ];
+      for (const c of cells) {
+        const td = document.createElement("td");
+        td.textContent = c;
+        td.style.cssText = "padding:3px 6px;border-bottom:1px solid #333;";
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    return wrap;
   }
 
   destroy(): void {

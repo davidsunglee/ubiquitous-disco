@@ -2,8 +2,13 @@
 
 // Re-export the canonical slot/team vocabulary from @bb/sim so that
 // server and web can import from either package without a circular dep.
-export type { AckBySlot, PlayerSlotId, TeamId } from "@bb/sim";
-export { TEAM_0_SLOTS, TEAM_1_SLOTS, teamForPlayerSlot } from "@bb/sim";
+export type { AckBySlot, CharacterId, PlayerSlotId, TeamId } from "@bb/sim";
+export {
+  CHARACTERS,
+  TEAM_0_SLOTS,
+  TEAM_1_SLOTS,
+  teamForPlayerSlot,
+} from "@bb/sim";
 
 /** @deprecated Use PlayerSlotId. Retained during the 1v1→2v2 migration. */
 export type Slot = import("@bb/sim").PlayerSlotId;
@@ -20,6 +25,10 @@ export interface RoomReady {
    * from this so it always matches the server.
    */
   slots: import("@bb/sim").PlayerSlotId[];
+  /** Per-slot character id (indexed by PlayerSlotId) so prediction matches the server. */
+  characters: import("@bb/sim").CharacterId[];
+  /** Arena id for this match — client resolves the arena for its prediction sim + renderer. */
+  arenaId: import("@bb/sim").ArenaId;
 }
 
 export interface RoomErrorMsg {
@@ -30,7 +39,7 @@ export interface RoomErrorMsg {
 
 // ── Gameplay messages (Phase 2) ───────────────────────────────────────────────
 
-import type { InputFrame, MatchState } from "@bb/sim";
+import type { BellRingState, InputFrame, MatchState } from "@bb/sim";
 
 /** One sequenced input frame (seq is monotonically increasing per client). */
 export interface SeqInput {
@@ -68,6 +77,16 @@ export interface AuthPlayer {
   charge: number;
   knockdownTicks: number;
   invulnTicks: number;
+  // Remaining hashed JS actor fields so the client can restore the server's full
+  // hashed actor state on reconcile (no post-snapshot prediction drift).
+  ticksSinceGrounded: number;
+  dashCooldown: number;
+  airDashAvailable: boolean;
+  stagger: number;
+  controlLock: boolean;
+  staggerDecayDelay: number;
+  specialCooldown: number;
+  airJumpsRemaining: number;
 }
 
 /**
@@ -91,6 +110,10 @@ export interface WorldSnapshot {
   /** Base64-encoded Rapier world snapshot (rw.takeSnapshot()). Always present. */
   rapierBytesB64: string;
   match: MatchState;
+  /** Bell Ring debounce + Golden Goal pressure ramp state. */
+  bellRing: BellRingState;
+  /** Seeded PRNG state, restored on reconcile so seeded Specials don't drift. */
+  rngState: number;
   lastAckedSeq: import("@bb/sim").AckBySlot; // index == PlayerSlotId; bot slots carry 0
 }
 
@@ -121,6 +144,64 @@ export interface Telemetry {
   ackLag: number;
 }
 
+// ── Balance telemetry (Phase 7 — FLI-9) ─────────────────────────────────────
+
+/**
+ * Server → Client: structured match summary emitted once per match, when the
+ * server observes the sim's `matchEnd` event. Also written as a server-side
+ * structured log for balance analytics. No sim state — aggregated outside the
+ * deterministic core so the golden hash is unaffected.
+ */
+export interface MatchSummary {
+  type: "MatchSummary";
+  /** The launchId from the match manifest (or "hotseat" for local play). */
+  launchId: string;
+  /** Arena identifier (e.g. "flat-dojo"). */
+  arenaId: string;
+  /** Match mode: 1v1 or 2v2. */
+  mode: "1v1" | "2v2";
+  /** Total ticks elapsed from match start to matchEnd. */
+  durationTicks: number;
+  /** Per-team scores at match end (indexed by team: [team0score, team1score]). */
+  scores: number[];
+  /** Winning team index (0 or 1), or "tie" for a draw. */
+  winner: number | "tie";
+  /** Per-slot breakdown (ordered by slotId). */
+  slots: {
+    slotId: import("@bb/sim").PlayerSlotId;
+    characterId: import("@bb/sim").CharacterId;
+    isBot: boolean;
+  }[];
+  /** Total bell rings scored in the match. */
+  bellRings: number;
+  /** Total player knockdowns (across all slots). */
+  knockdowns: number;
+  /**
+   * Friendly-fire knockdowns (a striker knocking down a teammate). Attributed
+   * via the `knockdown` SimEvent's striker slot (`bySlot`): counted when the
+   * striker and target are on the same team. Event-only attribution — no
+   * hashed sim state is involved.
+   */
+  friendlyFireKnockdowns: number;
+  /** Slot ids that are bots in this match. */
+  botSlots: import("@bb/sim").PlayerSlotId[];
+  /**
+   * Network-quality fields (absent/zero for hotseat and server-reconstructed
+   * summaries where RTT is not available).
+   */
+  net: {
+    rttMs: number;
+    jitterMs: number;
+    reconciliationCorrections: number;
+    disconnects: number;
+  };
+}
+
+export const serializeMatchSummary = (m: MatchSummary): string =>
+  JSON.stringify(m);
+export const deserializeMatchSummary = (s: string): MatchSummary =>
+  JSON.parse(s) as MatchSummary;
+
 // grows in later phases
 export type ServerMessage =
   | RoomReady
@@ -128,7 +209,8 @@ export type ServerMessage =
   | InputAck
   | WorldSnapshot
   | MatchClosed
-  | Telemetry;
+  | Telemetry
+  | MatchSummary;
 export type ClientMessage = PlayerInput;
 
 // ── (De)serializers ───────────────────────────────────────────────────────────
@@ -159,3 +241,5 @@ export const deserializeMatchClosed = (s: string): MatchClosed =>
 export const serializeTelemetry = (m: Telemetry): string => JSON.stringify(m);
 export const deserializeTelemetry = (s: string): Telemetry =>
   JSON.parse(s) as Telemetry;
+
+// MatchSummary serializers are co-located with the type above (§7.1).

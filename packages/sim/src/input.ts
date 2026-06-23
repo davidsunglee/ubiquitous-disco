@@ -7,10 +7,14 @@ export interface InputFrame {
   jumpHeld: boolean;
   dashHeld: boolean;
   strikeHeld: boolean;
+  /** Phase 2: Special action held this tick. */
+  specialHeld: boolean;
   jumpPressed: boolean; // edges derived from the previous frame
   dashPressed: boolean;
   strikePressed: boolean;
   strikeReleased: boolean;
+  /** Phase 2: Special action pressed this tick (rising edge). */
+  specialPressed: boolean;
 }
 
 export const EMPTY_INPUT: InputFrame = {
@@ -19,10 +23,12 @@ export const EMPTY_INPUT: InputFrame = {
   jumpHeld: false,
   dashHeld: false,
   strikeHeld: false,
+  specialHeld: false,
   jumpPressed: false,
   dashPressed: false,
   strikePressed: false,
   strikeReleased: false,
+  specialPressed: false,
 };
 
 /** Raw held-button snapshot for a single frame, before edge derivation. */
@@ -30,12 +36,15 @@ export interface HeldState {
   jump: boolean;
   dash: boolean;
   strike: boolean;
+  /** Phase 2: Special action button held. */
+  special: boolean;
 }
 
 export const EMPTY_HELD: HeldState = {
   jump: false,
   dash: false,
   strike: false,
+  special: false,
 };
 
 export interface EdgeFlags {
@@ -43,6 +52,8 @@ export interface EdgeFlags {
   dashPressed: boolean;
   strikePressed: boolean;
   strikeReleased: boolean;
+  /** Phase 2: Special action pressed (rising edge). */
+  specialPressed: boolean;
 }
 
 /**
@@ -65,6 +76,7 @@ export function deriveEdges(prev: HeldState, cur: HeldState): EdgeFlags {
     dashPressed: cur.dash && !prev.dash,
     strikePressed: cur.strike && !prev.strike,
     strikeReleased: !cur.strike && prev.strike,
+    specialPressed: cur.special && !prev.special,
   };
 }
 
@@ -81,6 +93,7 @@ export function buildInputFrame(
     jumpHeld: cur.jump,
     dashHeld: cur.dash,
     strikeHeld: cur.strike,
+    specialHeld: cur.special,
     ...edges,
   };
 }

@@ -1,5 +1,9 @@
-import type { MatchLaunch } from "@bb/protocol";
+import type { MatchLaunch, MatchSummary } from "@bb/protocol";
 import {
+  type ArenaDef,
+  CHARACTERS,
+  type CharacterDef,
+  type CharacterId,
   createReplay,
   createSimulation,
   DEFAULT_CONFIG,
@@ -12,6 +16,7 @@ import {
   type RenderState,
   type ReplayData,
   recordFrame,
+  resolveArena,
   type SimConfig,
   type Simulation,
   serializeReplay,
@@ -37,6 +42,7 @@ import {
   SimulatedTransport,
 } from "../net/SimulatedTransport";
 import { attemptLandscapeLock } from "../orientation";
+import { overtimeBellRing } from "../render/bellHitZone";
 import {
   bellSubjectFromWorld,
   GroupCamera,
@@ -51,6 +57,7 @@ import {
 } from "../render/worldToScreen";
 import { ConnectionOverlay } from "./ConnectionOverlay";
 import { type HudBridge, hudBridge } from "./HudScene";
+import { renderMatchSummaryDOM } from "./matchSummaryOverlay";
 import { OrientationOverlay } from "./OrientationOverlay";
 import {
   type FailClosedReason,
@@ -58,6 +65,12 @@ import {
   wireFailClosed,
 } from "./reconnectFlow";
 import { bellFromScoreDelta } from "./scoreFeedback";
+
+// Hotseat dev roster (FLI-9): the single character both hotseat slots spawn as,
+// since hotseat has no in-game character picker yet. Change this to test another
+// character's feel/Special locally (e.g. "panda", "drunken-boxer"). Characters
+// are not hashed, so this does not affect the cross-engine determinism contract.
+const HOTSEAT_CHARACTER: CharacterId = "sifu";
 
 // Distinct colors per player slot (grounded / airborne variants).
 // Slots 0/1 = Team 0 (blue shades, left side); Slots 2/3 = Team 1 (orange/red shades, right side).
@@ -94,6 +107,31 @@ export class GameScene extends Phaser.Scene {
    */
   private prevScores: number[] = [];
 
+  // ── Phase 2 (FLI-9): Special feedback ──────────────────────────────────────
+  /** Per-slot Special press-flash intensity (1 → 0). Cosmetic only. */
+  private specialFlash: number[] = [];
+  /**
+   * Per-slot Special cooldown approximation for the cooldown ring.
+   * Driven by local input presses + elapsed ticks; cosmetic only (no sim coupling).
+   */
+  private localSpecialCooldown: number[] = [];
+  /** Per-slot cooldown total ticks (from last known special activation). */
+  private localSpecialCooldownTotal: number[] = [];
+
+  // ── Phase 2 (FLI-9): Strike-variant text feedback ───────────────────────────
+  /** Strike-variant text pop object (shared; shows SPIKE! / HEADER! / CHARGED!). */
+  private strikeVariantText!: Phaser.GameObjects.Text;
+  /** Alpha fade timer for the strike-variant text pop. */
+  private strikeVariantAlpha = 0;
+  /**
+   * Per-slot strike-variant arc flash: {kind, intensity}.
+   * Cosmetic only — detected from the local InputFrame at strike release.
+   */
+  private strikeArcFlash: Array<{
+    kind: "spike" | "header" | "charged" | null;
+    intensity: number;
+  }> = [];
+
   // ── Phase 5: pause/step/replay state ────────────────────────────────────────
   private paused = false;
   /** When true, advance exactly one tick this frame then re-pause. */
@@ -104,10 +142,18 @@ export class GameScene extends Phaser.Scene {
   private captureData: ReplayData | null = null;
   /** Last captured replay JSON (for the Replay button). */
   private lastCaptureJson: string | null = null;
+  /** Per-slot character ids the hotseat sim was built with (set in buildSim).
+   *  Stamped into replay captures so playReplay reproduces the same roster and
+   *  the [replay] determinism hash is meaningful for non-Sifu rosters. */
+  private hotseatCharacterIds: CharacterId[] = [];
 
   // Replay playback state (null when not replaying via startReplay).
   private replayFrames: InputFrame[][] | null = null;
   private replayFrameCursor = 0;
+
+  // ── Phase 5: active arena (resolved from arenaId on launch/RoomReady) ──────────
+  /** The arena used by both the sim and the renderer. Default FLAT_DOJO (hotseat). */
+  private activeArena: ArenaDef = FLAT_DOJO;
 
   // ── Phase 6: static Bell screen positions ────────────────────────────────────
   private bellSubjects!: Array<{ screenX: number; screenY: number }>;
@@ -166,6 +212,27 @@ export class GameScene extends Phaser.Scene {
   private startPromptEl!: HTMLElement;
   private goldenGoalEl!: HTMLElement;
   private matchSummaryEl!: HTMLElement;
+  /** Default-route "Play Online →" link (hotseat only); hidden once a match starts. */
+  private playOnlineEl: HTMLElement | null = null;
+
+  /**
+   * Phase 7 (FLI-9): hotseat balance telemetry counters.
+   * Incremented from drained SimEvents during hotseat play; used to build a
+   * client-side MatchSummary when the match ends (no server summary for hotseat).
+   */
+  private hotseatTele = {
+    bellRings: 0,
+    knockdowns: 0,
+  };
+  /** Tick where the current hotseat match entered playing, for elapsed summaries. */
+  private hotseatStartTick: number | null = null;
+
+  /**
+   * Phase 7 (FLI-9): true once renderMatchSummaryOverlay() has populated the
+   * match-summary element with structured fields. Prevents updateMatchHud from
+   * overwriting the structured content with the plain text fallback.
+   */
+  private matchSummaryRendered = false;
 
   constructor() {
     super("GameScene");
@@ -197,7 +264,7 @@ export class GameScene extends Phaser.Scene {
     this.groupCamera = new GroupCamera(this.cameras.main);
 
     // Pre-compute static Bell screen positions (Bells don't move).
-    this.bellSubjects = FLAT_DOJO.bells.map((b) =>
+    this.bellSubjects = this.activeArena.bells.map((b) =>
       bellSubjectFromWorld(b.hitZone.x, b.hitZone.y),
     );
 
@@ -232,6 +299,18 @@ export class GameScene extends Phaser.Scene {
       // Pin the banner to the viewport so zoom/scroll don't affect it.
       .setScrollFactor(0);
 
+    // Phase 2 (FLI-9): strike-variant text pop (SPIKE! / HEADER! / CHARGED!).
+    this.strikeVariantText = this.add
+      .text(480, 120, "", {
+        fontFamily: "monospace",
+        fontSize: "28px",
+        color: "#ff8844",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setScrollFactor(0);
+
     // Wire up the HUD bridge so HudScene can control us.
     this.wireHudBridge();
 
@@ -250,13 +329,20 @@ export class GameScene extends Phaser.Scene {
     // sessionStorage for potential reconnect after a page refresh. We keep an
     // in-scene copy in retainedLaunch for mid-match reconnect without a reload.
     const launch = peekLaunch();
+    const urlParams = new URLSearchParams(window.location.search);
+    // Dev/test direct-connect overlay is opt-in via ?direct (used by net-*.spec.ts
+    // and manual dev). The default root route is a clean local hotseat with a
+    // one-click "Play Online" path to the lobby.
+    const directConnect = urlParams.get("direct") !== null;
     if (launch) {
       this.startLaunchedMatch(launch);
-    } else {
+    } else if (directConnect) {
       // Dev/test direct-connect shortcut: the create/join overlay path from
-      // Plan 1. The primary acceptance path is the launch handoff above.
-      // ?botSlot=N fills a slot with a Practice Bot on the server's legacy path.
-      const urlParams = new URLSearchParams(window.location.search);
+      // Plan 1. ?botSlot=N fills a slot with a Practice Bot on the legacy path.
+      // Freeze the local hotseat sim and hide its start prompt so only the clean
+      // connection panel shows (no "Press Jump to Start" bleeding through).
+      this.awaitingOpponent = true;
+      this.startPromptEl.style.display = "none";
       const botSlotParam = urlParams.get("botSlot");
       const createOptions =
         botSlotParam !== null
@@ -281,6 +367,11 @@ export class GameScene extends Phaser.Scene {
         },
         createOptions,
       );
+    } else {
+      // Default route: clean local hotseat. Hide the dev direct-connect panel
+      // and offer a one-click path to the online lobby (#lobby route).
+      this.connectionOverlay.hideRoomPanel();
+      this.addPlayOnlineLink();
     }
 
     // Launch the HUD in parallel (it renders on top without replacing GameScene).
@@ -288,6 +379,25 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ── Phase 2: match HUD DOM nodes ─────────────────────────────────────────────
+
+  /**
+   * Default-route affordance: a one-click link from the local hotseat game to the
+   * online lobby (#lobby). The LobbyRouter (main.ts) handles the hash change and
+   * disables the Phaser keyboard while the lobby is shown.
+   */
+  private addPlayOnlineLink(): void {
+    const link = document.createElement("a");
+    link.dataset.testid = "play-online";
+    link.textContent = "Play Online →";
+    link.href = "#lobby";
+    link.style.cssText =
+      "position:absolute;left:50%;top:62%;transform:translate(-50%,0);" +
+      "pointer-events:auto;font-family:monospace;font-size:14px;" +
+      "color:#7fd1ff;text-decoration:none;padding:6px 14px;" +
+      "border:1px solid #355;border-radius:4px;background:rgba(0,0,0,0.55);";
+    this.hudOverlay.appendChild(link);
+    this.playOnlineEl = link;
+  }
 
   /** Create a DOM node (data-testid anchor + visible HUD element) in the overlay. */
   private makeTestNode(testid: string, css: string): HTMLElement {
@@ -373,6 +483,11 @@ export class GameScene extends Phaser.Scene {
     this.prevScores = [...m.scores];
     this.startPromptEl.style.display =
       m.phase === "preRound" ? "block" : "none";
+    // Once the hotseat match starts (leaves preRound), the player has elected
+    // local play — retire the "Play Online" link for good.
+    if (m.phase !== "preRound" && this.playOnlineEl) {
+      this.playOnlineEl.style.display = "none";
+    }
     this.goldenGoalEl.style.display =
       m.phase === "goldenGoal" ? "block" : "none";
     if (m.phase === "goldenGoal") {
@@ -380,19 +495,25 @@ export class GameScene extends Phaser.Scene {
     }
     if (m.phase === "complete") {
       this.matchSummaryEl.style.display = "block";
-      let winnerText: string;
-      if (m.winner === -1) {
-        winnerText = "DRAW";
-      } else if (this.netLoop !== null) {
-        // Networked: compare winner (Team index) against this client's team.
-        const myTeam = teamForPlayerSlot(this.netClient.slot as PlayerSlotId);
-        winnerText = m.winner === myTeam ? "YOU WIN" : "YOU LOSE";
-      } else {
-        winnerText = `P${m.winner + 1} WINS`;
+      // Phase 7: if renderMatchSummaryOverlay() already populated structured
+      // content (from a MatchSummary server message or hotseat summary), leave
+      // it intact. Only fall back to the plain text when no summary has been set.
+      if (!this.matchSummaryRendered) {
+        let winnerText: string;
+        if (m.winner === -1) {
+          winnerText = "DRAW";
+        } else if (this.netLoop !== null) {
+          // Networked: compare winner (Team index) against this client's team.
+          const myTeam = teamForPlayerSlot(this.netClient.slot as PlayerSlotId);
+          winnerText = m.winner === myTeam ? "YOU WIN" : "YOU LOSE";
+        } else {
+          winnerText = `P${m.winner + 1} WINS`;
+        }
+        this.matchSummaryEl.textContent = `${winnerText} — Press Jump to Rematch`;
       }
-      this.matchSummaryEl.textContent = `${winnerText} — Press Jump to Rematch`;
     } else {
       this.matchSummaryEl.style.display = "none";
+      this.matchSummaryRendered = false;
     }
   }
 
@@ -420,7 +541,12 @@ export class GameScene extends Phaser.Scene {
       },
       getDebugColliders: () => this.sim.getDebugColliders(),
       startCapture: () => {
-        this.captureData = createReplay(1234, FLAT_DOJO.id, "default");
+        this.captureData = createReplay(
+          1234,
+          FLAT_DOJO.id,
+          "default",
+          this.hotseatCharacterIds,
+        );
       },
       stopCapture: () => {
         if (!this.captureData) return null;
@@ -482,12 +608,23 @@ export class GameScene extends Phaser.Scene {
             slot: number;
             full: boolean;
             slots?: PlayerSlotId[];
+            characters?: import("@bb/sim").CharacterId[];
+            arenaId?: string;
           };
           net.slot = m.slot as PlayerSlotId;
+          if (m.arenaId) {
+            this.activeArena = resolveArena(m.arenaId);
+            // Re-compute bell subjects for the new arena.
+            this.bellSubjects = this.activeArena.bells.map((b) =>
+              bellSubjectFromWorld(b.hitZone.x, b.hitZone.y),
+            );
+          }
           if (m.full) {
             this.startNetLoop(
               m.slot as PlayerSlotId,
               (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
+              m.characters,
+              m.arenaId,
             );
           }
         });
@@ -532,17 +669,27 @@ export class GameScene extends Phaser.Scene {
           slot: number;
           full: boolean;
           slots?: PlayerSlotId[];
+          characters?: import("@bb/sim").CharacterId[];
+          arenaId?: string;
         };
         net.slot = m.slot as PlayerSlotId;
         this.reconnecting = false;
         // Reconnect resumed: clear any terminal/fail-closed state so a stale
         // banner can't persist over the resumed game (FLI-8 BUG #1).
         this.clearFailClosed();
+        if (m.arenaId) {
+          this.activeArena = resolveArena(m.arenaId);
+          this.bellSubjects = this.activeArena.bells.map((b) =>
+            bellSubjectFromWorld(b.hitZone.x, b.hitZone.y),
+          );
+        }
         if (m.full) {
           // Resume the net loop with the same slot.
           this.startNetLoop(
             m.slot as PlayerSlotId,
             (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
+            m.characters,
+            m.arenaId,
           );
         }
       });
@@ -606,6 +753,8 @@ export class GameScene extends Phaser.Scene {
   private startNetLoop(
     slot: PlayerSlotId,
     activeSlots: PlayerSlotId[] = [0, 2],
+    characterIds?: import("@bb/sim").CharacterId[],
+    arenaId?: string,
   ): void {
     // Idempotency guard (FLI-8 BUG #2): the server re-broadcasts
     // RoomReady{full:true} to ALL present clients whenever any peer reconnects,
@@ -649,11 +798,28 @@ export class GameScene extends Phaser.Scene {
         onDisconnect: () => {
           console.info("[net] disconnected");
         },
+        // Phase 2 (FLI-9): local strike-variant + special feedback, driven off
+        // the predicted local input before each prediction step (matching the
+        // hotseat detect-before-step timing). Only the local slot gets feedback.
+        onLocalTick: (localInput, preStepRender) => {
+          const localSlot = this.netClient.slot;
+          this.detectStrikeVariantForSlot(localInput, localSlot, preStepRender);
+          this.detectSpecialForSlot(localInput, localSlot);
+        },
       },
       this.simTransport,
+      characterIds,
+      arenaId,
     );
     this.netLoop.start();
     console.info(`[net] NetLoop started (slot ${slot})`);
+
+    // Phase 7 (FLI-9): wire MatchSummary handler — server broadcasts once per
+    // match when it observes matchEnd. Renders the structured overlay.
+    this.netClient.onMessage("MatchSummary", (msg) => {
+      const summary = msg as MatchSummary;
+      this.renderMatchSummaryOverlay(summary);
+    });
 
     // Phase 5/6: fail-closed — wired exactly once per NetClient instance. The
     // launch path may already have wired this same instance (in
@@ -701,7 +867,24 @@ export class GameScene extends Phaser.Scene {
   // ── Sim lifecycle ────────────────────────────────────────────────────────────
 
   private buildSim(config: SimConfig): Simulation {
-    return createSimulation({ config, arena: FLAT_DOJO, seed: 1234 });
+    // Hotseat dev roster (FLI-9): hotseat has no character picker yet, so both
+    // active slots spawn HOTSEAT_CHARACTER. Change that one constant to feel out
+    // a different character / Special in hotseat (e.g. "panda" Ground Pound,
+    // "drunken-boxer" seeded Stagger Stumble). Characters are not hashed, so this
+    // does not affect the cross-engine determinism contract.
+    const characters: CharacterDef[] = [];
+    characters[0] = CHARACTERS[HOTSEAT_CHARACTER];
+    characters[2] = CHARACTERS[HOTSEAT_CHARACTER];
+    // Record the per-slot ids so a replay capture can reproduce this exact roster.
+    this.hotseatCharacterIds = [];
+    this.hotseatCharacterIds[0] = HOTSEAT_CHARACTER;
+    this.hotseatCharacterIds[2] = HOTSEAT_CHARACTER;
+    return createSimulation({
+      config,
+      arena: FLAT_DOJO,
+      seed: 1234,
+      characters,
+    });
   }
 
   private resetSim(): void {
@@ -759,7 +942,13 @@ export class GameScene extends Phaser.Scene {
     // P1: merge keyboard + touch; P2: standalone keyboard.
     const p1 = mergeInputFrames(this.kb1.collect(), this.touch.collect());
     const p2 = this.kb2.collect();
-    return [p1, p2];
+    // The hotseat sim uses active slots [0, 2] (Team 0 left vs Team 1 right), and
+    // sim.step()/getRenderState() are slot-indexed. Return a slot-indexed row so
+    // P2 actually drives slot 2 (a dense [p1, p2] left slot 2 with no input).
+    const row: InputFrame[] = [];
+    row[0] = p1;
+    row[2] = p2;
+    return row;
   }
 
   update(_time: number, delta: number): void {
@@ -897,19 +1086,29 @@ export class GameScene extends Phaser.Scene {
         recordFrame(this.captureData, inputFrames);
       }
 
+      // Phase 2 (FLI-9): detect strike-variant + special presses before stepping.
+      this.detectStrikeVariantFeedback(inputFrames);
+      this.detectSpecialFeedback(inputFrames);
+
       this.sim.step(inputFrames);
       this.simTick += 1;
       // getRenderState() already returns a fresh object — no clone needed.
       this.cur = this.sim.getRenderState();
       // Drain sim events each tick and surface Bell Ring feedback.
       for (const event of this.sim.drainEvents()) {
-        if (event.type === "bellRing") this.onBellRing(event.bell);
-        else if (event.type === "matchPhase") this.onMatchPhase(event.phase);
+        if (event.type === "bellRing") {
+          this.hotseatTele.bellRings += 1;
+          this.onBellRing(event.bell);
+        } else if (event.type === "matchPhase")
+          this.onMatchPhase(event.phase, event.tick);
         else if (event.type === "matchEnd")
-          this.onMatchEnd(event.winner, event.scores);
+          this.onMatchEnd(event.winner, event.scores, event.tick);
         else if (event.type === "playerHit")
           this.onPlayerHit(event.slot, event.knockdown);
-        else if (event.type === "knockdown") this.onKnockdown(event.slot);
+        else if (event.type === "knockdown") {
+          this.hotseatTele.knockdowns += 1;
+          this.onKnockdown(event.slot);
+        }
       }
       this.accumulator -= this.FIXED_STEP;
 
@@ -946,6 +1145,9 @@ export class GameScene extends Phaser.Scene {
     const ballX = lerp(p.ball.x, s.ball.x, alpha);
     const ballY = lerp(p.ball.y, s.ball.y, alpha);
 
+    // Ball as focal point (ball-centric framing when zoom is clamped).
+    const ballSubject = subjectFromWorld(ballX, ballY, false);
+
     // Every active player as a camera subject (interpolated). players[] is
     // slot-indexed and SPARSE (e.g. 1v1 template [0, 2] leaves a hole at slot
     // 1); skip holes so we never pass an undefined subject to GroupCamera.
@@ -953,14 +1155,21 @@ export class GameScene extends Phaser.Scene {
     s.players.forEach((cp, i) => {
       if (!cp) return;
       const pp = p.players[i] ?? cp;
+      const team = teamForPlayerSlot(i as PlayerSlotId);
       subjects.push(
-        subjectFromWorld(lerp(pp.x, cp.x, alpha), lerp(pp.y, cp.y, alpha)),
+        subjectFromWorld(
+          lerp(pp.x, cp.x, alpha),
+          lerp(pp.y, cp.y, alpha),
+          true,
+          team,
+          i,
+        ),
       );
     });
-    subjects.push(subjectFromWorld(ballX, ballY));
+    subjects.push(ballSubject);
     subjects.push(...this.bellSubjects);
 
-    this.groupCamera.update(subjects);
+    this.groupCamera.update(subjects, ballSubject.screenX, ballSubject.screenY);
   }
 
   /**
@@ -978,13 +1187,58 @@ export class GameScene extends Phaser.Scene {
     console.info(`[bellRing] ${bell}`);
   }
 
-  private onMatchPhase(phase: import("@bb/sim").MatchPhase): void {
+  private onMatchPhase(
+    phase: import("@bb/sim").MatchPhase,
+    tick: number,
+  ): void {
+    if (phase === "playing" && this.hotseatStartTick === null)
+      this.hotseatStartTick = tick;
     console.info(`[match] phase → ${phase}`);
   }
 
-  private onMatchEnd(winner: number | "tie", scores: number[]): void {
+  private onMatchEnd(
+    winner: number | "tie",
+    scores: number[],
+    tick: number,
+  ): void {
     const label = winner === "tie" ? "TIE" : `P${(winner as number) + 1} WINS`;
     console.info(`[match] END — ${label}  ${scores.join("-")}`);
+    // Phase 7 (FLI-9): build a hotseat MatchSummary from local counters.
+    // Network fields are absent/zero (hotseat has no server connection).
+    const startTick = this.hotseatStartTick ?? tick;
+    const durationTicks = Math.max(0, tick - startTick);
+    const activeSlots = Object.keys(this.sim.getRenderState().players).map(
+      (k) => Number(k) as import("@bb/sim").PlayerSlotId,
+    );
+    const hotseatSummary: MatchSummary = {
+      type: "MatchSummary",
+      launchId: "hotseat",
+      arenaId: this.activeArena.id,
+      mode: activeSlots.length > 2 ? "2v2" : "1v1",
+      durationTicks,
+      scores: [...scores],
+      winner,
+      slots: activeSlots.map((slotId) => ({
+        slotId,
+        characterId: "sifu" as import("@bb/sim").CharacterId,
+        isBot: false,
+      })),
+      bellRings: this.hotseatTele.bellRings,
+      knockdowns: this.hotseatTele.knockdowns,
+      friendlyFireKnockdowns: 0,
+      botSlots: [],
+      net: {
+        rttMs: 0,
+        jitterMs: 0,
+        reconciliationCorrections: 0,
+        disconnects: 0,
+      },
+    };
+    this.renderMatchSummaryOverlay(hotseatSummary);
+    // Reset counters for the next round/rematch.
+    this.hotseatTele.bellRings = 0;
+    this.hotseatTele.knockdowns = 0;
+    this.hotseatStartTick = null;
   }
 
   private onKnockdown(slot: number): void {
@@ -995,6 +1249,28 @@ export class GameScene extends Phaser.Scene {
   private onPlayerHit(slot: number, knockdown: boolean): void {
     this.hitFlash[slot] = 1; // full intensity, decays in tickBellFeedback
     console.info(`[combat] P${slot + 1} hit${knockdown ? " (KNOCKDOWN)" : ""}`);
+  }
+
+  /**
+   * Phase 7 (FLI-9): populate the match-summary overlay with structured
+   * balance telemetry fields. Called on matchEnd (hotseat: built locally;
+   * networked: populated from the server's MatchSummary broadcast).
+   *
+   * Each field is rendered as a child element with a `data-testid="match-summary-*"`
+   * attribute so automated and e2e tests can assert on individual fields.
+   */
+  private renderMatchSummaryOverlay(summary: MatchSummary): void {
+    const el = this.matchSummaryEl;
+    el.style.display = "block";
+    this.matchSummaryRendered = true;
+
+    renderMatchSummaryDOM(el, summary, {
+      networked: this.netLoop !== null,
+      localSlot:
+        this.netLoop !== null
+          ? (this.netClient.slot as import("@bb/sim").PlayerSlotId)
+          : undefined,
+    });
   }
 
   /** Decay the banner alpha and per-Bell flash intensity over real time. */
@@ -1009,11 +1285,40 @@ export class GameScene extends Phaser.Scene {
     if (this.bellText.alpha > 0) {
       this.bellText.setAlpha(Math.max(0, this.bellText.alpha - decay * 0.8));
     }
+
+    // Phase 2 (FLI-9): decay special flash + strike arc flash + variant text.
+    for (let s = 0; s < this.specialFlash.length; s++) {
+      this.specialFlash[s] = Math.max(
+        0,
+        (this.specialFlash[s] ?? 0) - decay * 3,
+      );
+    }
+    for (let s = 0; s < this.strikeArcFlash.length; s++) {
+      const e = this.strikeArcFlash[s];
+      if (e) e.intensity = Math.max(0, e.intensity - decay * 3);
+    }
+    // Tick down the local special cooldown approximation.
+    const ticksPerSec = DEFAULT_CONFIG.tickHz;
+    const ticksElapsed = (delta / 1000) * ticksPerSec;
+    for (let s = 0; s < this.localSpecialCooldown.length; s++) {
+      this.localSpecialCooldown[s] = Math.max(
+        0,
+        (this.localSpecialCooldown[s] ?? 0) - ticksElapsed,
+      );
+    }
+    // Fade the strike-variant text pop.
+    if (this.strikeVariantAlpha > 0) {
+      this.strikeVariantAlpha = Math.max(
+        0,
+        this.strikeVariantAlpha - decay * 1.2,
+      );
+      this.strikeVariantText.setAlpha(this.strikeVariantAlpha);
+    }
   }
 
   private drawArena(): void {
     this.gfx.fillStyle(0x444444, 1);
-    for (const c of FLAT_DOJO.colliders) {
+    for (const c of this.activeArena.colliders) {
       this.gfx.fillRect(
         toScreenX(c.x - c.halfW),
         toScreenY(c.y + c.halfH),
@@ -1029,11 +1334,28 @@ export class GameScene extends Phaser.Scene {
    * brighter for a moment via bellFlash.
    */
   private drawBells(): void {
-    for (const bell of FLAT_DOJO.bells) {
+    // Overtime Pressure Ramp: during Golden Goal the sim grows each Bell's
+    // scoring radius. Draw a pulsing ring at the effective radius (in arena
+    // order, matching getBellHitRadii) so the visible hit-zone tracks scoring.
+    const phase = this.sim.getMatchState().phase;
+    const hitRadii = this.sim.getBellHitRadii();
+    for (let i = 0; i < this.activeArena.bells.length; i++) {
+      const bell = this.activeArena.bells[i];
+      if (!bell) continue;
       const art = bell.art;
       const flash = this.bellFlash[bell.id];
       const base = bell.id === "left" ? 0x3aa0c0 : 0xc06a3a;
       const color = flash > 0 ? 0xffffff : base;
+      const overtime = overtimeBellRing(phase, hitRadii[i] ?? 0, this.simTick);
+      if (overtime) {
+        this.gfx
+          .lineStyle(2, 0xff5a5a, overtime.alpha)
+          .strokeCircle(
+            toScreenX(bell.hitZone.x),
+            toScreenY(bell.hitZone.y),
+            overtime.radius * PX_PER_UNIT,
+          );
+      }
       this.gfx
         .fillStyle(color, 1)
         .fillRect(
@@ -1120,6 +1442,33 @@ export class GameScene extends Phaser.Scene {
       }
 
       this.drawChargeFeedback(x, y, halfW, halfH, cp.charge);
+
+      // Phase 2 (FLI-9): Special press-flash + cooldown ring.
+      const sFlash = this.specialFlash[s] ?? 0;
+      const sCooldown = this.localSpecialCooldown[s] ?? 0;
+      const sCooldownTotal = this.localSpecialCooldownTotal[s] ?? 1;
+      this.drawSpecialFeedback(
+        x,
+        y,
+        halfW,
+        halfH,
+        sFlash,
+        sCooldown,
+        sCooldownTotal,
+      );
+
+      // Phase 2 (FLI-9): strike-variant arc flash.
+      const arcEntry = this.strikeArcFlash[s];
+      if (arcEntry?.kind && arcEntry.intensity > 0) {
+        this.drawStrikeArcFlash(
+          x,
+          y,
+          halfW,
+          halfH,
+          arcEntry.kind,
+          arcEntry.intensity,
+        );
+      }
     }
   }
 
@@ -1147,6 +1496,186 @@ export class GameScene extends Phaser.Scene {
     this.gfx
       .lineStyle(2 + t * 3, color, 0.35 + t * 0.5)
       .strokeCircle(cx, cy, ringR);
+  }
+
+  /**
+   * Phase 2 (FLI-9): Special press-flash + cooldown ring.
+   * flash:       1→0 intensity driven by `specialFlash[]`
+   * cooldown:    ticks remaining (approximated locally from press + elapsed)
+   * cooldownTotal: ticks at activation (for the fraction calculation)
+   *
+   * Cooldown ring: a partial arc drawn counter-clockwise, fraction =
+   * 1 - cooldown/cooldownTotal (full circle when ready, shrinks on activation).
+   */
+  private drawSpecialFeedback(
+    x: number,
+    y: number,
+    halfW: number,
+    halfH: number,
+    flash: number,
+    cooldown: number,
+    cooldownTotal: number,
+  ): void {
+    const cx = toScreenX(x);
+    const cy = toScreenY(y + halfH * 0.25);
+    const baseR = Math.max(halfW, halfH) * PX_PER_UNIT;
+    const ringR = baseR + 12;
+
+    // Press flash: gold burst ring.
+    if (flash > 0) {
+      this.gfx
+        .lineStyle(4, 0xffdd44, flash * 0.9)
+        .strokeCircle(cx, cy, ringR + (1 - flash) * 10);
+    }
+
+    // Cooldown ring: partial arc (full = ready; depleting = cooling down).
+    const fraction = cooldownTotal > 0 ? 1 - cooldown / cooldownTotal : 1;
+    if (fraction < 0.999) {
+      // Draw the "remaining" arc in dim gold; ready portion in bright gold.
+      const startAngle = -Math.PI / 2; // top
+      const endAngle = startAngle + fraction * Math.PI * 2;
+      // Draw ready arc (bright gold).
+      if (fraction > 0) {
+        this.gfx.lineStyle(2, 0xffdd44, 0.7);
+        this.gfx.beginPath();
+        this.gfx.arc(cx, cy, ringR, startAngle, endAngle, false);
+        this.gfx.strokePath();
+      }
+      // Draw remaining (cooldown) arc in dim grey.
+      if (fraction < 1) {
+        this.gfx.lineStyle(2, 0x555533, 0.5);
+        this.gfx.beginPath();
+        this.gfx.arc(cx, cy, ringR, endAngle, startAngle + Math.PI * 2, false);
+        this.gfx.strokePath();
+      }
+    } else {
+      // Fully ready: show a dim gold ring so the player knows it's available.
+      this.gfx.lineStyle(1, 0xffdd44, 0.3).strokeCircle(cx, cy, ringR);
+    }
+  }
+
+  /**
+   * Phase 2 (FLI-9): Strike-variant arc flash.
+   * spike = downward red arc, header = upward arc, charged = brighter/larger.
+   */
+  private drawStrikeArcFlash(
+    x: number,
+    y: number,
+    halfW: number,
+    halfH: number,
+    kind: "spike" | "header" | "charged",
+    intensity: number,
+  ): void {
+    const cx = toScreenX(x);
+    const cy = toScreenY(y + halfH * 0.25);
+    const baseR = Math.max(halfW, halfH) * PX_PER_UNIT;
+    const r = baseR + 8 + (1 - intensity) * 14;
+
+    if (kind === "spike") {
+      // Downward red arc (lower half).
+      this.gfx.lineStyle(3, 0xff3322, intensity * 0.9);
+      this.gfx.beginPath();
+      this.gfx.arc(cx, cy, r, 0, Math.PI, false); // bottom semicircle
+      this.gfx.strokePath();
+    } else if (kind === "header") {
+      // Upward cyan arc (upper half).
+      this.gfx.lineStyle(3, 0x44ddff, intensity * 0.9);
+      this.gfx.beginPath();
+      this.gfx.arc(cx, cy, r, Math.PI, Math.PI * 2, false); // top semicircle
+      this.gfx.strokePath();
+    } else {
+      // Charged: full bright orange circle, larger.
+      this.gfx
+        .lineStyle(4, 0xff8800, intensity * 0.9)
+        .strokeCircle(cx, cy, r + 6);
+    }
+  }
+
+  /**
+   * Phase 2 (FLI-9): Detect strike-variant feedback for a single slot from its
+   * input frame + the pre-step render state. Cosmetic only. Shared by the hotseat
+   * loop (per active slot) and the networked path (local slot only).
+   *
+   * `render` MUST be the state BEFORE the slot's step this tick, so the charge
+   * accumulated while holding is still present on the release tick.
+   */
+  private detectStrikeVariantForSlot(
+    inp: InputFrame,
+    slot: number,
+    render: RenderState,
+  ): void {
+    if (!inp.strikeReleased) return;
+    const player = render.players[slot];
+    if (!player) return;
+
+    // Detect variant from the state at release (charge is in the sim render state).
+    // charge > maxChargeTicks*0.85 → CHARGED!
+    // airborne + moveY < 0 → SPIKE!
+    // airborne + moveY >= 0 → HEADER!
+    const charge = player.charge;
+    const maxCharge = DEFAULT_CONFIG.strike.maxChargeTicks;
+    const isAirborne = !player.grounded;
+    let kind: "spike" | "header" | "charged" | null = null;
+    let label = "";
+    let color = "#ff8844";
+
+    if (charge >= maxCharge * 0.85) {
+      kind = "charged";
+      label = "CHARGED!";
+      color = "#ff8800";
+    } else if (isAirborne && inp.moveY < 0) {
+      kind = "spike";
+      label = "SPIKE!";
+      color = "#ff3322";
+    } else if (isAirborne) {
+      kind = "header";
+      label = "HEADER!";
+      color = "#44ddff";
+    }
+
+    if (kind !== null) {
+      this.strikeArcFlash[slot] = { kind, intensity: 1 };
+      // Show the text pop (shared; last writer wins if two players strike simultaneously).
+      this.strikeVariantText.setText(label).setColor(color).setAlpha(1);
+      this.strikeVariantAlpha = 1;
+      console.info(`[strike] P${slot + 1}: ${label}`);
+    }
+  }
+
+  /**
+   * Phase 2 (FLI-9): Detect a Special press for a single slot and update the
+   * local cooldown approximation. Cosmetic only — no sim coupling. Shared by the
+   * hotseat loop and the networked path.
+   */
+  private detectSpecialForSlot(inp: InputFrame, slot: number): void {
+    if (!inp.specialPressed) return;
+    // Only activate if our local cooldown approximation says it's ready.
+    if ((this.localSpecialCooldown[slot] ?? 0) > 0) return;
+    // We don't have per-slot cooldownTicks here (no character access in render).
+    // Use a default approximation based on Panda (130 ticks). This is cosmetic.
+    const approxCooldown = 130;
+    this.specialFlash[slot] = 1;
+    this.localSpecialCooldown[slot] = approxCooldown;
+    this.localSpecialCooldownTotal[slot] = approxCooldown;
+  }
+
+  /**
+   * Hotseat: run strike-variant detection for every collected slot. `inputFrames`
+   * is indexed the same way the sim consumes it; `this.cur` is the pre-step state.
+   */
+  private detectStrikeVariantFeedback(inputFrames: InputFrame[]): void {
+    for (let s = 0; s < inputFrames.length; s++) {
+      const inp = inputFrames[s];
+      if (inp) this.detectStrikeVariantForSlot(inp, s, this.cur);
+    }
+  }
+
+  /** Hotseat: run Special detection for every collected slot. */
+  private detectSpecialFeedback(inputFrames: InputFrame[]): void {
+    for (let s = 0; s < inputFrames.length; s++) {
+      const inp = inputFrames[s];
+      if (inp) this.detectSpecialForSlot(inp, s);
+    }
   }
 
   shutdown(): void {

@@ -124,9 +124,12 @@ function afterReset(
   }
 }
 
-/** A jump-button edge from ANY slot acts as Start (preRound) / Rematch (complete). */
+/** A jump-button edge from ANY slot acts as Start (preRound) / Rematch (complete).
+ *  Tolerates sparse/null slots: hotseat rows are sparse ([0], [2]) and a JSON
+ *  round-trip (serialize → deserialize a captured replay) materializes the holes
+ *  as explicit `null`, so guard the per-slot read. */
 function anyStartPressed(inputs: InputFrame[]): boolean {
-  return inputs.some((f) => f.jumpPressed);
+  return inputs.some((f) => f?.jumpPressed);
 }
 
 // ── Public step function ──────────────────────────────────────────────────────

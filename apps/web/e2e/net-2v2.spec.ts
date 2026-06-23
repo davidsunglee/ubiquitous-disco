@@ -30,7 +30,7 @@ test("four clients play a 2v2 and agree on Team score + timer", async ({
 
   // Load the app in all four tabs.
   for (const p of pages) {
-    await p.goto("/");
+    await p.goto("/?direct=1");
     await expect(p.locator("canvas")).toBeVisible({ timeout: 8000 });
   }
 

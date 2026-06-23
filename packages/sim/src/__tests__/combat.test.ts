@@ -25,6 +25,7 @@ import {
   type InputFrame,
   initSim,
   type SimConfig,
+  teamForPlayerSlot,
 } from "../index";
 
 beforeAll(async () => {
@@ -145,6 +146,55 @@ test("playerHit event fires on a non-knockdown hit (per-hit feedback)", () => {
   expect(evts.find((e) => e.type === "knockdown")).toBeUndefined();
 });
 
+test("a same-team knockdown is attributed to a teammate striker (friendly fire)", () => {
+  // Team 0 = slots {0, 1}. Slot 0 knocks down teammate slot 1, so the knockdown
+  // event carries bySlot=0, slot=1 — both on team 0. This is the exact predicate
+  // the server uses to count friendlyFireKnockdowns (event-only, not hashed).
+  const config: SimConfig = {
+    ...DEFAULT_CONFIG,
+    combat: { ...DEFAULT_CONFIG.combat, staggerThreshold: 1, staggerPerHit: 1 },
+  };
+  const sim = createSimulation({
+    config,
+    arena: FLAT_DOJO,
+    seed: 7,
+    activeSlots: [0, 1],
+  });
+  // Sparse input row for the same-team [0, 1] pair.
+  const row01 = (
+    f0: InputFrame,
+    f1: InputFrame = EMPTY_INPUT,
+  ): InputFrame[] => {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[1] = f1;
+    return r;
+  };
+  // Start the match, then converge (slot 0 at x=-4 walks left toward slot 1 at x=-7).
+  sim.step(row01(frame({ jumpPressed: true, jumpHeld: true })));
+  const reach =
+    DEFAULT_CONFIG.strike.reach + DEFAULT_CONFIG.combat.playerHitRadius;
+  for (let i = 0; i < 200; i++) {
+    const s = sim.getRenderState();
+    const p0 = s.players[0];
+    const p1 = s.players[1];
+    if (!p0 || !p1) break;
+    if (Math.hypot(p1.x - p0.x, p1.y - p0.y) <= reach * 0.95) break;
+    sim.step(row01(frame({ moveX: -1 }), frame({ moveX: 1 })));
+  }
+  // Slot 0 taps a strike that connects with teammate slot 1.
+  sim.step(row01(frame({ strikeHeld: true, strikePressed: true })));
+  sim.step(row01(frame({ strikeReleased: true })));
+
+  const kd = sim.drainEvents().find((e) => e.type === "knockdown");
+  expect(kd).toBeDefined();
+  if (kd && kd.type === "knockdown") {
+    expect(kd.slot).toBe(1);
+    expect(kd.bySlot).toBe(0);
+    expect(teamForPlayerSlot(0)).toBe(teamForPlayerSlot(1));
+  }
+});
+
 test("playerHit event marks knockdown=true on the hit that knocks down", () => {
   const sim = newSim({ staggerThreshold: 1, staggerPerHit: 1 });
   startMatch(sim);
@@ -174,6 +224,8 @@ test("knockdown event emitted when a player is knocked down", () => {
   expect(kd).toBeDefined();
   if (kd && kd.type === "knockdown") {
     expect(kd.slot).toBe(2);
+    // Phase 7: the knockdown is attributed to its striker (slot 0).
+    expect(kd.bySlot).toBe(0);
   }
 });
 

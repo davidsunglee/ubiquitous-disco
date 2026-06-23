@@ -26,7 +26,7 @@ export interface DashBlink {
 export function stepDash(
   actor: Actor,
   input: InputFrame,
-  config: SimConfig,
+  _config: SimConfig,
 ): DashBlink | null {
   // Cooldown always advances toward ready.
   if (actor.dashCooldown > 0) actor.dashCooldown -= 1;
@@ -58,9 +58,12 @@ export function stepDash(
   if (dirX > 0) actor.facing = 1;
   else if (dirX < 0) actor.facing = -1;
 
-  actor.dashCooldown = config.dash.cooldownTicks;
+  actor.dashCooldown = actor.character.stats.dashCooldown;
 
-  return { x: nx * config.dash.distance, y: ny * config.dash.distance };
+  return {
+    x: nx * actor.character.stats.dashDistance,
+    y: ny * actor.character.stats.dashDistance,
+  };
 }
 
 /**
@@ -68,5 +71,9 @@ export function stepDash(
  * Called from movement after grounded is reconciled for the tick.
  */
 export function resetDashOnLanding(actor: Actor): void {
-  if (actor.grounded) actor.airDashAvailable = true;
+  if (actor.grounded) {
+    actor.airDashAvailable = true;
+    // Phase 4 (FLI-9): restore the air-jump budget from the character on landing.
+    actor.airJumpsRemaining = actor.character.airJumps;
+  }
 }

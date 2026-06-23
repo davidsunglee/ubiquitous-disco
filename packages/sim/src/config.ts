@@ -1,4 +1,4 @@
-export const SIM_CONFIG_VERSION = 6;
+export const SIM_CONFIG_VERSION = 8;
 
 export interface MovementConfig {
   moveSpeed: number; // world units / second of horizontal movement
@@ -41,6 +41,12 @@ export interface MatchConfig {
   goldenGoal: boolean; // tie at regulation → sudden-death next ring wins
 }
 
+export interface OvertimeConfig {
+  rampIntervalTicks: number; // ticks between hit-zone growth steps (default 900 = 30s)
+  rampStepRadius: number; // world-unit radius added per step (default 0.4)
+  rampMaxBonus: number; // hard cap on total added radius (default 1.6)
+}
+
 export interface CombatConfig {
   staggerThreshold: number; // stagger >= this → Knockdown
   staggerPerHit: number; // stagger added per connecting strike
@@ -62,6 +68,7 @@ export interface SimConfig {
   strike: StrikeConfig;
   match: MatchConfig;
   combat: CombatConfig;
+  overtime: OvertimeConfig;
 }
 
 export const DEFAULT_CONFIG: SimConfig = {
@@ -79,7 +86,7 @@ export const DEFAULT_CONFIG: SimConfig = {
   player: { halfW: 0.4, halfH: 0.8 },
   movement: {
     moveSpeed: 6,
-    jumpSpeed: 11,
+    jumpSpeed: 12, // FLI-9 tall redesign: feet apex ≈ 3.6u so a single jump lands a low ledge
     gravityScale: 1,
     jumpCutMultiplier: 0.4,
     coyoteTicks: 4,
@@ -113,5 +120,10 @@ export const DEFAULT_CONFIG: SimConfig = {
     recoveryInvulnTicks: 30, // 1.0s i-frames
     strikePlayerImpulse: 9,
     playerHitRadius: 0.6,
+  },
+  overtime: {
+    rampIntervalTicks: 900, // 30s @ 30Hz
+    rampStepRadius: 0.4,
+    rampMaxBonus: 1.6,
   },
 };

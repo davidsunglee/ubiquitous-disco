@@ -25,6 +25,8 @@ import type {
   PlayerSlotId,
 } from "@bb/protocol";
 import {
+  CHARACTERS,
+  type CharacterId,
   DEFAULT_RECONNECT_CONFIG,
   type LobbyCommand,
   type LobbyJoin,
@@ -66,8 +68,14 @@ const DEFAULT_SETTINGS: LobbySettings = {
   arenaId: "flat-dojo",
 };
 
-/** Only the Flat Dojo arena exists today — the picker exposes just this. */
-const AVAILABLE_ARENAS = ["flat-dojo"] as const;
+/** All available arenas — the lobby arena picker exposes all three. */
+const AVAILABLE_ARENAS = [
+  "flat-dojo",
+  "pillared-temple",
+  "twin-ledge",
+] as const;
+
+const DEFAULT_CHARACTER: CharacterId = "sifu";
 
 /**
  * Player Slots required to be filled for each mode.
@@ -89,6 +97,9 @@ export class PrivateLobby extends Server<Env> {
 
   /** Slot ids filled with a Practice Bot (Host-controlled). */
   private bots = new Set<PlayerSlotId>();
+
+  /** Per-slot character pick (default Sifu). Humans set own slot; host sets bot slots. */
+  private slotCharacters = new Map<PlayerSlotId, CharacterId>();
 
   /** Host's playerId (first human to connect). */
   private hostPlayerId: string | null = null;
@@ -239,6 +250,9 @@ export class PrivateLobby extends Server<Env> {
         if (slotId !== undefined) {
           this.seats.delete(slotId);
           this.playerToSlot.delete(playerId);
+          // Clear the character pick with the seat so the next occupant of this
+          // slot doesn't inherit the departed player's character.
+          this.slotCharacters.delete(slotId);
         }
         this.absentSince.delete(playerId);
         this.hostTransferred.delete(playerId);
@@ -424,6 +438,9 @@ export class PrivateLobby extends Server<Env> {
       case "clearBot":
         if (this.isHost(playerId)) this.clearBot(cmd.slotId);
         break;
+      case "setCharacter":
+        this.setCharacter(playerId, cmd.slotId, cmd.characterId);
+        break;
       case "setSettings":
         if (this.isHost(playerId)) this.applySettings(cmd.settings);
         break;
@@ -450,6 +467,11 @@ export class PrivateLobby extends Server<Env> {
     seat.slotId = toSlot;
     this.seats.set(toSlot, seat);
     this.playerToSlot.set(seat.playerId, toSlot);
+    // Move the character pick with the occupant so it doesn't revert to the
+    // default at the new slot or orphan on the old one.
+    const character = this.slotCharacters.get(fromSlot);
+    this.slotCharacters.delete(fromSlot);
+    if (character !== undefined) this.slotCharacters.set(toSlot, character);
     this.sendLobbyStateToAll();
   }
 
@@ -467,6 +489,22 @@ export class PrivateLobby extends Server<Env> {
   private clearBot(slotId: PlayerSlotId): void {
     if (!this.bots.has(slotId)) return;
     this.bots.delete(slotId);
+    this.slotCharacters.delete(slotId);
+    this.sendLobbyStateToAll();
+  }
+
+  /** Set a slot's character. A human may set only their OWN slot; the host may set bot slots. */
+  private setCharacter(
+    playerId: string,
+    slotId: PlayerSlotId,
+    characterId: CharacterId,
+  ): void {
+    if (!(characterId in CHARACTERS)) return; // validate ∈ CHARACTERS
+    const seat = this.seats.get(slotId);
+    const isOwnSeat = seat?.playerId === playerId;
+    const isHostForBot = this.isHost(playerId) && this.bots.has(slotId);
+    if (!isOwnSeat && !isHostForBot) return; // permission guard
+    this.slotCharacters.set(slotId, characterId);
     this.sendLobbyStateToAll();
   }
 
@@ -584,7 +622,12 @@ export class PrivateLobby extends Server<Env> {
     for (const slotId of REQUIRED_SLOTS[this.settings.mode]) {
       const seat = this.seats.get(slotId);
       if (seat) {
-        manifestSlots.push({ slotId, kind: "human", playerId: seat.playerId });
+        manifestSlots.push({
+          slotId,
+          kind: "human",
+          playerId: seat.playerId,
+          characterId: this.slotCharacters.get(slotId) ?? DEFAULT_CHARACTER,
+        });
         const joinToken = crypto.randomUUID().replace(/-/g, "");
         tokenToSlot[joinToken] = slotId;
         launchByPlayer.set(seat.playerId, {
@@ -594,7 +637,11 @@ export class PrivateLobby extends Server<Env> {
           joinToken,
         });
       } else if (this.bots.has(slotId)) {
-        manifestSlots.push({ slotId, kind: "bot" });
+        manifestSlots.push({
+          slotId,
+          kind: "bot",
+          characterId: this.slotCharacters.get(slotId) ?? DEFAULT_CHARACTER,
+        });
       }
     }
 
@@ -694,11 +741,18 @@ export class PrivateLobby extends Server<Env> {
             playerId: seat.playerId,
             displayName: seat.displayName,
             present: seat.connId !== null,
+            characterId: this.slotCharacters.get(slotId) ?? DEFAULT_CHARACTER,
           },
         };
       }
       if (this.bots.has(slotId)) {
-        return { slotId, occupant: { kind: "bot" as const } };
+        return {
+          slotId,
+          occupant: {
+            kind: "bot" as const,
+            characterId: this.slotCharacters.get(slotId) ?? DEFAULT_CHARACTER,
+          },
+        };
       }
       return { slotId, occupant: null };
     });
@@ -739,6 +793,11 @@ export class PrivateLobby extends Server<Env> {
   /** Whether a bot occupies the given slot (for unit test inspection). */
   hasBot(slotId: PlayerSlotId): boolean {
     return this.bots.has(slotId);
+  }
+
+  /** The character pick for a slot, if any (for unit test inspection). */
+  characterFor(slotId: PlayerSlotId): CharacterId | undefined {
+    return this.slotCharacters.get(slotId);
   }
 
   /** Current lobby settings (for unit test inspection). */

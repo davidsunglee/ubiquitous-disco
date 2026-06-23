@@ -13,7 +13,8 @@
  * same hash — and must equal the hash from the live capture session.
  */
 
-import { FLAT_DOJO } from "./arena";
+import { FLAT_DOJO, resolveArena } from "./arena";
+import { CHARACTERS, type CharacterId } from "./character";
 import { DEFAULT_CONFIG, SIM_CONFIG_VERSION } from "./config";
 import type { InputFrame } from "./input";
 import { createSimulation } from "./simulation";
@@ -23,6 +24,8 @@ export interface ReplayData {
   simConfigVersion: number;
   arenaId: string;
   rosterId: string;
+  /** Per-slot character ids (indexed by slot). Empty/absent → all Sifu (legacy). */
+  characterIds?: CharacterId[];
   /** One row per tick; each row is [slot0Frame, slot1Frame, ...]. */
   inputFrames: InputFrame[][];
 }
@@ -39,7 +42,7 @@ export function recordFrame(replay: ReplayData, frames: InputFrame[]): void {
 /**
  * Replay all inputFrames through a fresh simulation and return the final
  * hashState(). The arena and config are resolved from the replay metadata:
- *  - arenaId "flat-dojo" → FLAT_DOJO
+ *  - arenaId → resolveArena(arenaId) (unknown ids fall back to FLAT_DOJO)
  *  - config → DEFAULT_CONFIG (the only config supported this phase)
  *
  * Calling this function twice with the same ReplayData must produce the same hash.
@@ -47,17 +50,15 @@ export function recordFrame(replay: ReplayData, frames: InputFrame[]): void {
  * final hashState() taken after all the same frames were stepped.
  */
 export function playReplay(replay: ReplayData): string {
-  // Resolve arena from id.
-  if (replay.arenaId !== FLAT_DOJO.id) {
-    throw new Error(
-      `playReplay: unknown arenaId "${replay.arenaId}" — only "${FLAT_DOJO.id}" is supported`,
-    );
-  }
+  // Resolve the arena from the captured arenaId so replays play back on the
+  // arena they were recorded on (not a hardcoded flat-dojo).
+  const arena = resolveArena(replay.arenaId);
 
   const sim = createSimulation({
     config: DEFAULT_CONFIG,
-    arena: FLAT_DOJO,
+    arena,
     seed: replay.seed,
+    characters: replay.characterIds?.map((id) => CHARACTERS[id ?? "sifu"]),
   });
 
   for (const row of replay.inputFrames) {
@@ -70,17 +71,23 @@ export function playReplay(replay: ReplayData): string {
 /**
  * Create an empty ReplayData ready to record into, using the current
  * SIM_CONFIG_VERSION and the given arena/roster/seed.
+ *
+ * Phase 3 (FLI-9): pass `characterIds` to carry per-slot character ids so
+ * Specials (especially Drunken Boxer's seeded stagger-stumble) replay
+ * deterministically. Omit or pass `undefined` to preserve all-Sifu behavior.
  */
 export function createReplay(
   seed: number,
   arenaId: string = FLAT_DOJO.id,
   rosterId: string = "default",
+  characterIds?: CharacterId[],
 ): ReplayData {
   return {
     seed,
     simConfigVersion: SIM_CONFIG_VERSION,
     arenaId,
     rosterId,
+    ...(characterIds !== undefined ? { characterIds } : {}),
     inputFrames: [],
   };
 }

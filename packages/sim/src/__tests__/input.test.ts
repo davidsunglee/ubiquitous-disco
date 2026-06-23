@@ -20,10 +20,16 @@ test("normalizeMove preserves direction when clamping", () => {
   expect(moveY).toBeCloseTo(0.8, 10);
 });
 
-const held = (jump: boolean, dash: boolean, strike: boolean): HeldState => ({
+const held = (
+  jump: boolean,
+  dash: boolean,
+  strike: boolean,
+  special = false,
+): HeldState => ({
   jump,
   dash,
   strike,
+  special,
 });
 
 test("deriveEdges reports pressed on a rising edge only", () => {
@@ -52,5 +58,31 @@ test("deriveEdges derives dash + strike pressed independently", () => {
     dashPressed: true,
     strikePressed: true,
     strikeReleased: false,
+    specialPressed: false,
   });
+});
+
+// Phase 2 (FLI-9): specialPressed edge derivation
+test("deriveEdges reports specialPressed on a rising edge only", () => {
+  // Rising edge: special not held → special held
+  expect(
+    deriveEdges(
+      held(false, false, false, false),
+      held(false, false, false, true),
+    ),
+  ).toMatchObject({ specialPressed: true });
+  // Still held → no new press
+  expect(
+    deriveEdges(
+      held(false, false, false, true),
+      held(false, false, false, true),
+    ),
+  ).toMatchObject({ specialPressed: false });
+  // Released → not pressed
+  expect(
+    deriveEdges(
+      held(false, false, false, true),
+      held(false, false, false, false),
+    ),
+  ).toMatchObject({ specialPressed: false });
 });

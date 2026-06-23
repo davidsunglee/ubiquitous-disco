@@ -63,6 +63,7 @@ function makeLobbyState(): LobbyState {
         playerId: "player-uuid-123",
         displayName: "Alice",
         present: true,
+        characterId: "sifu",
       },
     },
     { slotId: 1, occupant: null },
@@ -73,9 +74,10 @@ function makeLobbyState(): LobbyState {
         playerId: "player-uuid-456",
         displayName: "Bob",
         present: false,
+        characterId: "vipra",
       },
     },
-    { slotId: 3, occupant: { kind: "bot" } },
+    { slotId: 3, occupant: { kind: "bot", characterId: "panda" } },
   ];
   return {
     type: "LobbyState",
@@ -190,6 +192,66 @@ test("LobbyCommand setSettings round-trips a partial settings patch", () => {
 test("LobbyCommand start round-trips", () => {
   const m: LobbyCommand = { type: "LobbyCommand", cmd: "start" };
   expect(deserializeLobbyCommand(serializeLobbyCommand(m))).toEqual(m);
+});
+
+test("LobbyCommand setCharacter round-trips", () => {
+  const m: LobbyCommand = {
+    type: "LobbyCommand",
+    cmd: "setCharacter",
+    slotId: 0,
+    characterId: "vipra",
+  };
+  const decoded = deserializeLobbyCommand(serializeLobbyCommand(m));
+  expect(decoded).toEqual(m);
+  if (decoded.cmd === "setCharacter") {
+    expect(decoded.characterId).toBe("vipra");
+    expect(decoded.slotId).toBe(0);
+  }
+});
+
+test("LobbyCommand setCharacter preserves all character ids", () => {
+  const ids = [
+    "sifu",
+    "vipra",
+    "monkey-king",
+    "old-master",
+    "panda",
+    "drunken-boxer",
+  ] as const;
+  for (const characterId of ids) {
+    const m: LobbyCommand = {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 2,
+      characterId,
+    };
+    const decoded = deserializeLobbyCommand(serializeLobbyCommand(m));
+    if (decoded.cmd === "setCharacter") {
+      expect(decoded.characterId).toBe(characterId);
+    }
+  }
+});
+
+test("LobbyState preserves human characterId after round-trip", () => {
+  const m = makeLobbyState();
+  const decoded = deserializeLobbyState(serializeLobbyState(m));
+  const slot0 = decoded.slots[0];
+  if (slot0?.occupant?.kind === "human") {
+    expect(slot0.occupant.characterId).toBe("sifu");
+  }
+  const slot2 = decoded.slots[2];
+  if (slot2?.occupant?.kind === "human") {
+    expect(slot2.occupant.characterId).toBe("vipra");
+  }
+});
+
+test("LobbyState preserves bot characterId after round-trip", () => {
+  const m = makeLobbyState();
+  const decoded = deserializeLobbyState(serializeLobbyState(m));
+  const slot3 = decoded.slots[3];
+  if (slot3?.occupant?.kind === "bot") {
+    expect(slot3.occupant.characterId).toBe("panda");
+  }
 });
 
 // ── MatchLaunch (Phase 5) ─────────────────────────────────────────────────────

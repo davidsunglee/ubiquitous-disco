@@ -25,7 +25,8 @@ import {
 // Golden hash computed on V8 (Node 22 / Vitest 4.1.9, @dimforge/rapier2d-deterministic-compat 0.19.x).
 // If Bun/JSC diverges, this fails under `bun --bun vitest run`.
 // To regenerate: run this test with EXPECTED_HASH = "PLACEHOLDER" and read the console output.
-const EXPECTED_HASH = "9eee89f9";
+// FLI-9 Phase 6: radiusBonus (f64) + rampTicks (i32) appended to serializeBellRingState → new hash.
+const EXPECTED_HASH = "4a909c30";
 
 beforeAll(async () => {
   await initSim();

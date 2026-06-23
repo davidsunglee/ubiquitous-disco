@@ -25,7 +25,8 @@ export function stepMovement(
   blink: DashBlink | null = null,
 ): void {
   const dt = 1 / config.tickHz;
-  const m = config.movement;
+  const m = config.movement; // gravityScale, jumpCutMultiplier, coyoteTicks (global)
+  const cs = actor.character.stats; // moveSpeed, jumpSpeed (per-actor)
 
   const live = controllable(actor);
 
@@ -35,7 +36,7 @@ export function stepMovement(
     else if (input.moveX < 0) actor.facing = -1;
 
     // Horizontal velocity is directly driven by analog input (snappy platformer feel).
-    actor.vx = input.moveX * m.moveSpeed;
+    actor.vx = input.moveX * cs.moveSpeed;
   }
   // else: keep actor.vx (knockback velocity) — friction/walls reconcile it below.
 
@@ -43,9 +44,19 @@ export function stepMovement(
   const canJump =
     live && (actor.grounded || actor.ticksSinceGrounded <= m.coyoteTicks);
   if (input.jumpPressed && canJump) {
-    actor.vy = m.jumpSpeed;
+    actor.vy = cs.jumpSpeed;
     actor.grounded = false;
     actor.ticksSinceGrounded = m.coyoteTicks + 1; // consume the grace window
+  } else if (
+    input.jumpPressed &&
+    live &&
+    !canJump &&
+    actor.airJumpsRemaining > 0
+  ) {
+    // Phase 4 (FLI-9): extra mid-air jump (e.g. Monkey King). Distinct from the
+    // air Tele-Dash budget. Consumes one from the per-actor budget.
+    actor.airJumpsRemaining -= 1;
+    actor.vy = cs.jumpSpeed; // fresh upward velocity for the extra jump
   }
 
   // Variable height: releasing Jump early while still rising cuts upward velocity.

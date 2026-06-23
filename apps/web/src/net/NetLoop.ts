@@ -32,6 +32,8 @@ import type {
   WorldSnapshot,
 } from "@bb/protocol";
 import {
+  CHARACTERS,
+  type CharacterDef,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
@@ -40,6 +42,7 @@ import {
   initSim,
   type MatchState,
   type RenderState,
+  resolveArena,
 } from "@bb/sim";
 import { FIXED_STEP_MS, INTERP_DELAY_TICKS } from "./config";
 import { InterpolationBuffer } from "./InterpolationBuffer";
@@ -72,6 +75,14 @@ export interface NetLoopCallbacks {
   onMatchState(m: MatchState): void;
   /** Called when the connection drops or the server closes the match. */
   onDisconnect(): void;
+  /**
+   * Phase 2 (FLI-9): per-tick local cosmetic feedback hook. Fired once per
+   * predicted tick BEFORE the prediction step, with the local slot's input and
+   * the pre-step render state — so detection reads the same still-high charge on
+   * the release tick that the hotseat detect-before-step path does. Cosmetic
+   * only; never affects prediction or the sim.
+   */
+  onLocalTick?(localInput: InputFrame, preStepRender: RenderState): void;
 }
 
 export class NetLoop {
@@ -120,6 +131,8 @@ export class NetLoop {
     activeSlots: PlayerSlotId[],
     cb: NetLoopCallbacks,
     transport: SimulatedTransport | null = null,
+    characterIds?: import("@bb/sim").CharacterId[],
+    arenaId?: string,
   ) {
     this.net = net;
     this.slot = slot;
@@ -127,11 +140,24 @@ export class NetLoop {
     this.cb = cb;
     this.transport = transport;
 
+    // Build the per-slot CharacterDef array from the characterIds passed in RoomReady.
+    const characters: CharacterDef[] = [];
+    if (characterIds) {
+      for (let i = 0; i < characterIds.length; i++) {
+        const id = characterIds[i];
+        if (id) characters[i] = CHARACTERS[id] ?? CHARACTERS.sifu;
+      }
+    }
+
+    // Resolve arena from arenaId (falls back to FLAT_DOJO for unknown/absent ids).
+    const arena = arenaId ? resolveArena(arenaId) : FLAT_DOJO;
+
     this.sim = createSimulation({
       config: DEFAULT_CONFIG,
-      arena: FLAT_DOJO,
+      arena,
       seed: 1234,
       activeSlots,
+      characters: characterIds ? characters : undefined,
     });
 
     // Build one interpolation buffer per remote slot.
@@ -264,6 +290,13 @@ export class NetLoop {
         );
       }
     }
+
+    // Phase 2 (FLI-9): local cosmetic feedback BEFORE the step, so the release
+    // tick still sees the accumulated charge (mirrors hotseat ordering).
+    this.cb.onLocalTick?.(
+      localInput,
+      this.curRender ?? this.sim.getRenderState(),
+    );
 
     // Step the prediction sim: local slot gets local input, remotes get EMPTY.
     const frames: InputFrame[] = [];

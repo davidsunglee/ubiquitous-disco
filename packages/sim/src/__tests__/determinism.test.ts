@@ -1,5 +1,6 @@
 import { beforeAll, expect, test } from "vitest";
 import {
+  CHARACTERS,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
@@ -78,15 +79,18 @@ test("ball falls from spawn under gravity", () => {
   expect(sim.getRenderState().ball.y).toBeLessThan(startY);
 });
 
-test("player moves right and stops at the right wall", () => {
+test("player moves left and stops at the left wall", () => {
   const sim = newSim();
   const startX = sim.getRenderState().players[0]?.x ?? 0;
-  for (let i = 0; i < 120; i++) sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
+  // FLAT_DOJO is now 72 units wide (wall inner face at x = -35.5). Move LEFT,
+  // away from the centre ball, so the player travels freely to the far wall.
+  for (let i = 0; i < 600; i++) sim.step([frame({ moveX: -1 }), EMPTY_INPUT]);
   const endX = sim.getRenderState().players[0]?.x ?? 0;
-  expect(endX).toBeGreaterThan(startX);
-  // right wall inner face is at x = 11.5; player halfW 0.4 → cannot pass ~11.1
-  expect(endX).toBeLessThan(11.2);
-  expect(sim.getRenderState().players[0]?.facing).toBe(1);
+  expect(endX).toBeLessThan(startX);
+  // left wall inner face is at x = -35.5; player halfW 0.4 → cannot pass ~-35.1
+  expect(endX).toBeLessThan(-34);
+  expect(endX).toBeGreaterThan(-35.2);
+  expect(sim.getRenderState().players[0]?.facing).toBe(-1);
 });
 
 test("held jump rises higher than a tapped jump", () => {
@@ -115,4 +119,76 @@ test("held jump rises higher than a tapped jump", () => {
   ];
 
   expect(peak(held)).toBeGreaterThan(peak(tapped));
+});
+
+// ── Phase 3 (FLI-9): seeded RNG determinism ─────────────────────────────────
+
+/**
+ * Build a frame list where slot 0 (Drunken Boxer) fires Stagger Stumble once,
+ * then both players idle.
+ */
+function buildDrunkenBoxerFrames(): InputFrame[][] {
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start the match.
+  frames.push(
+    row(
+      frame({ jumpPressed: true, jumpHeld: true }),
+      frame({ jumpPressed: true, jumpHeld: true }),
+    ),
+  );
+  // Settle for 20 ticks.
+  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT));
+  // Walk toward center (ball).
+  for (let i = 0; i < 10; i++) frames.push(row(frame({ moveX: 1 })));
+  // Fire Stagger Stumble.
+  frames.push(row(frame({ specialPressed: true, specialHeld: true })));
+  // Idle for 40 ticks.
+  for (let i = 0; i < 40; i++) frames.push(row(EMPTY_INPUT));
+  return frames;
+}
+
+test("Phase 3: same seed + same Drunken-Boxer inputs → same hashState", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerFrames();
+
+  const runOnce = () => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed: 7777,
+      characters: [drunkenBoxerDef],
+    });
+    for (const f of frames) sim.step(f);
+    return sim.hashState();
+  };
+
+  expect(runOnce()).toBe(runOnce());
+});
+
+test("Phase 3: different seed → different hashState after a Stagger Stumble", () => {
+  const drunkenBoxerDef = CHARACTERS["drunken-boxer"];
+  const frames = buildDrunkenBoxerFrames();
+
+  const runWithSeed = (seed: number) => {
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena: FLAT_DOJO,
+      seed,
+      characters: [drunkenBoxerDef],
+    });
+    for (const f of frames) sim.step(f);
+    return sim.hashState();
+  };
+
+  // Different seeds produce different PRNG sequences → different stagger-stumble
+  // directions → different physics outcomes → different hashes.
+  expect(runWithSeed(1111)).not.toBe(runWithSeed(2222));
 });

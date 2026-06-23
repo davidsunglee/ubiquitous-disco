@@ -20,8 +20,8 @@ test("two clients connect to a room and see 'connected' status", async ({
   const a = await ctxA.newPage();
   const b = await ctxB.newPage();
 
-  await a.goto("/");
-  await b.goto("/");
+  await a.goto("/?direct=1");
+  await b.goto("/?direct=1");
 
   // Wait for the canvas to appear — ensures Phaser (and our overlay) are mounted.
   await expect(a.locator("canvas")).toBeVisible();
