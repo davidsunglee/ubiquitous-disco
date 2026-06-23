@@ -8,6 +8,7 @@ import { RapierWorld } from "./rapier-world";
 import { nextRng, seedRng } from "./rng";
 import { stepBall } from "./rules/ball";
 import {
+  advancePressureRamp,
   type BellRingState,
   createBellRingState,
   serializeBellRingState,
@@ -137,6 +138,8 @@ export interface SimSnapshot {
   rapierBytes: Uint8Array;
   actors: Actor[];
   bellRingArmed: boolean[];
+  /** Phase-6 (FLI-9): full bell ring state snapshot (includes radiusBonus + rampTicks). */
+  bellRingState?: { radiusBonus: number; rampTicks: number };
   tick: number;
   match: MatchState;
   /** Phase-3 (FLI-9): seeded PRNG state for in-process rewind determinism. */
@@ -205,6 +208,14 @@ export interface Simulation {
    * The pending event queue is cleared (mirrors restoreSnapshot).
    */
   applyAuthoritativeState(s: AuthoritativeState): void;
+
+  /**
+   * Return the current effective hit-zone radius for each Bell (in arena order).
+   * During Golden Goal the base radius grows by radiusBonus; outside Golden Goal
+   * this equals the arena's static radius. Used by the renderer to draw the live
+   * grown hit-zone without coupling the render layer to bellRing internals.
+   */
+  getBellHitRadii(): number[];
 
   /**
    * Return all physics/scoring shapes in world units so the debug overlay can
@@ -462,6 +473,8 @@ export function createSimulation(opts: {
         }
         // Bell Ring detection runs after the world step, when the ball position is
         // current for this tick.
+        // Phase-6 (FLI-9): advance the overtime pressure ramp during Golden Goal.
+        if (match.phase === "goldenGoal") advancePressureRamp(bellRing, config);
         const ball = rw.ballPos();
         const hits = stepBellRing(
           arena,
@@ -567,6 +580,10 @@ export function createSimulation(opts: {
     getMatchState(): MatchState {
       // Return a shallow copy with a cloned scores array to prevent external mutation.
       return { ...match, scores: [...match.scores] };
+    },
+
+    getBellHitRadii(): number[] {
+      return arena.bells.map((b) => b.hitZone.radius + bellRing.radiusBonus);
     },
 
     getBallVel(): { vx: number; vy: number } {
@@ -704,6 +721,11 @@ export function createSimulation(opts: {
         // Deep-copy each actor so the snapshot is independent of future mutations.
         actors: actors.map((a) => ({ ...a })),
         bellRingArmed: [...bellRing.armed],
+        // Phase-6 (FLI-9): capture full bell ring state for accurate rewind.
+        bellRingState: {
+          radiusBonus: bellRing.radiusBonus,
+          rampTicks: bellRing.rampTicks,
+        },
         tick,
         // Deep-copy match state (scores array must be copied too).
         match: { ...match, scores: [...match.scores] },
@@ -717,8 +739,12 @@ export function createSimulation(opts: {
       rw.restoreSnapshot(snap.rapierBytes);
       // Restore JS-side actors.
       actors = snap.actors.map((a) => ({ ...a }));
-      // Restore Bell Ring debounce state.
-      bellRing = { armed: [...snap.bellRingArmed] };
+      // Restore Bell Ring debounce state (including Phase-6 overtime ramp fields).
+      bellRing = {
+        armed: [...snap.bellRingArmed],
+        radiusBonus: snap.bellRingState?.radiusBonus ?? 0,
+        rampTicks: snap.bellRingState?.rampTicks ?? 0,
+      };
       // Restore tick counter.
       tick = snap.tick;
       // Restore match state.

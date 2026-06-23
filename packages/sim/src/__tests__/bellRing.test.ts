@@ -8,6 +8,7 @@ import {
   initSim,
 } from "../index";
 import {
+  advancePressureRamp,
   type BellRingState,
   circleOverlap,
   createBellRingState,
@@ -128,8 +129,16 @@ test("Bells are tested independently and reported in array order", () => {
 });
 
 test("serializeBellRingState reflects per-Bell armed flags in order", () => {
-  const state: BellRingState = { armed: [true, false] };
-  expect(Array.from(serializeBellRingState(state))).toEqual([1, 0]);
+  const state: BellRingState = {
+    armed: [true, false],
+    radiusBonus: 0,
+    rampTicks: 0,
+  };
+  // First two bytes are the armed flags; the rest are radiusBonus (f64) + rampTicks (i32).
+  const bytes = Array.from(serializeBellRingState(state));
+  expect(bytes[0]).toBe(1); // armed[0] = true
+  expect(bytes[1]).toBe(0); // armed[1] = false
+  expect(bytes.length).toBe(2 + 8 + 4); // armed + f64 + i32
 });
 
 // ── Replay-style: upward Strike into an elevated Bell, hash-equal across runs ─
@@ -183,4 +192,275 @@ test("the scripted Bell-ring run is hash-equal across two runs", () => {
     return sim.hashState();
   };
   expect(run()).toBe(run());
+});
+
+// ── Phase-6: Overtime Pressure Ramp ─────────────────────────────────────────
+
+test("advancePressureRamp: no growth before rampIntervalTicks", () => {
+  const state: BellRingState = { armed: [true], radiusBonus: 0, rampTicks: 0 };
+  const interval = DEFAULT_CONFIG.overtime.rampIntervalTicks;
+  // Step interval-1 ticks: radiusBonus should still be 0.
+  for (let i = 0; i < interval - 1; i++) {
+    advancePressureRamp(state, DEFAULT_CONFIG);
+  }
+  expect(state.radiusBonus).toBe(0);
+  expect(state.rampTicks).toBe(interval - 1);
+});
+
+test("advancePressureRamp: grows by rampStepRadius at the interval", () => {
+  const state: BellRingState = { armed: [true], radiusBonus: 0, rampTicks: 0 };
+  const interval = DEFAULT_CONFIG.overtime.rampIntervalTicks;
+  // Step exactly interval ticks: should get one step of growth.
+  for (let i = 0; i < interval; i++) {
+    advancePressureRamp(state, DEFAULT_CONFIG);
+  }
+  expect(state.radiusBonus).toBeCloseTo(DEFAULT_CONFIG.overtime.rampStepRadius);
+  expect(state.rampTicks).toBe(0); // reset after step
+});
+
+test("advancePressureRamp: capped at rampMaxBonus", () => {
+  const state: BellRingState = { armed: [true], radiusBonus: 0, rampTicks: 0 };
+  const interval = DEFAULT_CONFIG.overtime.rampIntervalTicks;
+  const maxSteps = Math.ceil(
+    DEFAULT_CONFIG.overtime.rampMaxBonus /
+      DEFAULT_CONFIG.overtime.rampStepRadius,
+  );
+  // Step many intervals past the cap.
+  for (let i = 0; i < interval * (maxSteps + 5); i++) {
+    advancePressureRamp(state, DEFAULT_CONFIG);
+  }
+  expect(state.radiusBonus).toBeLessThanOrEqual(
+    DEFAULT_CONFIG.overtime.rampMaxBonus + 1e-9,
+  );
+  expect(state.radiusBonus).toBeCloseTo(DEFAULT_CONFIG.overtime.rampMaxBonus);
+});
+
+test("radiusBonus makes ball-inside detection true at greater distance", () => {
+  const base: BellRingState = {
+    armed: [true, true],
+    radiusBonus: 0,
+    rampTicks: 0,
+  };
+  const grown: BellRingState = {
+    armed: [true, true],
+    radiusBonus: 1.0,
+    rampTicks: 0,
+  };
+  const ballR = 0.3;
+  // Ball at (5 + 1.0 + ballR + 0.05, 5): just outside the base radius but inside grown.
+  const ballX = 5 + 1.0 + ballR + 0.05;
+  expect(
+    circleOverlap(ballX, 5, ballR, { kind: "circle", x: 5, y: 5, radius: 1.0 }),
+  ).toBe(false);
+  // With radiusBonus, stepBellRing should detect a hit.
+  const hits = stepBellRing(ONE_BELL, ballX, 5, ballR, grown);
+  expect(hits).toHaveLength(1);
+  // But with no bonus, same ball position does NOT ring.
+  const noHits = stepBellRing(ONE_BELL, ballX, 5, ballR, base);
+  expect(noHits).toHaveLength(0);
+});
+
+test("serializeBellRingState encodes non-zero radiusBonus and rampTicks", () => {
+  const state: BellRingState = {
+    armed: [true],
+    radiusBonus: 0.8,
+    rampTicks: 450,
+  };
+  const bytes = serializeBellRingState(state);
+  // Should be 1 (armed) + 8 (f64) + 4 (i32) = 13 bytes.
+  expect(bytes.length).toBe(13);
+  // Parse back: armed byte at offset 0.
+  const view = new DataView(bytes.buffer, bytes.byteOffset);
+  expect(view.getUint8(0)).toBe(1); // armed[0] = true
+  expect(view.getFloat64(1)).toBeCloseTo(0.8);
+  expect(view.getInt32(9)).toBe(450);
+});
+
+test("takeSnapshot/restoreSnapshot preserves radiusBonus and rampTicks", () => {
+  // Use a very short rampIntervalTicks so we can reach a non-zero bonus quickly.
+  const fastConfig = {
+    ...DEFAULT_CONFIG,
+    match: {
+      ...DEFAULT_CONFIG.match,
+      lengthTicks: 5,
+      scoringPauseTicks: 0,
+      resetTicks: 0,
+      goldenGoal: true,
+    },
+    overtime: { rampIntervalTicks: 3, rampStepRadius: 0.4, rampMaxBonus: 1.6 },
+  };
+  const sim = createSimulation({
+    config: fastConfig,
+    arena: COMPACT_DOJO,
+    seed: 1,
+  });
+  // Start the match.
+  const startRow: InputFrame[] = [];
+  startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+  startRow[2] = EMPTY_INPUT;
+  sim.step(startRow);
+  // Run until golden goal (timer expires at 0-0).
+  for (let i = 0; i < 30; i++) {
+    const emptyRow: InputFrame[] = [];
+    emptyRow[0] = EMPTY_INPUT;
+    emptyRow[2] = EMPTY_INPUT;
+    sim.step(emptyRow);
+    if (sim.getMatchState().phase === "goldenGoal") break;
+  }
+  expect(sim.getMatchState().phase).toBe("goldenGoal");
+  // Step a few ticks so rampTicks accumulates.
+  for (let i = 0; i < 4; i++) {
+    const emptyRow: InputFrame[] = [];
+    emptyRow[0] = EMPTY_INPUT;
+    emptyRow[2] = EMPTY_INPUT;
+    sim.step(emptyRow);
+  }
+  // Take snapshot and check that bonus grew (4 ticks > rampIntervalTicks=3).
+  const snap = sim.takeSnapshot();
+  expect(snap.bellRingState).toBeDefined();
+  expect(snap.bellRingState!.radiusBonus).toBeGreaterThan(0);
+
+  // Now step a few more ticks to advance further.
+  for (let i = 0; i < 10; i++) {
+    const emptyRow: InputFrame[] = [];
+    emptyRow[0] = EMPTY_INPUT;
+    emptyRow[2] = EMPTY_INPUT;
+    sim.step(emptyRow);
+  }
+  const hashAfter = sim.hashState();
+
+  // Restore the snapshot.
+  sim.restoreSnapshot(snap);
+  // Re-step the same 10 ticks.
+  for (let i = 0; i < 10; i++) {
+    const emptyRow: InputFrame[] = [];
+    emptyRow[0] = EMPTY_INPUT;
+    emptyRow[2] = EMPTY_INPUT;
+    sim.step(emptyRow);
+  }
+  // Hash must be identical — the ramp restored correctly.
+  expect(sim.hashState()).toBe(hashAfter);
+});
+
+test("ramp grows only in goldenGoal, not in playing phase", () => {
+  const fastConfig = {
+    ...DEFAULT_CONFIG,
+    match: { ...DEFAULT_CONFIG.match, lengthTicks: 5400, goldenGoal: true },
+    overtime: { rampIntervalTicks: 5, rampStepRadius: 0.4, rampMaxBonus: 1.6 },
+  };
+  const sim = createSimulation({
+    config: fastConfig,
+    arena: COMPACT_DOJO,
+    seed: 1,
+  });
+  // Start.
+  const startRow: InputFrame[] = [];
+  startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+  startRow[2] = EMPTY_INPUT;
+  sim.step(startRow);
+  expect(sim.getMatchState().phase).toBe("playing");
+  // Step enough ticks (well past rampIntervalTicks) — radius must NOT grow during playing.
+  for (let i = 0; i < 20; i++) {
+    const emptyRow: InputFrame[] = [];
+    emptyRow[0] = EMPTY_INPUT;
+    emptyRow[2] = EMPTY_INPUT;
+    sim.step(emptyRow);
+  }
+  expect(sim.getMatchState().phase).toBe("playing");
+  // getBellHitRadii should equal the static arena radii (no bonus).
+  const radii = sim.getBellHitRadii();
+  for (const r of radii) {
+    expect(r).toBeCloseTo(COMPACT_DOJO.bells[0]?.hitZone.radius ?? 0.8);
+  }
+});
+
+test("golden goal still ends on next Bell Ring after ramp grows", () => {
+  const fastConfig = {
+    ...DEFAULT_CONFIG,
+    match: {
+      ...DEFAULT_CONFIG.match,
+      lengthTicks: 5,
+      scoringPauseTicks: 0,
+      resetTicks: 0,
+      goldenGoal: true,
+    },
+    overtime: { rampIntervalTicks: 3, rampStepRadius: 0.4, rampMaxBonus: 1.6 },
+  };
+  const sim = createSimulation({
+    config: fastConfig,
+    arena: COMPACT_DOJO,
+    seed: 1,
+  });
+  const startRow: InputFrame[] = [];
+  startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+  startRow[2] = EMPTY_INPUT;
+  sim.step(startRow);
+  // Run until golden goal.
+  for (let i = 0; i < 30; i++) {
+    const emptyRow: InputFrame[] = [];
+    emptyRow[0] = EMPTY_INPUT;
+    emptyRow[2] = EMPTY_INPUT;
+    sim.step(emptyRow);
+    if (sim.getMatchState().phase === "goldenGoal") break;
+  }
+  expect(sim.getMatchState().phase).toBe("goldenGoal");
+  // Ring a bell (should end the match regardless of bonus).
+  ringRightBell(sim);
+  let reachedComplete = false;
+  for (let i = 0; i < 200; i++) {
+    const emptyRow: InputFrame[] = [];
+    emptyRow[0] = EMPTY_INPUT;
+    emptyRow[2] = EMPTY_INPUT;
+    sim.step(emptyRow);
+    if (sim.getMatchState().phase === "complete") {
+      reachedComplete = true;
+      break;
+    }
+  }
+  expect(reachedComplete).toBe(true);
+  expect(sim.getMatchState().winner).not.toBe(-1);
+});
+
+test("getBellHitRadii reflects grown radius during golden goal (fast config)", () => {
+  const fastConfig = {
+    ...DEFAULT_CONFIG,
+    match: {
+      ...DEFAULT_CONFIG.match,
+      lengthTicks: 5,
+      scoringPauseTicks: 0,
+      resetTicks: 0,
+      goldenGoal: true,
+    },
+    overtime: { rampIntervalTicks: 1, rampStepRadius: 0.5, rampMaxBonus: 2.0 },
+  };
+  const sim = createSimulation({
+    config: fastConfig,
+    arena: COMPACT_DOJO,
+    seed: 1,
+  });
+  const startRow: InputFrame[] = [];
+  startRow[0] = frame({ jumpPressed: true, jumpHeld: true });
+  startRow[2] = EMPTY_INPUT;
+  sim.step(startRow);
+  // Run into golden goal.
+  for (let i = 0; i < 30; i++) {
+    const emptyRow: InputFrame[] = [];
+    emptyRow[0] = EMPTY_INPUT;
+    emptyRow[2] = EMPTY_INPUT;
+    sim.step(emptyRow);
+    if (sim.getMatchState().phase === "goldenGoal") break;
+  }
+  expect(sim.getMatchState().phase).toBe("goldenGoal");
+  // Step a few ticks to allow ramp to grow (interval=1 tick).
+  for (let i = 0; i < 5; i++) {
+    const emptyRow: InputFrame[] = [];
+    emptyRow[0] = EMPTY_INPUT;
+    emptyRow[2] = EMPTY_INPUT;
+    sim.step(emptyRow);
+  }
+  const radii = sim.getBellHitRadii();
+  const baseRadius = COMPACT_DOJO.bells[0]?.hitZone.radius ?? 0.8;
+  for (const r of radii) {
+    expect(r).toBeGreaterThan(baseRadius);
+  }
 });

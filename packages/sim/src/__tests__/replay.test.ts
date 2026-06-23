@@ -33,6 +33,7 @@ import {
   samplePracticeBotInput,
   serializeReplay,
 } from "../index";
+import { COMPACT_DOJO } from "./fixtures/compactArena";
 
 beforeAll(async () => {
   await initSim();
@@ -872,6 +873,118 @@ test("Phase 4: Old Master Repulse Field replay round-trips through serialize→d
   const roundTripped = deserializeReplay(serializeReplay(replay));
   expect(() => playReplay(roundTripped)).not.toThrow();
   expect(playReplay(roundTripped)).toBe(liveHash);
+});
+
+// ── Phase 6 (FLI-9): Overtime Pressure Ramp replay determinism ──────────────
+
+/**
+ * A session that drives the sim through Golden Goal with a fast ramp config so
+ * radiusBonus advances within the test frame count. Both players are idle so
+ * the match goes to Golden Goal at timer expiry (0-0 tie).
+ * The captured radiusBonus + rampTicks must replay bit-identically.
+ */
+function buildGoldenGoalRampFrames(): {
+  frames: InputFrame[][];
+  config: typeof DEFAULT_CONFIG;
+} {
+  const fastConfig = {
+    ...DEFAULT_CONFIG,
+    match: {
+      ...DEFAULT_CONFIG.match,
+      lengthTicks: 5,
+      scoringPauseTicks: 0,
+      resetTicks: 0,
+      goldenGoal: true,
+    },
+    overtime: { rampIntervalTicks: 3, rampStepRadius: 0.4, rampMaxBonus: 1.6 },
+  };
+
+  const frames: InputFrame[][] = [];
+
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+
+  // Start.
+  frames.push(row(frame({ jumpPressed: true, jumpHeld: true })));
+  // Idle for 50 ticks (covers timer expiry + several ramp intervals).
+  for (let i = 0; i < 50; i++) frames.push(row(EMPTY_INPUT));
+
+  return { frames, config: fastConfig };
+}
+
+test("Phase 6: overtime ramp — two independent sims produce the same hash", () => {
+  const { frames, config } = buildGoldenGoalRampFrames();
+
+  const run = () => {
+    const sim = createSimulation({ config, arena: COMPACT_DOJO, seed: 7070 });
+    for (const row of frames) sim.step(row);
+    return sim.hashState();
+  };
+
+  expect(run()).toBe(run());
+});
+
+test("Phase 6: overtime ramp — live hash matches replay (two fresh sims, same frames)", () => {
+  const { frames, config } = buildGoldenGoalRampFrames();
+
+  // Live run.
+  const liveSim = createSimulation({ config, arena: COMPACT_DOJO, seed: 7071 });
+  for (const row of frames) liveSim.step(row);
+  const liveHash = liveSim.hashState();
+
+  // Replay run (separate sim, same frames in order).
+  const replaySim = createSimulation({
+    config,
+    arena: COMPACT_DOJO,
+    seed: 7071,
+  });
+  for (const row of frames) replaySim.step(row);
+  expect(replaySim.hashState()).toBe(liveHash);
+});
+
+test("Phase 6: overtime ramp grows above base radius during Golden Goal", () => {
+  const { frames, config } = buildGoldenGoalRampFrames();
+  const sim = createSimulation({ config, arena: COMPACT_DOJO, seed: 7072 });
+  for (const row of frames) sim.step(row);
+
+  // After running through the frames the sim should be in Golden Goal
+  // with at least some ramp growth (rampIntervalTicks=3, 50 idle ticks).
+  expect(sim.getMatchState().phase).toBe("goldenGoal");
+  const radii = sim.getBellHitRadii();
+  const baseRadius = COMPACT_DOJO.bells[0]?.hitZone.radius ?? 0.8;
+  for (const r of radii) {
+    expect(r).toBeGreaterThan(baseRadius);
+  }
+});
+
+test("Phase 6: overtime ramp cap is respected (never exceeds rampMaxBonus)", () => {
+  const { config } = buildGoldenGoalRampFrames();
+
+  // Very long session — many ramp intervals — cap must hold.
+  const longFrames: InputFrame[][] = [];
+  function row(f0: InputFrame, f2: InputFrame = EMPTY_INPUT): InputFrame[] {
+    const r: InputFrame[] = [];
+    r[0] = f0;
+    r[2] = f2;
+    return r;
+  }
+  longFrames.push(row(frame({ jumpPressed: true, jumpHeld: true })));
+  for (let i = 0; i < 500; i++) longFrames.push(row(EMPTY_INPUT));
+
+  const sim = createSimulation({ config, arena: COMPACT_DOJO, seed: 7073 });
+  for (const row of longFrames) sim.step(row);
+
+  const radii = sim.getBellHitRadii();
+  const baseRadius = COMPACT_DOJO.bells[0]?.hitZone.radius ?? 0.8;
+  for (const r of radii) {
+    expect(r).toBeLessThanOrEqual(
+      baseRadius + config.overtime.rampMaxBonus + 1e-9,
+    );
+  }
 });
 
 // ── getDebugColliders() returns expected shapes ──────────────────────────────

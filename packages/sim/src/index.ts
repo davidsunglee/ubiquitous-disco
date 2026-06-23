@@ -39,6 +39,7 @@ export type {
   DashConfig,
   MatchConfig,
   MovementConfig,
+  OvertimeConfig,
   SimConfig,
   StrikeConfig,
 } from "./config";
@@ -60,6 +61,13 @@ export {
   recordFrame,
   serializeReplay,
 } from "./replay";
+export type { BellHit, BellRingState } from "./rules/bellRing";
+export {
+  advancePressureRamp,
+  createBellRingState,
+  serializeBellRingState,
+  stepBellRing,
+} from "./rules/bellRing";
 export type {
   AuthoritativeState,
   AuthPlayer,
