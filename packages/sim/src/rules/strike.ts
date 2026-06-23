@@ -2,6 +2,7 @@ import type { Actor } from "../actor";
 import type { SimConfig } from "../config";
 import type { InputFrame } from "../input";
 import type { RapierWorld } from "../rapier-world";
+import { applyHit } from "./hit";
 
 /**
  * Strike: tap / hold-to-charge / directional shaping / upward pop.
@@ -131,18 +132,8 @@ export function stepStrike(
       ny * c.strikePlayerImpulse * 0.5 + c.strikePlayerImpulse * 0.4,
     );
 
-    // Attribute this hit to the striker (Phase 7: event-only, not hashed) so the
-    // sim's knockdown/playerHit events can report who dealt the blow.
-    target.lastHitBy = slot;
-    target.stagger += c.staggerPerHit;
-    // Refresh the grace window so stagger holds (doesn't decay) between the hits
-    // of an exchange — this makes Knockdown depend on hit COUNT, not hit timing.
-    target.staggerDecayDelay = c.staggerGraceTicks;
-    if (target.stagger >= c.staggerThreshold) {
-      target.knockdownTicks = c.knockdownDurationTicks;
-      target.controlLock = true;
-      target.stagger = 0;
-      // The knockdown event is emitted by simulation.ts (it owns the event queue + tick).
-    }
+    // Shared hit tail: attribution + stagger + maybe knockdown. The knockdown
+    // event is emitted by simulation.ts (it owns the event queue + tick).
+    applyHit(target, slot, config);
   }
 }

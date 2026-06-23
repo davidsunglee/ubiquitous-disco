@@ -26,6 +26,7 @@ import { type Actor, controllable } from "../actor";
 import type { SimConfig } from "../config";
 import type { InputFrame } from "../input";
 import type { RapierWorld } from "../rapier-world";
+import { applyHit } from "./hit";
 
 /**
  * Blink displacement (world units) returned by blink-style Specials
@@ -96,15 +97,7 @@ export function stepSpecial(
           ny * config.combat.strikePlayerImpulse * 0.5 +
             config.combat.strikePlayerImpulse * 0.5,
         );
-        target.lastHitBy = slot; // Phase 7: striker attribution (event-only, not hashed)
-        target.stagger += config.combat.staggerPerHit;
-        target.staggerDecayDelay = config.combat.staggerGraceTicks;
-        if (target.stagger >= config.combat.staggerThreshold) {
-          target.knockdownTicks = config.combat.knockdownDurationTicks;
-          target.controlLock = true;
-          target.stagger = 0;
-          // knockdown event emitted by simulation.ts (owns event queue + wasDown snapshot)
-        }
+        applyHit(target, slot, config);
       }
 
       // Punt the ball if it is within radius (outward + up).
@@ -173,14 +166,7 @@ export function stepSpecial(
           target.vy,
           Math.abs(ny) * impulse * 0.4 + impulse * 0.3,
         );
-        target.lastHitBy = slot; // Phase 7: striker attribution (event-only, not hashed)
-        target.stagger += config.combat.staggerPerHit;
-        target.staggerDecayDelay = config.combat.staggerGraceTicks;
-        if (target.stagger >= config.combat.staggerThreshold) {
-          target.knockdownTicks = config.combat.knockdownDurationTicks;
-          target.controlLock = true;
-          target.stagger = 0;
-        }
+        applyHit(target, slot, config);
       }
 
       // Forward ball impulse if in reach and in the forward arc.
@@ -217,14 +203,8 @@ export function stepSpecial(
         // in the blink direction and within 1.5 vertically.
         if (dx * actor.facing < 0 || Math.abs(dx) > halfDist + 1) continue;
         if (Math.abs(dy) > 1.5) continue;
-        target.lastHitBy = slot; // Phase 7: striker attribution (event-only, not hashed)
-        target.stagger += config.combat.staggerPerHit;
-        target.staggerDecayDelay = config.combat.staggerGraceTicks;
-        if (target.stagger >= config.combat.staggerThreshold) {
-          target.knockdownTicks = config.combat.knockdownDurationTicks;
-          target.controlLock = true;
-          target.stagger = 0;
-        }
+        // Phantom Rush staggers on pass-through without a knockback impulse.
+        applyHit(target, slot, config);
       }
 
       // If ball is in the blink path, carry its momentum (forward impulse).
@@ -311,14 +291,7 @@ export function stepSpecial(
           target.vy,
           Math.abs(ny) * impulse * 0.5 + impulse * 0.3,
         );
-        target.lastHitBy = slot; // Phase 7: striker attribution (event-only, not hashed)
-        target.stagger += config.combat.staggerPerHit;
-        target.staggerDecayDelay = config.combat.staggerGraceTicks;
-        if (target.stagger >= config.combat.staggerThreshold) {
-          target.knockdownTicks = config.combat.knockdownDurationTicks;
-          target.controlLock = true;
-          target.stagger = 0;
-        }
+        applyHit(target, slot, config);
       }
 
       // Push the ball outward if within radius.
