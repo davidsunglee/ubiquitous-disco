@@ -7,7 +7,7 @@ export interface BoxCollider {
 }
 export type ColliderDef = BoxCollider;
 
-// A circular Bell hit-zone (world units). Kept separate from the visible Bell art
+// A circular Bell Hit-Zone (world units). Kept separate from the visible Bell art
 // so scoring geometry and visuals can diverge (the art may be larger/offset).
 export interface CircleZone {
   kind: "circle";
@@ -17,7 +17,7 @@ export interface CircleZone {
 }
 
 // The visible Bell art shape (world units). Intentionally distinct from the
-// hit-zone — the render shell draws this; only the hit-zone scores.
+// Bell Hit-Zone — the render shell draws this; only the Bell Hit-Zone scores.
 export interface BoxArt {
   kind: "box";
   x: number;

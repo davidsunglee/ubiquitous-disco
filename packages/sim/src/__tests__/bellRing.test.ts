@@ -41,11 +41,11 @@ function newSim() {
 const ZONE: CircleZone = { kind: "circle", x: 5, y: 5, radius: 1 };
 const R = 0.5; // ball radius for these geometry cases
 
-test("ball centered inside the hit-zone overlaps", () => {
+test("ball centered inside the Bell Hit-Zone overlaps", () => {
   expect(circleOverlap(5, 5, R, ZONE)).toBe(true);
 });
 
-test("ball fully outside the hit-zone does not overlap", () => {
+test("ball fully outside the Bell Hit-Zone does not overlap", () => {
   // 3 units away horizontally — well beyond radius (1) + ball radius (0.5).
   expect(circleOverlap(8, 5, R, ZONE)).toBe(false);
 });

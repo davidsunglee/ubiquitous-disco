@@ -1,8 +1,8 @@
 /**
  * Match lifecycle tests.
  *
- * Covers: scoring attribution (own-goal), timer → regulation, tie → Golden
- * Goal → complete, gameplay frozen in non-live phases, and start/rematch edges.
+ * Covers: scoring attribution when either Bell is rung, timer → regulation,
+ * tied Golden Goal completion, gameplay frozen in non-live phases, and start/rematch edges.
  *
  * Uses short-match config overrides to keep tests fast.
  */
@@ -181,7 +181,7 @@ test("regulation timer expires: with unequal scores → complete + winner set", 
   sim.step(START); // preRound → playing
 
   // Manually adjust scores to give team 0 a lead (we skip an actual bell ring here).
-  // Instead, step until regulation expires at 0-0 → golden goal (goldenGoal: true by default).
+  // Instead, step until regulation expires at 0-0 → Golden Goal (goldenGoal: true by default).
   // Then override goldenGoal: false to get a clear winner test.
   const sim2 = newSim({
     lengthTicks: 5,
@@ -227,7 +227,7 @@ test("rematch: jump edge from complete → playing resets scores and timer", () 
   expect(m.timer).toBe(5); // back to the short length
 });
 
-test("ringing a bell credits the OPPOSING team (own-goal attribution)", () => {
+test("ringing a bell credits the OPPOSING team", () => {
   // scoringPauseTicks and resetTicks set to small values so test runs quickly.
   const sim = newSim({ scoringPauseTicks: 2, resetTicks: 2 });
   sim.step(START); // preRound → playing
@@ -279,7 +279,7 @@ test("after bellPause → resetting → positions are reset and play resumes", (
   expect(players[2]?.x).toBeCloseTo(COMPACT_DOJO.playerSpawns[2]?.x ?? 4, 1);
 });
 
-test("golden goal: a bell ring during goldenGoal → complete with winner", () => {
+test("Golden Goal: a bell ring during goldenGoal → complete with winner", () => {
   const sim = newSim({
     lengthTicks: 5,
     scoringPauseTicks: 0,

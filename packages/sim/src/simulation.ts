@@ -243,7 +243,7 @@ export interface Simulation {
    *  - player bounding boxes (current position, one per slot)
    *  - ball circle (current position)
    *  - Bell art boxes
-   *  - Bell hit-zone circles
+   *  - Bell Hit-Zone circles
    */
   getDebugColliders(): DebugCollider[];
 
@@ -534,7 +534,7 @@ export function createSimulation(opts: {
           bellRing,
         );
         for (const hit of hits) {
-          // Map bell → defending team → OPPOSING scorer (own-goals fall out naturally).
+          // Map bell → defending team → OPPOSING scorer, even when a player rings their own Bell.
           const bellDef = arena.bells.find((b) => b.id === hit.bell);
           const defendingTeam = bellDef?.defends === "left" ? 0 : 1;
           const scoringTeam = defendingTeam === 0 ? 1 : 0;
@@ -755,7 +755,7 @@ export function createSimulation(opts: {
         radius: config.ball.radius,
       });
 
-      // Bell art boxes + hit-zone circles.
+      // Bell art boxes + Bell Hit-Zone circles.
       for (const bell of arena.bells) {
         // Art box.
         shapes.push({

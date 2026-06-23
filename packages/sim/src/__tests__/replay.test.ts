@@ -1014,7 +1014,7 @@ test("Phase 6: overtime ramp cap is respected (never exceeds rampMaxBonus)", () 
 
 // ── getDebugColliders() returns expected shapes ──────────────────────────────
 
-test("getDebugColliders() returns arena boxes + player/ball + Bell art and hit-zones", () => {
+test("getDebugColliders() returns arena boxes + player/ball + Bell art and Bell Hit-Zones", () => {
   const sim = newSim();
   // Step once so the players and ball have settled from spawn.
   sim.step([EMPTY_INPUT, EMPTY_INPUT]);
@@ -1040,7 +1040,7 @@ test("getDebugColliders() returns arena boxes + player/ball + Bell art and hit-z
   const bellArtBoxes = shapes.filter((s) => s.label.endsWith("-art"));
   expect(bellArtBoxes).toHaveLength(FLAT_DOJO.bells.length);
 
-  // Bell hit-zone circles (one per Bell, distinct from art).
+  // Bell Hit-Zone circles (one per Bell, distinct from art).
   const bellZones = shapes.filter((s) => s.label.endsWith("-hitzone"));
   expect(bellZones).toHaveLength(FLAT_DOJO.bells.length);
   for (const z of bellZones) {

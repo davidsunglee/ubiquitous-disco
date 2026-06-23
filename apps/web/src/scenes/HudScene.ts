@@ -580,7 +580,7 @@ export class HudScene extends Phaser.Scene {
             shape.halfH * 2 * PX_PER_UNIT,
           );
       } else {
-        // circle: ball=yellow, Bell hit-zone=red (visually distinct from art).
+        // circle: ball=yellow, Bell Hit-Zone=red (visually distinct from art).
         const color = isHitZone ? 0xff4444 : 0xffcc00;
         const alpha = isHitZone ? 0.9 : 0.7;
 

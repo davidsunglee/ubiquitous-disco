@@ -23,7 +23,7 @@ describe("bellFromScoreDelta", () => {
     expect(bellFromScoreDelta([], [0, 0])).toBeNull();
   });
 
-  test("first goal from an empty previous score array fires", () => {
+  test("first Bell Ring from an empty previous score array fires", () => {
     // prev unknown (length 0) but next shows team 0 at 1 — treat missing as 0.
     expect(bellFromScoreDelta([0], [1, 0])).toBe("right");
   });

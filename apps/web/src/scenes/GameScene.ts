@@ -1329,7 +1329,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Render the two Bells (art shapes only — the hit-zone is intentionally
+   * Render the two Bells (art shapes only — the Bell Hit-Zone is intentionally
    * invisible here; the Phase 5 debug overlay draws it). A rung Bell flashes
    * brighter for a moment via bellFlash.
    */

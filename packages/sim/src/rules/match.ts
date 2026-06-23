@@ -11,7 +11,7 @@
  *    finish) live in simulation.ts (it owns the bell-ring pass and knows the
  *    arena's defends mapping).
  *  - Timer countdown, pause/reset countdowns, preRound/complete start edges,
- *    and regulation-end golden-goal-vs-finish live here in stepMatch().
+ *    and regulation-end Golden Goal vs finish live here in stepMatch().
  *
  * This keeps the two sides from double-handling: the sim sets pauseTicks and
  * transitions to bellPause; stepMatch drives bellPause → resetting → resume.
@@ -101,8 +101,7 @@ function finish(match: MatchState, events: MatchEventSink, tick: number): void {
   });
 }
 
-/** Decide what comes after a resetting phase ends: resume play, enter golden
- *  goal, or finish the match. Called by stepMatch when resetTicks runs out. */
+/** Decide what comes after resetting ends: resume play, enter Golden Goal, or finish. */
 function afterReset(
   match: MatchState,
   events: MatchEventSink,

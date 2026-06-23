@@ -39,11 +39,11 @@ beforeAll(async () => {
  * sequences that exercise:
  *  - Both players active (slot 1 moves toward slot 0)
  *  - Ball bouncing off the floor, ceiling, and walls
- *  - A charged aerial Strike aimed at the Bell hit-zone (contact-heavy)
+ *  - A charged aerial Strike aimed at the Bell Hit-Zone (contact-heavy)
  *  - Golden Goal match phase transition (timer exhausted)
  *  - Multiple Bell ring attempts (ball bounced into the elevated Bell zone)
  *
- * The goal is maximal contact-solver activity so JSC vs V8 floating-point
+ * The purpose is maximal contact-solver activity so JSC vs V8 floating-point
  * divergence (if any) surfaces quickly.
  */
 function longContactHeavyScript(): InputFrame[][] {

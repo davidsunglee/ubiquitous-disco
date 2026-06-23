@@ -2,7 +2,7 @@ import type { ArenaDef, CircleZone } from "../arena";
 import type { SimConfig } from "../config";
 
 // Per-Bell debounce state. `armed` is true when the Bell is ready to ring (i.e.
-// the ball is currently OUTSIDE its hit-zone). A ring fires on the entry edge and
+// the ball is currently OUTSIDE its Bell Hit-Zone). A ring fires on the entry edge and
 // disarms; it re-arms only once the ball has left the zone again, so a single
 // contact rings exactly once. This state persists across ticks and therefore
 // affects future events — it is sim state and MUST be folded into the hash.
@@ -20,7 +20,7 @@ export function createBellRingState(arena: ArenaDef): BellRingState {
   return { armed: arena.bells.map(() => true), radiusBonus: 0, rampTicks: 0 };
 }
 
-/** Circle-vs-circle overlap: the ball (center + radius) against a hit-zone. */
+/** Circle-vs-circle overlap: the ball (center + radius) against a Bell Hit-Zone. */
 export function circleOverlap(
   ballX: number,
   ballY: number,
@@ -42,7 +42,7 @@ export interface BellHit {
 
 /**
  * Pure, Rapier-independent Bell Ring detection. Tests the ball circle against
- * each Bell hit-zone in arena order; on the entry edge (ball was outside, now
+ * each Bell Hit-Zone in arena order; on the entry edge (ball was outside, now
  * inside) it records a hit and disarms the Bell. The Bell re-arms once the ball
  * leaves its zone. Mutates `state.armed` in place (deterministic) and returns the
  * Bells that rang this tick.
