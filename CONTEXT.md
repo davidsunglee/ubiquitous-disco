@@ -12,12 +12,24 @@ _Avoid_: Kung Fu Kickball as the project name, BellBrawl as the canonical spelli
 Kung Fu Kickball, used as a reference for genre lessons and mechanical inspiration only.
 _Avoid_: Treating the reference game as a source of copied assets, code, names, or layouts
 
+**Match**:
+A single Bell Brawl contest played in one Match Mode, from pre-round through completion.
+_Avoid_: Room, lobby, game session
+
 **Match Mode**:
 The official team shape for a match, either 1v1 or 2v2.
 _Avoid_: Uneven mode, free-for-all
 
+**Roster**:
+The selectable set of Characters available for a Match.
+_Avoid_: Team, faction
+
+**Character**:
+A playable rules profile selected for a Player Slot, with stat multipliers, capabilities, and one cooldown Special.
+_Avoid_: Class, fighter, final character identity
+
 **Team**:
-A side in a match that owns one Goal, defends one Bell, and scores by ringing the opposing Bell.
+A side in a match that defends one Bell and scores by ringing the opposing Bell.
 _Avoid_: Faction, class, roster
 
 **Player Slot**:
@@ -36,29 +48,53 @@ _Avoid_: Ranked queue, public matchmaking
 The human in a Private Lobby who controls match settings and starts the match.
 _Avoid_: Admin, moderator
 
+**Join Code**:
+A short shareable code used to enter a Private Lobby.
+_Avoid_: Colyseus room id
+
+**Local Profile**:
+An anonymous browser-local identity used for display name, lobby presence, and short-window Player Slot reclaim.
+_Avoid_: Account, login, persistent profile
+
+**Arena**:
+The playable space for a Match, containing spawn points, terrain, Bells, and Bell Hit-Zones.
+_Avoid_: Map, level, stage
+
 **Bell**:
 The physical elevated scoring target defended by a Team.
 _Avoid_: Gong, goal when referring to the target
 
-**Goal**:
-The defended end of the arena containing a Team's Bell.
-_Avoid_: Bell when referring to the whole defended side
+**Bell Hit-Zone**:
+The scoring area associated with a Bell, separate from visible Bell art and able to grow during the Overtime Pressure Ramp.
+_Avoid_: Bell art, physics collider, Rapier sensor
 
 **Bell Ring**:
-The scoring event that occurs when the ball contacts a defended Bell hit-zone.
+The scoring event that occurs when the ball contacts a defended Bell Hit-Zone.
 _Avoid_: Goal, point when referring to the event
+
+**Golden Goal**:
+The tied-post-regulation match phase where the next Bell Ring ends the Match.
+_Avoid_: Overtime, sudden death when referring to the phase
 
 **Mirrored Scoring Puzzle**:
 A left-right mirrored arena layout that creates a distinct path or obstacle problem for ringing the opposing Bell.
 _Avoid_: Symmetric arena when it could imply every arena plays the same
 
 **Overtime Pressure Ramp**:
-The Golden Goal rule where Bell hit-zones visibly grow over time to force match resolution.
+The Golden Goal rule where Bell Hit-Zones visibly grow over time to force match resolution.
 _Avoid_: Overtime hazard, sudden death when referring to the ramp
 
 **Strike**:
 The core intentional action that applies meaningful impulse to the ball or Stagger/Knockback to players.
 _Avoid_: Attack, damage, kick when referring to the general action
+
+**Header**:
+An airborne Strike variant that redirects the ball upward or horizontally.
+_Avoid_: Air redirect as the canonical term
+
+**Spike**:
+An airborne downward Strike variant that drives the ball downward.
+_Avoid_: Downward attack, dunk
 
 **Jump**:
 The core action for variable-height vertical movement.
@@ -69,8 +105,8 @@ The core action for a short fixed-distance blink in the facing or stick directio
 _Avoid_: Sprint, roll, velocity dash
 
 **Special**:
-A character-specific derived action triggered through context, charge, direction, or button combinations without adding a fourth action button.
-_Avoid_: Fourth button, super unless a future design creates that term
+A character-specific cooldown action triggered by the dedicated Special input.
+_Avoid_: Chord, super unless a future design creates that term
 
 **Stagger**:
 A temporary accumulated pressure value from Strikes that can lead to Knockdown.
@@ -92,12 +128,20 @@ _Avoid_: Team damage reduction
 A cohesive placeholder visual/audio polish pass that improves readability without committing to final art direction or production assets.
 _Avoid_: Programmer art when referring to the Phase 6 visual target, production art
 
+**Match Summary**:
+A structured post-match record of outcome, picks, Bell Rings, combat events, bot slots, and network/balance signals.
+_Avoid_: Leaderboard, persistent stats, analytics profile
+
 ## Relationships
 
 - A **Match Mode** defines the number of **Player Slots** per **Team**.
 - A **Player Slot** can be occupied by a human or a **Practice Bot**.
-- A **Team** defends one **Goal** and one **Bell**.
+- A **Team** defends one **Bell**.
 - A **Bell Ring** scores one point for the Team opposing the defended **Bell** that was hit.
+- An **Arena** contains two **Bells**, each with a **Bell Hit-Zone** defended by one **Team**.
+- **Golden Goal** starts when regulation ends tied, and the **Overtime Pressure Ramp** modifies **Bell Hit-Zones** during **Golden Goal**.
+- A **Roster** contains **Characters**, and each active **Player Slot** selects one **Character** before the **Match** starts.
+- A **Join Code** grants access to a **Private Lobby**, not directly to a **Match**.
 - A **Strike** can affect the ball, opponents, and teammates under **Friendly Fire**.
 - **Stagger** can produce **Knockdown**, and **Knockdown** ends with **Recovery Invulnerability**.
 - A **Private Lobby** is controlled by a **Host Player** until host ownership transfers.
@@ -109,7 +153,7 @@ _Avoid_: Programmer art when referring to the Phase 6 visual target, production 
 > **Domain expert:** "No. The **Match Mode** is still 2v2. One **Player Slot** is occupied by a **Practice Bot**."
 >
 > **Dev:** "When a player hits their own **Bell**, who gets the point?"
-> **Domain expert:** "That is still a **Bell Ring** on the defended **Bell**, so the opposing **Team** scores. Own-goals are possible."
+> **Domain expert:** "That is still a **Bell Ring** on the defended **Bell**, so the opposing **Team** scores. Ringing your own Bell is possible."
 >
 > **Dev:** "Should I call the main button Attack in code?"
 > **Domain expert:** "Use **Strike**. Bell Brawl has **Stagger** and **Knockdown**, not HP or elimination combat."
@@ -118,6 +162,7 @@ _Avoid_: Programmer art when referring to the Phase 6 visual target, production 
 
 - "Kung Fu Kickball" was used both as a project description and a reference title. Resolved: **Bell Brawl** is the project; Kung Fu Kickball is the **Reference Game**.
 - "Attack" was used for the main action. Resolved: **Strike** is canonical because the action targets both ball control and combat pressure.
-- "Bell", "gong", and "goal" were overloaded. Resolved: **Bell** is the target, **Goal** is the defended side, and **Bell Ring** is the scoring event.
+- "Bell", "gong", and "goal" were overloaded. Resolved: **Bell** is the target and **Bell Ring** is the scoring event; avoid **Goal** as a Bell Brawl term.
 - "Uneven teams" was used for three humans in 2v2. Resolved: official **Match Modes** remain 1v1 and 2v2; unfilled **Player Slots** can use **Practice Bots**.
 - "Symmetric arenas" could imply every arena plays identically. Resolved: default arenas are **Mirrored Scoring Puzzles** with varied layouts across arenas.
+- "Special" previously meant a derived action without a fourth button. Resolved: the latest design uses a dedicated **Special** input with cooldown.

@@ -13,7 +13,7 @@ A host can create a private lobby code, humans can join Player Slots, empty 2v2 
 - Official Match Modes remain 1v1 and 2v2.
 - A 2v2 match can contain any mix of human and Practice Bot Player Slots needed to fill all four slots.
 - Practice Bots run server-side and emit the same `PlayerInput` stream as humans.
-- Practice Bot scope: chase ball, face/Strike toward opposing Bell, Jump for high ball, Tele-Dash when closing distance on cooldown, and retreat toward own Goal when the ball is dangerous.
+- Practice Bot scope: chase ball, face/Strike toward opposing Bell, Jump for high ball, Tele-Dash when closing distance on cooldown, and retreat toward its defended Bell when the ball is dangerous.
 - Basic short-window reconnect lets a dropped human reclaim the same Player Slot.
 - Flat Dojo and all-rounder baseline remain acceptable until Phase 5 adds roster and arena variety.
 
@@ -39,7 +39,7 @@ A host can create a private lobby code, humans can join Player Slots, empty 2v2 
 
 - Public matchmaking queues, ranked matchmaking, MMR, and leaderboards.
 - Persistent accounts, OAuth, email, passwords, D1/KV persistence, and profile history.
-- Character roster, cooldown specials, final character identities, and additional arenas beyond what prior phases provide.
+- Character roster, cooldown Specials, final character identities, and additional arenas beyond what prior phases provide.
 - Advanced bot tactics, difficulty levels, pathfinding, ML, or ranked bot use.
 - Spectator mode.
 - Durable Object authoritative match loop experiments.

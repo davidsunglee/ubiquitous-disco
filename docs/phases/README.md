@@ -20,7 +20,7 @@ These specifications define six playable vertical slices for building Bell Brawl
 | 2 | [Local Complete 1v1 Match](./02-local-complete-1v1-match.md) | Two local humans can complete a timed 1v1 match with combat and Golden Goal. |
 | 3 | [Networked 1v1](./03-networked-1v1.md) | Two browser clients can play 1v1 through a Colyseus authoritative room. |
 | 4 | [Private 2v2 Lobbies And Bot Fill](./04-private-2v2-lobbies-bot-fill.md) | Private lobbies coordinate 2v2 slots, bot fill, and reconnect. |
-| 5 | [Roster, Arenas, And Balance](./05-roster-arenas-balance.md) | Six placeholder characters, three arenas, specials, and balance telemetry are playable. |
+| 5 | [Roster, Arenas, And Balance](./05-roster-arenas-balance.md) | Six placeholder characters, three arenas, Specials, and balance telemetry are playable. |
 | 6 | [Production Hardening And Mobile Readiness](./06-production-hardening-mobile-readiness.md) | The web game is hardened for mobile, deployment, network stress, and prototype presentation. |
 
 The [monorepo](../../ARCHITECTURE.md#monorepo-shape) is built up lazily by phase:

@@ -9,7 +9,7 @@ Two local humans can complete a full 1v1 Bell Brawl match on one desktop using t
 - Two human-controlled Player Slots in official 1v1 Match Mode.
 - Two keyboard mappings using the same logical input abstraction from Phase 1.
 - Time-based win condition: default 3:00, most points wins, tie enters Golden Goal.
-- Bell Ring rule: when the ball contacts a defended Bell hit-zone, the opposing Team scores 1 point, including own-goals.
+- Bell Ring rule: when the ball contacts a defended Bell Hit-Zone, the opposing Team scores 1 point, including when a player rings their own Bell.
 - Score UI, match timer, Golden Goal state, Bell Ring pause, spawn reset, and match-end summary.
 - Strike can hit players and the ball.
 - Aerial Strike variant: airborne Strike near the ball becomes a header/air redirect; downward input becomes a spike.
@@ -44,14 +44,14 @@ Two local humans can complete a full 1v1 Bell Brawl match on one desktop using t
 - Online multiplayer, Colyseus, snapshots, prediction, reconciliation, and interpolation.
 - Bot-filled slots or Practice Bot behavior.
 - Durable Object lobbies or Cloudflare worker code.
-- Six-character roster, character stat deltas, cooldown specials, and extra arenas.
+- Six-character roster, character stat deltas, cooldown Specials, and extra arenas.
 - Public matchmaking, ranked play, accounts, telemetry dashboards, and persistence.
 
 ## Acceptance Criteria
 
 - `pnpm dev:web` launches a local 1v1 mode.
 - Two players can control separate characters using two keyboard mappings.
-- Either player can ring either Bell, including own-goals.
+- Either player can ring either Bell, including their own Bell.
 - Regulation time can end with a winner.
 - A tied match enters Golden Goal and ends on the next Bell Ring.
 - Strikes can produce Stagger and Knockdown.
@@ -72,7 +72,7 @@ Two local humans can complete a full 1v1 Bell Brawl match on one desktop using t
 
 ## Required Tests
 
-- Unit tests for score ownership and own-goal behavior.
+- Unit tests for score ownership when either Bell is rung.
 - Unit tests for match timer, regulation completion, and Golden Goal transition.
 - Unit tests for Stagger threshold, Knockdown duration, and Recovery Invulnerability.
 - Unit tests for player pass-through behavior and Strike overlap behavior.
@@ -85,7 +85,7 @@ Two local humans can complete a full 1v1 Bell Brawl match on one desktop using t
 2. Plan match lifecycle changes before UI polish.
 3. Implement scoring and timer before combat complexity.
 4. Add combat states with replay tests before tuning values.
-5. Review terminology against `CONTEXT.md`, especially Strike, Stagger, Knockdown, Bell, Goal, and Bell Ring.
+5. Review terminology against `CONTEXT.md`, especially Strike, Stagger, Knockdown, Bell, and Bell Ring.
 
 ## Handoff To Phase 3
 

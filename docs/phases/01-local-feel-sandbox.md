@@ -9,7 +9,7 @@ A reviewer can launch a local browser build, control one all-rounder character i
 - One controllable all-rounder using the Sifu placeholder identity.
 - One ball with gravity, restitution, damping, speed clamp, light player body contact, and Strike impulse response.
 - Flat Dojo as the first Mirrored Scoring Puzzle: mostly flat floor, walls, two elevated Bells, low overhangs/ledges, spawn point, and reset point.
-- Bell Ring detection when the ball contacts a defended Bell hit-zone.
+- Bell Ring detection when the ball contacts a defended Bell Hit-Zone.
 - Core actions: variable-height Jump, Tele-Dash blink, and Strike.
 - Strike variants in this phase: tap Strike, hold-to-charge Strike, directional impulse shaping, and upward pop.
 - No Tele-Dash invulnerability frames.
@@ -37,13 +37,13 @@ A reviewer can launch a local browser build, control one all-rounder character i
 - Strike charge: expose min, max, and full-charge duration in typed config.
 - Tele-Dash: fixed distance and cooldown in typed config, with one air Tele-Dash per airtime.
 - Ball: expose gravity scale, restitution, damping, radius, mass, max speed, and Strike impulse multipliers in typed config.
-- Bell hit-zone: separate visible Bell art from the scoring hit-zone in arena data.
+- Bell Hit-Zone: separate visible Bell art from the scoring area in arena data.
 
 ## Out Of Scope
 
 - Opponent AI or second local player.
 - Match timer, score UI beyond Bell Ring feedback, Golden Goal, or reset ceremony.
-- Stagger, Knockdown, specials, roster stats, and arenas beyond Flat Dojo.
+- Stagger, Knockdown, Specials, roster stats, and arenas beyond Flat Dojo.
 - Networking, Colyseus, protocol package, Durable Objects, accounts, lobbies, and persistence.
 - Production art or final character identities.
 
@@ -54,7 +54,7 @@ A reviewer can launch a local browser build, control one all-rounder character i
 - The player can move and act using touch controls in landscape layout.
 - A charged upward Strike can pop the ball into an elevated Bell.
 - Bell Ring feedback is obvious and deterministic in replay.
-- Debug overlays can show player, ball, arena colliders, and Bell hit-zones.
+- Debug overlays can show player, ball, arena colliders, and Bell Hit-Zones.
 - Restarting the same replay with the same seed produces the same final sim state hash.
 - The game remains playable with programmer art and clear team-neutral colors.
 
@@ -64,7 +64,7 @@ A reviewer can launch a local browser build, control one all-rounder character i
 2. Open the local browser URL on desktop.
 3. Use keyboard controls to move, Jump, Tele-Dash, and Strike the ball.
 4. Charge Strike and use upward direction to ring a Bell.
-5. Enable collider overlays and confirm the Bell hit-zone is visually understandable.
+5. Enable collider overlays and confirm the Bell Hit-Zone is visually understandable.
 6. Resize to a phone-landscape viewport and confirm touch controls are usable.
 7. Rotate to portrait and confirm the rotate-device prompt appears.
 
