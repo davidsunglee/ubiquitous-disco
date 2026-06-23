@@ -64,6 +64,11 @@ function snapshotFromSim(
     ball: auth.ball,
     rapierBytesB64: uint8ArrayToBase64(auth.rapierBytes),
     match: auth.match,
+    bellRing: {
+      armed: [...auth.bellRing.armed],
+      radiusBonus: auth.bellRing.radiusBonus,
+      rampTicks: auth.bellRing.rampTicks,
+    },
     rngState: auth.rngState,
     lastAckedSeq,
   };

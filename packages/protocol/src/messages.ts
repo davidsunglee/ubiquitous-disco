@@ -39,7 +39,7 @@ export interface RoomErrorMsg {
 
 // ── Gameplay messages (Phase 2) ───────────────────────────────────────────────
 
-import type { InputFrame, MatchState } from "@bb/sim";
+import type { BellRingState, InputFrame, MatchState } from "@bb/sim";
 
 /** One sequenced input frame (seq is monotonically increasing per client). */
 export interface SeqInput {
@@ -110,6 +110,8 @@ export interface WorldSnapshot {
   /** Base64-encoded Rapier world snapshot (rw.takeSnapshot()). Always present. */
   rapierBytesB64: string;
   match: MatchState;
+  /** Bell Ring debounce + Golden Goal pressure ramp state. */
+  bellRing: BellRingState;
   /** Seeded PRNG state, restored on reconcile so seeded Specials don't drift. */
   rngState: number;
   lastAckedSeq: import("@bb/sim").AckBySlot; // index == PlayerSlotId; bot slots carry 0

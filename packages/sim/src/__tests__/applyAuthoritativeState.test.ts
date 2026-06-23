@@ -214,6 +214,26 @@ describe("applyAuthoritativeState", () => {
     expect(clientSnap.rngState).toBe(snap.rngState);
   });
 
+  test("restores Bell Ring debounce and Golden Goal ramp state", () => {
+    const serverSim = newSim();
+    const snap = serverSim.takeSnapshot();
+    snap.bellRingArmed = snap.bellRingArmed.map((_, i) => i % 2 === 1);
+    snap.bellRingState = {
+      radiusBonus: 1.25,
+      rampTicks: 17,
+    };
+    serverSim.restoreSnapshot(snap);
+
+    const auth = toAuthoritativeState(serverSim);
+    const clientSim = newSim();
+    clientSim.applyAuthoritativeState(auth);
+    const clientSnap = clientSim.takeSnapshot();
+
+    expect(clientSnap.bellRingArmed).toEqual(snap.bellRingArmed);
+    expect(clientSnap.bellRingState).toEqual(snap.bellRingState);
+    expect(clientSim.getBellHitRadii()).toEqual(serverSim.getBellHitRadii());
+  });
+
   test("pending events are cleared after apply", () => {
     // Drain some events by running a match that generates them.
     const serverSim = newSim();

@@ -166,6 +166,11 @@ function makeSnapshot(): WorldSnapshot {
       winner: -1,
       timerExpired: false,
     },
+    bellRing: {
+      armed: [true, false],
+      radiusBonus: 0.25,
+      rampTicks: 7,
+    },
     rngState: 0x1234_abcd,
     lastAckedSeq: [5, 0, 4, 0],
   };

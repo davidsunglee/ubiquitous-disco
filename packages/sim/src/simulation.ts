@@ -78,6 +78,8 @@ export interface AuthoritativeState {
   ball: { x: number; y: number; vx: number; vy: number };
   rapierBytes: Uint8Array;
   match: MatchState;
+  /** Bell Ring debounce + Golden Goal pressure ramp state. */
+  bellRing: BellRingState;
   /** Phase-3 (FLI-9): seeded PRNG state, restored so seeded Specials don't drift. */
   rngState: number;
 }
@@ -317,6 +319,11 @@ export function toAuthoritativeState(sim: Simulation): AuthoritativeState {
     ball: { x: render.ball.x, y: render.ball.y, ...ballVel },
     rapierBytes: snap.rapierBytes,
     match,
+    bellRing: {
+      armed: [...snap.bellRingArmed],
+      radiusBonus: snap.bellRingState?.radiusBonus ?? 0,
+      rampTicks: snap.bellRingState?.rampTicks ?? 0,
+    },
     rngState: snap.rngState,
   };
 }
@@ -694,8 +701,13 @@ export function createSimulation(opts: {
         rw.setPlayerPosition(i, p.x, p.y);
       }
 
-      // 3. Replace match state, tick counter, and seeded PRNG state.
+      // 3. Replace match state, Bell Ring state, tick counter, and seeded PRNG state.
       match = { ...s.match, scores: [...s.match.scores] };
+      bellRing = {
+        armed: [...s.bellRing.armed],
+        radiusBonus: s.bellRing.radiusBonus,
+        rampTicks: s.bellRing.rampTicks,
+      };
       tick = s.tick;
       rngState = s.rngState;
 

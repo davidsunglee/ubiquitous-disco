@@ -377,6 +377,7 @@ export class MatchRoom extends Room {
         ball: auth.ball,
         rapierBytesB64,
         match: auth.match,
+        bellRing: auth.bellRing,
         rngState: auth.rngState,
         lastAckedSeq,
       };

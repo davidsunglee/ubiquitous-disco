@@ -151,6 +151,11 @@ export class Reconciler {
       ball: snap.ball,
       rapierBytes,
       match: snap.match,
+      bellRing: {
+        armed: [...snap.bellRing.armed],
+        radiusBonus: snap.bellRing.radiusBonus,
+        rampTicks: snap.bellRing.rampTicks,
+      },
       rngState: snap.rngState,
     };
     this.sim.applyAuthoritativeState(authState);

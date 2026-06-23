@@ -224,6 +224,8 @@ export class GameScene extends Phaser.Scene {
     bellRings: 0,
     knockdowns: 0,
   };
+  /** Tick where the current hotseat match entered playing, for elapsed summaries. */
+  private hotseatStartTick: number | null = null;
 
   /**
    * Phase 7 (FLI-9): true once renderMatchSummaryOverlay() has populated the
@@ -1097,9 +1099,10 @@ export class GameScene extends Phaser.Scene {
         if (event.type === "bellRing") {
           this.hotseatTele.bellRings += 1;
           this.onBellRing(event.bell);
-        } else if (event.type === "matchPhase") this.onMatchPhase(event.phase);
+        } else if (event.type === "matchPhase")
+          this.onMatchPhase(event.phase, event.tick);
         else if (event.type === "matchEnd")
-          this.onMatchEnd(event.winner, event.scores);
+          this.onMatchEnd(event.winner, event.scores, event.tick);
         else if (event.type === "playerHit")
           this.onPlayerHit(event.slot, event.knockdown);
         else if (event.type === "knockdown") {
@@ -1184,16 +1187,26 @@ export class GameScene extends Phaser.Scene {
     console.info(`[bellRing] ${bell}`);
   }
 
-  private onMatchPhase(phase: import("@bb/sim").MatchPhase): void {
+  private onMatchPhase(
+    phase: import("@bb/sim").MatchPhase,
+    tick: number,
+  ): void {
+    if (phase === "playing" && this.hotseatStartTick === null)
+      this.hotseatStartTick = tick;
     console.info(`[match] phase → ${phase}`);
   }
 
-  private onMatchEnd(winner: number | "tie", scores: number[]): void {
+  private onMatchEnd(
+    winner: number | "tie",
+    scores: number[],
+    tick: number,
+  ): void {
     const label = winner === "tie" ? "TIE" : `P${(winner as number) + 1} WINS`;
     console.info(`[match] END — ${label}  ${scores.join("-")}`);
     // Phase 7 (FLI-9): build a hotseat MatchSummary from local counters.
     // Network fields are absent/zero (hotseat has no server connection).
-    const matchState = this.sim.getMatchState();
+    const startTick = this.hotseatStartTick ?? tick;
+    const durationTicks = Math.max(0, tick - startTick);
     const activeSlots = Object.keys(this.sim.getRenderState().players).map(
       (k) => Number(k) as import("@bb/sim").PlayerSlotId,
     );
@@ -1202,7 +1215,7 @@ export class GameScene extends Phaser.Scene {
       launchId: "hotseat",
       arenaId: this.activeArena.id,
       mode: activeSlots.length > 2 ? "2v2" : "1v1",
-      durationTicks: matchState.timer !== undefined ? matchState.timer : 0,
+      durationTicks,
       scores: [...scores],
       winner,
       slots: activeSlots.map((slotId) => ({
@@ -1225,6 +1238,7 @@ export class GameScene extends Phaser.Scene {
     // Reset counters for the next round/rematch.
     this.hotseatTele.bellRings = 0;
     this.hotseatTele.knockdowns = 0;
+    this.hotseatStartTick = null;
   }
 
   private onKnockdown(slot: number): void {

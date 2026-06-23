@@ -46,6 +46,24 @@ const REQUIRED_SLOTS_BY_MODE: Record<"1v1" | "2v2", readonly PlayerSlotId[]> = {
   "2v2": [0, 1, 2, 3],
 };
 
+export function isLobbyStartable(state: LobbyState): boolean {
+  const required =
+    REQUIRED_SLOTS_BY_MODE[state.settings.mode] ??
+    REQUIRED_SLOTS_BY_MODE["2v2"];
+  const allowed = new Set<PlayerSlotId>(required);
+
+  for (const slot of state.slots) {
+    if (slot.occupant !== null && !allowed.has(slot.slotId)) return false;
+  }
+
+  for (const slotId of required) {
+    const slot = state.slots.find((s) => s.slotId === slotId);
+    if (!slot || slot.occupant === null) return false; // empty slot
+    if (slot.occupant.kind === "human" && !slot.occupant.present) return false; // absent human
+  }
+  return true;
+}
+
 /** Match-length options exposed in the Host picker (2:00–5:00 @ 30 Hz). */
 const LENGTH_OPTIONS: { label: string; ticks: number }[] = [
   { label: "2:00", ticks: 3600 },
@@ -386,16 +404,7 @@ export class LobbyPage {
    * a bot (no absent humans, no empty required slots).
    */
   private isStartable(state: LobbyState): boolean {
-    const required =
-      REQUIRED_SLOTS_BY_MODE[state.settings.mode] ??
-      REQUIRED_SLOTS_BY_MODE["2v2"];
-    for (const slotId of required) {
-      const slot = state.slots.find((s) => s.slotId === slotId);
-      if (!slot || slot.occupant === null) return false; // empty slot
-      if (slot.occupant.kind === "human" && !slot.occupant.present)
-        return false; // absent human
-    }
-    return true;
+    return isLobbyStartable(state);
   }
 
   private render(state: LobbyState): void {

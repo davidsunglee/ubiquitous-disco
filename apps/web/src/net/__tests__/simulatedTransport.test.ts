@@ -57,6 +57,7 @@ function makeSnap(serverTick: number): WorldSnapshot {
     ball: { x: 0, y: 0, vx: 0, vy: 0 },
     rapierBytesB64: "",
     rngState: 0,
+    bellRing: { armed: [], radiusBonus: 0, rampTicks: 0 },
     match: {
       phase: "preRound",
       scores: [0, 0],
