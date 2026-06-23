@@ -1455,6 +1455,69 @@ test("setCharacter: cleared bot loses its character pick (default applies to new
   });
 });
 
+test("seat expiry clears the slot's character pick (no leak to next occupant)", async () => {
+  const code = uniqueCode();
+  const stub = getStub(code);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "conn-host", "host-id"); // slot 0
+    const guestConn = join(instance, "conn-guest", "guest-id"); // slot 2
+
+    // Guest picks a non-default character for their slot.
+    await instance.testApplyCommand(guestConn, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 2,
+      characterId: "vipra",
+    });
+    expect(instance.characterFor(2)).toBe("vipra");
+    void host;
+
+    // Guest disconnects and the seat expiry deadline lapses.
+    instance.onClose(guestConn);
+    const absMap = instance.absentPlayers as Map<string, number>;
+    absMap.set("guest-id", Date.now() - 31_000);
+  });
+
+  await runDurableObjectAlarm(stub);
+
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    // Seat is freed AND the stale character pick is cleared so the next
+    // occupant of slot 2 does not inherit the departed player's character.
+    expect(instance.seatFor(2)).toBeUndefined();
+    expect(instance.characterFor(2)).toBeUndefined();
+  });
+});
+
+test("moveOccupant carries the character to the new slot and clears the old", async () => {
+  const stub = getStub(uniqueCode());
+  await runInDurableObject(stub, async (instance: PrivateLobby) => {
+    const host = join(instance, "c1", "host"); // slot 0
+
+    // Host picks a non-default character for slot 0.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "setCharacter",
+      slotId: 0,
+      characterId: "panda",
+    });
+    expect(instance.characterFor(0)).toBe("panda");
+
+    // Host moves themselves from slot 0 to the open slot 3.
+    await instance.testApplyCommand(host, {
+      type: "LobbyCommand",
+      cmd: "moveOccupant",
+      fromSlot: 0,
+      toSlot: 3,
+    });
+
+    // The pick travels with the occupant; the old slot is left clean.
+    expect(instance.slotForPlayer("host")).toBe(3);
+    expect(instance.characterFor(3)).toBe("panda");
+    expect(instance.characterFor(0)).toBeUndefined();
+  });
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**

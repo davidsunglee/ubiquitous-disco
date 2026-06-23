@@ -250,6 +250,9 @@ export class PrivateLobby extends Server<Env> {
         if (slotId !== undefined) {
           this.seats.delete(slotId);
           this.playerToSlot.delete(playerId);
+          // Clear the character pick with the seat so the next occupant of this
+          // slot doesn't inherit the departed player's character.
+          this.slotCharacters.delete(slotId);
         }
         this.absentSince.delete(playerId);
         this.hostTransferred.delete(playerId);
@@ -464,6 +467,11 @@ export class PrivateLobby extends Server<Env> {
     seat.slotId = toSlot;
     this.seats.set(toSlot, seat);
     this.playerToSlot.set(seat.playerId, toSlot);
+    // Move the character pick with the occupant so it doesn't revert to the
+    // default at the new slot or orphan on the old one.
+    const character = this.slotCharacters.get(fromSlot);
+    this.slotCharacters.delete(fromSlot);
+    if (character !== undefined) this.slotCharacters.set(toSlot, character);
     this.sendLobbyStateToAll();
   }
 
@@ -785,6 +793,11 @@ export class PrivateLobby extends Server<Env> {
   /** Whether a bot occupies the given slot (for unit test inspection). */
   hasBot(slotId: PlayerSlotId): boolean {
     return this.bots.has(slotId);
+  }
+
+  /** The character pick for a slot, if any (for unit test inspection). */
+  characterFor(slotId: PlayerSlotId): CharacterId | undefined {
+    return this.slotCharacters.get(slotId);
   }
 
   /** Current lobby settings (for unit test inspection). */
