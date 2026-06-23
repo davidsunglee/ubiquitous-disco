@@ -28,10 +28,12 @@ import {
   FLAT_DOJO,
   type InputFrame,
   initSim,
+  PILLARED_TEMPLE,
   playReplay,
   recordFrame,
   samplePracticeBotInput,
   serializeReplay,
+  TWIN_LEDGE,
 } from "../index";
 import { COMPACT_DOJO } from "./fixtures/compactArena";
 
@@ -148,6 +150,29 @@ test("playReplay() hash equals the live capture session's final hashState()", ()
   const liveHash = sim.hashState();
   const replayHash = playReplay(replay);
   expect(replayHash).toBe(liveHash);
+});
+
+test("playReplay() reproduces the live hash on the new arenas (resolves arenaId)", () => {
+  // arenaId is load-bearing: playReplay must resolve it and build the sim on the
+  // captured arena, not hardcode flat-dojo. Round-trip on both new arenas.
+  for (const arena of [PILLARED_TEMPLE, TWIN_LEDGE]) {
+    const replay = createReplay(9999, arena.id);
+    const sim = createSimulation({
+      config: DEFAULT_CONFIG,
+      arena,
+      seed: 9999,
+    });
+    const frames = scriptedFrameList();
+
+    for (const row of frames) {
+      recordFrame(replay, row);
+      sim.step(row);
+    }
+
+    const liveHash = sim.hashState();
+    expect(() => playReplay(replay)).not.toThrow();
+    expect(playReplay(replay)).toBe(liveHash);
+  }
 });
 
 test("two independent live runs with the same frames produce the same hash", () => {
