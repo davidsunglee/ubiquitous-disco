@@ -49,43 +49,50 @@ export interface ArenaDef {
 /** The set of available arena ids. */
 export type ArenaId = "flat-dojo" | "pillared-temple" | "twin-ledge";
 
-// Flat Dojo: a wide flat floor, two side walls, and two symmetric ledges near
-// the bells the player platforms up from. Two elevated Bells flank the arena.
+// Flat Dojo: a wide flat floor, two side walls, and a two-step platform ladder
+// climbing to a bell tucked under an overhang. Two elevated Bells flank the arena.
 // Authored in world units (X right, Y up).
-// Phase 5 (FLI-9): scaled to 72 units wide (walls at x=±36) so the arena plays
-// large and the adaptive camera engages; symmetric about x=0.
+// FLI-9 (tall redesign): 72 units wide × 16u tall. A two-step ladder (low step
+// top 3.0, main ledge top 6.0) climbs to a bell at y=8.5 tucked under an
+// overhang lip (underside 10). Mirror-symmetric about x=0.
 export const FLAT_DOJO: ArenaDef = {
   id: "flat-dojo",
   colliders: [
     // floor: top surface at y = 0 (72 units wide)
     { kind: "box", x: 0, y: -0.5, halfW: 36, halfH: 0.5 },
-    // left wall: inner face at x = -35.5
-    { kind: "box", x: -36, y: 4, halfW: 0.5, halfH: 5 },
-    // right wall: inner face at x = 35.5
-    { kind: "box", x: 36, y: 4, halfW: 0.5, halfH: 5 },
-    // LEFT ledge (mirrored): platform near the left bell, top surface y ≈ 3.3
-    { kind: "box", x: -27, y: 2.8, halfW: 2.5, halfH: 0.5 },
-    // RIGHT ledge (mirrored): platform near the right bell
-    { kind: "box", x: 27, y: 2.8, halfW: 2.5, halfH: 0.5 },
-    // ceiling: underside at y = 9, meeting the wall tops to close the box so a
-    // hard upward Strike can't loft the ball out over the walls (ball has CCD,
-    // so it can't tunnel through either)
-    { kind: "box", x: 0, y: 9.5, halfW: 36, halfH: 0.5 },
+    // left wall: inner face at x = -35.5, spans y 0→16
+    { kind: "box", x: -36, y: 8, halfW: 0.5, halfH: 8 },
+    // right wall: inner face at x = 35.5, spans y 0→16
+    { kind: "box", x: 36, y: 8, halfW: 0.5, halfH: 8 },
+    // LEFT low step (mirrored): top surface y = 3.0
+    { kind: "box", x: -22, y: 2.5, halfW: 2.5, halfH: 0.5 },
+    // RIGHT low step (mirrored): top surface y = 3.0
+    { kind: "box", x: 22, y: 2.5, halfW: 2.5, halfH: 0.5 },
+    // LEFT main ledge (mirrored): top surface y = 6.0
+    { kind: "box", x: -29, y: 5.5, halfW: 3.0, halfH: 0.5 },
+    // RIGHT main ledge (mirrored): top surface y = 6.0
+    { kind: "box", x: 29, y: 5.5, halfW: 3.0, halfH: 0.5 },
+    // LEFT overhang lip (mirrored): underside y = 10, caps the bell pocket
+    { kind: "box", x: -30, y: 10.5, halfW: 4.5, halfH: 0.5 },
+    // RIGHT overhang lip (mirrored): underside y = 10
+    { kind: "box", x: 30, y: 10.5, halfW: 4.5, halfH: 0.5 },
+    // ceiling: underside at y = 16, closes the box (ball CCD prevents tunnelling)
+    { kind: "box", x: 0, y: 16.5, halfW: 36, halfH: 0.5 },
   ],
   bells: [
-    // Left Bell: elevated near the left wall, defends the left side.
+    // Left Bell: tucked in the overhang pocket, defends the left side.
     {
       id: "left",
       defends: "left",
-      art: { kind: "box", x: -30, y: 5.5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: -30, y: 5.5, radius: 0.8 },
+      art: { kind: "box", x: -31, y: 8.5, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: -31, y: 8.5, radius: 0.8 },
     },
-    // Right Bell: elevated near the right wall, defends the right side.
+    // Right Bell: tucked in the overhang pocket, defends the right side.
     {
       id: "right",
       defends: "right",
-      art: { kind: "box", x: 30, y: 5.5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: 30, y: 5.5, radius: 0.8 },
+      art: { kind: "box", x: 31, y: 8.5, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: 31, y: 8.5, radius: 0.8 },
     },
   ],
   playerSpawns: [
@@ -96,7 +103,7 @@ export const FLAT_DOJO: ArenaDef = {
     { x: 7, y: 1 }, // slot 3 — Team 1 (right)
   ],
   playerSpawn: { x: -4, y: 1 }, // deprecated alias for slot 0
-  ballSpawn: { x: 0, y: 5 },
+  ballSpawn: { x: 0, y: 6 },
 };
 
 // Pillared Temple: 84-unit-wide arena with two pairs of interior pillars

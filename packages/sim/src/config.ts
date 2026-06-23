@@ -1,4 +1,4 @@
-export const SIM_CONFIG_VERSION = 6;
+export const SIM_CONFIG_VERSION = 7;
 
 export interface MovementConfig {
   moveSpeed: number; // world units / second of horizontal movement
@@ -79,7 +79,7 @@ export const DEFAULT_CONFIG: SimConfig = {
   player: { halfW: 0.4, halfH: 0.8 },
   movement: {
     moveSpeed: 6,
-    jumpSpeed: 11,
+    jumpSpeed: 12, // FLI-9 tall redesign: feet apex ≈ 3.6u so a single jump lands a low ledge
     gravityScale: 1,
     jumpCutMultiplier: 0.4,
     coyoteTicks: 4,

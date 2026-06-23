@@ -188,23 +188,27 @@ for (const id of ARENA_IDS) {
   });
 }
 
-// ── FLAT_DOJO-specific: mirrored ledges (Phase 5 geometry change) ─────────────
+// ── FLAT_DOJO-specific: tall layout (FLI-9 tall redesign) ─────────────────────
 
-test("FLAT_DOJO has two symmetric ledges (not the lone right ledge)", () => {
-  // After Phase 5, FLAT_DOJO is 72 units wide with left + right ledges at
-  // x=±27, y=2.8 (near the bells).
-  const leftLedge = FLAT_DOJO.colliders.find(
-    (c) => Math.abs(c.x - -27) < 0.01 && Math.abs(c.y - 2.8) < 0.01,
-  );
-  const rightLedge = FLAT_DOJO.colliders.find(
-    (c) => Math.abs(c.x - 27) < 0.01 && Math.abs(c.y - 2.8) < 0.01,
-  );
-  expect(leftLedge, "left ledge at x=-27, y=2.8").toBeDefined();
-  expect(rightLedge, "right ledge at x=27, y=2.8").toBeDefined();
-
-  // The old lone right ledge at x=8, y=3.5 must be gone.
-  const oldLedge = FLAT_DOJO.colliders.find(
-    (c) => Math.abs(c.x - 8) < 0.01 && Math.abs(c.y - 3.5) < 0.01,
-  );
-  expect(oldLedge, "old lone right ledge should be removed").toBeUndefined();
+test("FLAT_DOJO is the tall layout: low step, main ledge, overhang, high bells", () => {
+  const top = (x: number, y: number) =>
+    FLAT_DOJO.colliders.find(
+      (c) => Math.abs(c.x - x) < 0.01 && Math.abs(c.y - y) < 0.01,
+    );
+  // Two-step ladder per side.
+  expect(top(-22, 2.5), "left low step (top 3.0)").toBeDefined();
+  expect(top(22, 2.5), "right low step (top 3.0)").toBeDefined();
+  expect(top(-29, 5.5), "left main ledge (top 6.0)").toBeDefined();
+  expect(top(29, 5.5), "right main ledge (top 6.0)").toBeDefined();
+  // Overhang lip over each bell pocket (underside 10).
+  expect(top(-30, 10.5), "left overhang").toBeDefined();
+  expect(top(30, 10.5), "right overhang").toBeDefined();
+  // Bells raised to 8.5 (above single-jump + floor jump+air-dash reach).
+  const right = FLAT_DOJO.bells.find((b) => b.id === "right");
+  expect(right?.hitZone.y).toBeCloseTo(8.5, 5);
+  expect(right?.hitZone.x).toBeCloseTo(31, 5);
+  // Ceiling raised to ~16u (taller arena).
+  expect(top(0, 16.5), "ceiling underside 16").toBeDefined();
+  // The old Phase-5 ledges at x=±27, y=2.8 are gone.
+  expect(top(27, 2.8), "old ledge removed").toBeUndefined();
 });
