@@ -79,15 +79,18 @@ test("ball falls from spawn under gravity", () => {
   expect(sim.getRenderState().ball.y).toBeLessThan(startY);
 });
 
-test("player moves right and stops at the right wall", () => {
+test("player moves left and stops at the left wall", () => {
   const sim = newSim();
   const startX = sim.getRenderState().players[0]?.x ?? 0;
-  for (let i = 0; i < 120; i++) sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
+  // FLAT_DOJO is now 72 units wide (wall inner face at x = -35.5). Move LEFT,
+  // away from the centre ball, so the player travels freely to the far wall.
+  for (let i = 0; i < 600; i++) sim.step([frame({ moveX: -1 }), EMPTY_INPUT]);
   const endX = sim.getRenderState().players[0]?.x ?? 0;
-  expect(endX).toBeGreaterThan(startX);
-  // right wall inner face is at x = 11.5; player halfW 0.4 → cannot pass ~11.1
-  expect(endX).toBeLessThan(11.2);
-  expect(sim.getRenderState().players[0]?.facing).toBe(1);
+  expect(endX).toBeLessThan(startX);
+  // left wall inner face is at x = -35.5; player halfW 0.4 → cannot pass ~-35.1
+  expect(endX).toBeLessThan(-34);
+  expect(endX).toBeGreaterThan(-35.2);
+  expect(sim.getRenderState().players[0]?.facing).toBe(-1);
 });
 
 test("held jump rises higher than a tapped jump", () => {

@@ -1,5 +1,6 @@
 export type {
   ArenaDef,
+  ArenaId,
   ArtShape,
   BellDef,
   BoxArt,
@@ -7,7 +8,13 @@ export type {
   CircleZone,
   ColliderDef,
 } from "./arena";
-export { FLAT_DOJO } from "./arena";
+export {
+  ARENAS,
+  FLAT_DOJO,
+  PILLARED_TEMPLE,
+  resolveArena,
+  TWIN_LEDGE,
+} from "./arena";
 export type { BotWorldView } from "./bot/practiceBot";
 export { samplePracticeBotInput } from "./bot/practiceBot";
 export type {

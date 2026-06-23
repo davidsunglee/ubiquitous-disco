@@ -42,6 +42,7 @@ import {
   initSim,
   type MatchState,
   type RenderState,
+  resolveArena,
 } from "@bb/sim";
 import { FIXED_STEP_MS, INTERP_DELAY_TICKS } from "./config";
 import { InterpolationBuffer } from "./InterpolationBuffer";
@@ -131,6 +132,7 @@ export class NetLoop {
     cb: NetLoopCallbacks,
     transport: SimulatedTransport | null = null,
     characterIds?: import("@bb/sim").CharacterId[],
+    arenaId?: string,
   ) {
     this.net = net;
     this.slot = slot;
@@ -147,9 +149,12 @@ export class NetLoop {
       }
     }
 
+    // Resolve arena from arenaId (falls back to FLAT_DOJO for unknown/absent ids).
+    const arena = arenaId ? resolveArena(arenaId) : FLAT_DOJO;
+
     this.sim = createSimulation({
       config: DEFAULT_CONFIG,
-      arena: FLAT_DOJO,
+      arena,
       seed: 1234,
       activeSlots,
       characters: characterIds ? characters : undefined,

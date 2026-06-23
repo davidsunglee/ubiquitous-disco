@@ -4,7 +4,6 @@ import {
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
-  FLAT_DOJO,
   type InputFrame,
   initSim,
 } from "../index";
@@ -15,6 +14,7 @@ import {
   serializeBellRingState,
   stepBellRing,
 } from "../rules/bellRing";
+import { COMPACT_DOJO } from "./fixtures/compactArena";
 
 beforeAll(async () => {
   await initSim();
@@ -27,7 +27,7 @@ function frame(partial: Partial<InputFrame>): InputFrame {
 function newSim() {
   const sim = createSimulation({
     config: DEFAULT_CONFIG,
-    arena: FLAT_DOJO,
+    arena: COMPACT_DOJO,
     seed: 4242,
   });
   // Advance past preRound so gameplay rules run.

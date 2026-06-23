@@ -27,6 +27,8 @@ export interface RoomReady {
   slots: import("@bb/sim").PlayerSlotId[];
   /** Per-slot character id (indexed by PlayerSlotId) so prediction matches the server. */
   characters: import("@bb/sim").CharacterId[];
+  /** Arena id for this match — client resolves the arena for its prediction sim + renderer. */
+  arenaId: import("@bb/sim").ArenaId;
 }
 
 export interface RoomErrorMsg {

@@ -9,6 +9,7 @@ import {
   type WorldSnapshot,
 } from "@bb/protocol";
 import {
+  type ArenaDef,
   type BotWorldView,
   CHARACTERS,
   type CharacterDef,
@@ -17,6 +18,7 @@ import {
   EMPTY_INPUT,
   FLAT_DOJO,
   type InputFrame,
+  resolveArena,
   resolveCharacter,
   type SimConfig,
   toAuthoritativeState,
@@ -68,6 +70,8 @@ export class MatchRoom extends Room {
 
   private slotOf = new Map<string, PlayerSlotId>();
   private activeSlots: PlayerSlotId[] = MODE_2V2;
+  /** The resolved arena for the current match (set in configureFromManifest). */
+  private activeArena: ArenaDef = FLAT_DOJO;
   /** Set to true once disconnect() has been called so double-dispose is avoided. */
   private roomDisposed = false;
 
@@ -173,6 +177,7 @@ export class MatchRoom extends Room {
     tick: number;
     ball: { x: number; y: number; vx: number; vy: number };
     selves: (BotWorldView["self"] | undefined)[];
+    arena: { leftBellX: number; rightBellX: number; wallInnerX: number };
   } {
     const render = this.sim.getRenderState();
     const ballVel = this.sim.getBallVel();
@@ -188,6 +193,23 @@ export class MatchRoom extends Room {
         };
       }
     }
+
+    // Derive arena geometry for bots from the resolved ArenaDef.
+    // Bells: leftBellX = first bell with id "left", rightBellX = first with id "right".
+    const leftBell = this.activeArena.bells.find((b) => b.id === "left");
+    const rightBell = this.activeArena.bells.find((b) => b.id === "right");
+    const leftBellX = leftBell?.hitZone.x ?? -9;
+    const rightBellX = rightBell?.hitZone.x ?? 9;
+    // wallInnerX: the inner face of the rightmost wall collider.
+    // We find the wall with the largest x, then subtract its halfW.
+    let wallInnerX = 11.5;
+    for (const c of this.activeArena.colliders) {
+      const face = c.x - c.halfW; // inner face of a right-side wall = x - halfW
+      if (c.x > 0 && face > 0 && face < wallInnerX + c.halfW) {
+        wallInnerX = face;
+      }
+    }
+
     return {
       tick: this.serverTick,
       ball: {
@@ -197,6 +219,7 @@ export class MatchRoom extends Room {
         vy: ballVel.vy,
       },
       selves,
+      arena: { leftBellX, rightBellX, wallInnerX },
     };
   }
 
@@ -227,9 +250,12 @@ export class MatchRoom extends Room {
       characters[s.slotId] = CHARACTERS[s.characterId];
     }
 
+    // Resolve the arena from the manifest settings (falls back to FLAT_DOJO).
+    this.activeArena = resolveArena(manifest.settings.arenaId);
+
     this.sim = createSimulation({
       config: this.simConfig,
-      arena: FLAT_DOJO,
+      arena: this.activeArena,
       seed: 1234,
       activeSlots: this.activeSlots,
       characters,
@@ -240,6 +266,7 @@ export class MatchRoom extends Room {
     );
     for (const s of this.activeSlots) {
       if (botSlots.has(s)) {
+        // biome-ignore lint/style/noNonNullAssertion: botSlots is derived from manifest.slots which always has a character for each slot
         const rc = resolveCharacter(characters[s]!, this.simConfig);
         this.sources.set(s, botSource(s, this.simConfig, rc.stats));
       } else {
@@ -274,6 +301,7 @@ export class MatchRoom extends Room {
         ball: worldView.ball,
         // Provide a neutral self-view if the slot somehow has no render state.
         self: self ?? { x: 0, y: 0, facing: 1, grounded: false },
+        arena: worldView.arena,
       };
       const taken = src.take(view);
       inputRow[s] = taken.input ?? EMPTY_INPUT;
@@ -414,6 +442,7 @@ export class MatchRoom extends Room {
       full: false,
       slots: this.activeSlots,
       characters: this.manifestCharacters(),
+      arenaId: this.activeArena.id,
     });
 
     if (full) {
@@ -427,6 +456,7 @@ export class MatchRoom extends Room {
             full: true,
             slots: this.activeSlots,
             characters: this.manifestCharacters(),
+            arenaId: this.activeArena.id,
           });
         }
       }

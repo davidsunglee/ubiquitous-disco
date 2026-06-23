@@ -55,6 +55,13 @@ const LENGTH_OPTIONS: { label: string; ticks: number }[] = [
   { label: "5:00", ticks: 9000 },
 ];
 
+/** Arena options for the host picker. */
+const ARENA_OPTIONS: { label: string; id: string }[] = [
+  { label: "Flat Dojo", id: "flat-dojo" },
+  { label: "Pillared Temple", id: "pillared-temple" },
+  { label: "Twin Ledge", id: "twin-ledge" },
+];
+
 export class LobbyPage {
   private root!: HTMLElement;
   private client: LobbyClient | null = null;
@@ -64,6 +71,7 @@ export class LobbyPage {
   private controlsEl!: HTMLElement;
   private modeSelect!: HTMLSelectElement;
   private lengthSelect!: HTMLSelectElement;
+  private arenaSelect!: HTMLSelectElement;
   private startBtn!: HTMLButtonElement;
   private startHint!: HTMLElement;
   /** Latest known lobby state (used by seat-button handlers). */
@@ -230,6 +238,36 @@ export class LobbyPage {
     lengthRow.appendChild(this.lengthSelect);
     wrap.appendChild(lengthRow);
 
+    // Arena picker.
+    const arenaRow = document.createElement("div");
+    arenaRow.style.cssText = "display:flex;gap:8px;align-items:center;";
+    const arenaLabel = document.createElement("label");
+    arenaLabel.textContent = "Arena:";
+    arenaLabel.style.cssText = "font-size:12px;color:#aaa;";
+    arenaRow.appendChild(arenaLabel);
+
+    this.arenaSelect = document.createElement("select");
+    this.arenaSelect.dataset.testid = "lobby-arena";
+    this.arenaSelect.style.cssText =
+      "padding:4px 8px;font-family:monospace;font-size:12px;" +
+      "background:#222;color:#eee;border:1px solid #555;border-radius:4px;";
+    for (const opt of ARENA_OPTIONS) {
+      const o = document.createElement("option");
+      o.value = opt.id;
+      o.textContent = opt.label;
+      if (opt.id === "flat-dojo") o.selected = true;
+      this.arenaSelect.appendChild(o);
+    }
+    this.arenaSelect.addEventListener("change", () => {
+      this.client?.sendCommand({
+        type: "LobbyCommand",
+        cmd: "setSettings",
+        settings: { arenaId: this.arenaSelect.value },
+      });
+    });
+    arenaRow.appendChild(this.arenaSelect);
+    wrap.appendChild(arenaRow);
+
     // Action buttons.
     const btnRow = document.createElement("div");
     btnRow.style.cssText = "display:flex;gap:12px;align-items:center;";
@@ -368,6 +406,12 @@ export class LobbyPage {
       const tickStr = String(state.settings.matchLengthTicks);
       if (this.lengthSelect.value !== tickStr) {
         this.lengthSelect.value = tickStr;
+      }
+      if (
+        state.settings.arenaId &&
+        this.arenaSelect.value !== state.settings.arenaId
+      ) {
+        this.arenaSelect.value = state.settings.arenaId;
       }
     }
 

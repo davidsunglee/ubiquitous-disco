@@ -1,5 +1,6 @@
 import type { MatchLaunch } from "@bb/protocol";
 import {
+  type ArenaDef,
   CHARACTERS,
   type CharacterDef,
   type CharacterId,
@@ -15,6 +16,7 @@ import {
   type RenderState,
   type ReplayData,
   recordFrame,
+  resolveArena,
   type SimConfig,
   type Simulation,
   serializeReplay,
@@ -147,6 +149,10 @@ export class GameScene extends Phaser.Scene {
   private replayFrames: InputFrame[][] | null = null;
   private replayFrameCursor = 0;
 
+  // ── Phase 5: active arena (resolved from arenaId on launch/RoomReady) ──────────
+  /** The arena used by both the sim and the renderer. Default FLAT_DOJO (hotseat). */
+  private activeArena: ArenaDef = FLAT_DOJO;
+
   // ── Phase 6: static Bell screen positions ────────────────────────────────────
   private bellSubjects!: Array<{ screenX: number; screenY: number }>;
 
@@ -237,7 +243,7 @@ export class GameScene extends Phaser.Scene {
     this.groupCamera = new GroupCamera(this.cameras.main);
 
     // Pre-compute static Bell screen positions (Bells don't move).
-    this.bellSubjects = FLAT_DOJO.bells.map((b) =>
+    this.bellSubjects = this.activeArena.bells.map((b) =>
       bellSubjectFromWorld(b.hitZone.x, b.hitZone.y),
     );
 
@@ -576,13 +582,22 @@ export class GameScene extends Phaser.Scene {
             full: boolean;
             slots?: PlayerSlotId[];
             characters?: import("@bb/sim").CharacterId[];
+            arenaId?: string;
           };
           net.slot = m.slot as PlayerSlotId;
+          if (m.arenaId) {
+            this.activeArena = resolveArena(m.arenaId);
+            // Re-compute bell subjects for the new arena.
+            this.bellSubjects = this.activeArena.bells.map((b) =>
+              bellSubjectFromWorld(b.hitZone.x, b.hitZone.y),
+            );
+          }
           if (m.full) {
             this.startNetLoop(
               m.slot as PlayerSlotId,
               (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
               m.characters,
+              m.arenaId,
             );
           }
         });
@@ -628,18 +643,26 @@ export class GameScene extends Phaser.Scene {
           full: boolean;
           slots?: PlayerSlotId[];
           characters?: import("@bb/sim").CharacterId[];
+          arenaId?: string;
         };
         net.slot = m.slot as PlayerSlotId;
         this.reconnecting = false;
         // Reconnect resumed: clear any terminal/fail-closed state so a stale
         // banner can't persist over the resumed game (FLI-8 BUG #1).
         this.clearFailClosed();
+        if (m.arenaId) {
+          this.activeArena = resolveArena(m.arenaId);
+          this.bellSubjects = this.activeArena.bells.map((b) =>
+            bellSubjectFromWorld(b.hitZone.x, b.hitZone.y),
+          );
+        }
         if (m.full) {
           // Resume the net loop with the same slot.
           this.startNetLoop(
             m.slot as PlayerSlotId,
             (m.slots ?? [0, 1, 2, 3]) as PlayerSlotId[],
             m.characters,
+            m.arenaId,
           );
         }
       });
@@ -704,6 +727,7 @@ export class GameScene extends Phaser.Scene {
     slot: PlayerSlotId,
     activeSlots: PlayerSlotId[] = [0, 2],
     characterIds?: import("@bb/sim").CharacterId[],
+    arenaId?: string,
   ): void {
     // Idempotency guard (FLI-8 BUG #2): the server re-broadcasts
     // RoomReady{full:true} to ALL present clients whenever any peer reconnects,
@@ -758,6 +782,7 @@ export class GameScene extends Phaser.Scene {
       },
       this.simTransport,
       characterIds,
+      arenaId,
     );
     this.netLoop.start();
     console.info(`[net] NetLoop started (slot ${slot})`);
@@ -1080,6 +1105,9 @@ export class GameScene extends Phaser.Scene {
     const ballX = lerp(p.ball.x, s.ball.x, alpha);
     const ballY = lerp(p.ball.y, s.ball.y, alpha);
 
+    // Ball as focal point (ball-centric framing when zoom is clamped).
+    const ballSubject = subjectFromWorld(ballX, ballY, false);
+
     // Every active player as a camera subject (interpolated). players[] is
     // slot-indexed and SPARSE (e.g. 1v1 template [0, 2] leaves a hole at slot
     // 1); skip holes so we never pass an undefined subject to GroupCamera.
@@ -1087,14 +1115,21 @@ export class GameScene extends Phaser.Scene {
     s.players.forEach((cp, i) => {
       if (!cp) return;
       const pp = p.players[i] ?? cp;
+      const team = teamForPlayerSlot(i as PlayerSlotId);
       subjects.push(
-        subjectFromWorld(lerp(pp.x, cp.x, alpha), lerp(pp.y, cp.y, alpha)),
+        subjectFromWorld(
+          lerp(pp.x, cp.x, alpha),
+          lerp(pp.y, cp.y, alpha),
+          true,
+          team,
+          i,
+        ),
       );
     });
-    subjects.push(subjectFromWorld(ballX, ballY));
+    subjects.push(ballSubject);
     subjects.push(...this.bellSubjects);
 
-    this.groupCamera.update(subjects);
+    this.groupCamera.update(subjects, ballSubject.screenX, ballSubject.screenY);
   }
 
   /**
@@ -1176,7 +1211,7 @@ export class GameScene extends Phaser.Scene {
 
   private drawArena(): void {
     this.gfx.fillStyle(0x444444, 1);
-    for (const c of FLAT_DOJO.colliders) {
+    for (const c of this.activeArena.colliders) {
       this.gfx.fillRect(
         toScreenX(c.x - c.halfW),
         toScreenY(c.y + c.halfH),
@@ -1192,7 +1227,7 @@ export class GameScene extends Phaser.Scene {
    * brighter for a moment via bellFlash.
    */
   private drawBells(): void {
-    for (const bell of FLAT_DOJO.bells) {
+    for (const bell of this.activeArena.bells) {
       const art = bell.art;
       const flash = this.bellFlash[bell.id];
       const base = bell.id === "left" ? 0x3aa0c0 : 0xc06a3a;

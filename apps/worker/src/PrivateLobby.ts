@@ -68,8 +68,12 @@ const DEFAULT_SETTINGS: LobbySettings = {
   arenaId: "flat-dojo",
 };
 
-/** Only the Flat Dojo arena exists today — the picker exposes just this. */
-const AVAILABLE_ARENAS = ["flat-dojo"] as const;
+/** All available arenas — the lobby arena picker exposes all three. */
+const AVAILABLE_ARENAS = [
+  "flat-dojo",
+  "pillared-temple",
+  "twin-ledge",
+] as const;
 
 const DEFAULT_CHARACTER: CharacterId = "sifu";
 

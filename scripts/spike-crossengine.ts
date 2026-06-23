@@ -15,8 +15,8 @@
  * A divergence means Bun/JSC and Node/V8 produce different physics → the
  * `apps/server` runtime/transport factory must fall back to Node.
  *
- * The golden hash committed in crossEngine.test.ts is: 81caeb03
- * (Phase 4 FLI-9: airJumpsRemaining i32 appended to serializeActor)
+ * The golden hash committed in crossEngine.test.ts is: 56a81936
+ * (Phase 5 FLI-9: FLAT_DOJO scaled to a 72-unit-wide arena)
  */
 
 import {
@@ -156,7 +156,7 @@ async function main(): Promise<void> {
   for (const row of script) sim.step(row);
 
   const hash = sim.hashState();
-  const expectedHash = "81caeb03";
+  const expectedHash = "56a81936";
 
   console.log(`[spike-crossengine] hashState() = ${hash}`);
   console.log(`[spike-crossengine] Expected    = ${expectedHash}`);

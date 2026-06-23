@@ -27,6 +27,12 @@ export interface BotWorldView {
   tick: number;
   self: { x: number; y: number; facing: 1 | -1; grounded: boolean };
   ball: { x: number; y: number; vx: number; vy: number };
+  /**
+   * Active-arena geometry the bot needs (replaces FLAT_DOJO hardcodes).
+   * Optional for backward compatibility with legacy test fixtures; the server
+   * always populates this. Defaults to FLAT_DOJO geometry when absent.
+   */
+  arena?: { leftBellX: number; rightBellX: number; wallInnerX: number };
 }
 
 /**
@@ -48,21 +54,25 @@ export function samplePracticeBotInput(
 
   // Team 0 = left side (defends left Bell, attacks right Bell).
   // Team 1 = right side (defends right Bell, attacks left Bell).
-  // Bells array in FLAT_DOJO: index 0 = left, index 1 = right.
-  const ownBellX = team === 0 ? -9 : 9; // own-side bell X (world units, from arena)
-  const targetBellX = team === 0 ? 9 : -9; // opposing bell X
+  // Fall back to FLAT_DOJO geometry when arena is absent (legacy callers).
+  const arenaGeom = view.arena ?? {
+    leftBellX: -9,
+    rightBellX: 9,
+    wallInnerX: 11.5,
+  };
+  const ownBellX = team === 0 ? arenaGeom.leftBellX : arenaGeom.rightBellX;
+  const targetBellX = team === 0 ? arenaGeom.rightBellX : arenaGeom.leftBellX;
 
   const { self, ball, tick } = view;
   const dxBall = ball.x - self.x;
   const distBall = Math.hypot(dxBall, ball.y - self.y);
 
   // ── Wall / corner awareness ──
-  // The side walls' inner faces sit at x = ±11.5 (see FLAT_DOJO colliders). Treat
-  // the bot as "cornered" once it is pressed within WALL_MARGIN of a wall AND the
-  // ball is pulling it further into that wall. Because both Bells sit at x = ±9
-  // (inside the walls), "away from the nearest wall" always points back toward
-  // open play and the target Bell — the right way to break out and clear the ball.
-  const WALL_INNER_X = 11.5;
+  // The side walls' inner faces are derived from the active arena. Treat the bot
+  // as "cornered" once it is pressed within WALL_MARGIN of a wall AND the ball is
+  // pulling it further into that wall. "Away from the nearest wall" always points
+  // back toward open play and the target Bell.
+  const WALL_INNER_X = arenaGeom.wallInnerX;
   const WALL_MARGIN = 1.5;
   const nearLeftWall = self.x <= -(WALL_INNER_X - WALL_MARGIN);
   const nearRightWall = self.x >= WALL_INNER_X - WALL_MARGIN;
