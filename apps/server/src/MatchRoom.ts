@@ -13,6 +13,7 @@ import {
   type BotWorldView,
   CHARACTERS,
   type CharacterDef,
+  type ClimbWaypoint,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
@@ -21,6 +22,7 @@ import {
   resolveArena,
   resolveCharacter,
   type SimConfig,
+  teamForPlayerSlot,
   toAuthoritativeState,
 } from "@bb/sim";
 import { type Client, Room } from "@colyseus/core";
@@ -178,6 +180,8 @@ export class MatchRoom extends Room {
     ball: { x: number; y: number; vx: number; vy: number };
     selves: (BotWorldView["self"] | undefined)[];
     arena: { leftBellX: number; rightBellX: number; wallInnerX: number };
+    climbLeft?: ClimbWaypoint[];
+    climbRight?: ClimbWaypoint[];
   } {
     const render = this.sim.getRenderState();
     const ballVel = this.sim.getBallVel();
@@ -220,6 +224,8 @@ export class MatchRoom extends Room {
       },
       selves,
       arena: { leftBellX, rightBellX, wallInnerX },
+      climbLeft: this.activeArena.botClimb?.left,
+      climbRight: this.activeArena.botClimb?.right,
     };
   }
 
@@ -296,12 +302,14 @@ export class MatchRoom extends Room {
       const src = this.sources.get(s);
       if (!src) continue;
       const self = worldView.selves[s];
+      const attackingClimb =
+        teamForPlayerSlot(s) === 0 ? worldView.climbRight : worldView.climbLeft;
       const view: BotWorldView = {
         tick: worldView.tick,
         ball: worldView.ball,
         // Provide a neutral self-view if the slot somehow has no render state.
         self: self ?? { x: 0, y: 0, facing: 1, grounded: false },
-        arena: worldView.arena,
+        arena: { ...worldView.arena, climb: attackingClimb },
       };
       const taken = src.take(view);
       inputRow[s] = taken.input ?? EMPTY_INPUT;

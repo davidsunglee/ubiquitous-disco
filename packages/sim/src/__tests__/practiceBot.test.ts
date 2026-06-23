@@ -284,3 +284,112 @@ test("bot defaults to config stats when no stats arg given (backward compat)", (
   });
   expect(frameDefault).toEqual(frameExplicit);
 });
+
+// ── Phase 2 (FLI-9): bot climb AI ────────────────────────────────────────────
+
+test("bot climbs: jumps toward the first waypoint when the ball is high on the attack side", () => {
+  // Slot 0 = Team 0, attacks right bell (rightBellX = 31). Bot is grounded under
+  // the low step (x=22) with the ball high on the attacking (right) side.
+  const view: BotWorldView = {
+    tick: 0,
+    self: { x: 22, y: 1, facing: 1, grounded: true },
+    ball: { x: 25, y: 6, vx: 0, vy: 0 }, // high, on the attacking (right) side
+    arena: {
+      leftBellX: -31,
+      rightBellX: 31,
+      wallInnerX: 35.5,
+      climb: [
+        { x: 22, surfaceY: 3.0 },
+        { x: 29, surfaceY: 6.0 },
+      ],
+    },
+  };
+  const f = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  expect(f.jumpPressed).toBe(true);
+  expect(Math.sign(f.moveX)).toBe(1);
+});
+
+test("bot climbs: walks toward the first waypoint when not yet under it", () => {
+  // Bot is on the floor far from the low step (x=22) — should walk toward it,
+  // not jump yet (not under the waypoint).
+  const view: BotWorldView = {
+    tick: 0,
+    self: { x: 5, y: 1, facing: 1, grounded: true },
+    ball: { x: 25, y: 6, vx: 0, vy: 0 },
+    arena: {
+      leftBellX: -31,
+      rightBellX: 31,
+      wallInnerX: 35.5,
+      climb: [
+        { x: 22, surfaceY: 3.0 },
+        { x: 29, surfaceY: 6.0 },
+      ],
+    },
+  };
+  const f = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  // Not under the waypoint (|5 - 22| = 17 >> 1.0), so no jump.
+  expect(f.jumpPressed).toBe(false);
+  expect(Math.sign(f.moveX)).toBe(1); // walking right toward x=22
+});
+
+test("bot does NOT climb when the ball is not high (gated off)", () => {
+  // Ball is at ground level — climb gate should stay closed and the bot should
+  // ground-chase instead.
+  const view: BotWorldView = {
+    tick: 0,
+    self: { x: 5, y: 1, facing: 1, grounded: true },
+    ball: { x: 10, y: 1, vx: 0, vy: 0 }, // ground-level ball
+    arena: {
+      leftBellX: -31,
+      rightBellX: 31,
+      wallInnerX: 35.5,
+      climb: [
+        { x: 22, surfaceY: 3.0 },
+        { x: 29, surfaceY: 6.0 },
+      ],
+    },
+  };
+  const f = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  // Climb gated off — bot chases ball, does not jump for the ladder.
+  expect(f.jumpPressed).toBe(false);
+});
+
+test("back-compat: view.arena.climb absent → identical to current ground behaviour", () => {
+  // Ensure omitting the climb field from arena produces the same result as
+  // having no climb field at all (old-style view).
+  const viewWithoutClimb: BotWorldView = {
+    tick: 0,
+    self: { x: 0, y: 1, facing: 1, grounded: true },
+    ball: { x: 4, y: 1, vx: 0, vy: 0 },
+    arena: { leftBellX: -9, rightBellX: 9, wallInnerX: 11.5 },
+  };
+  const viewWithClimbUndefined: BotWorldView = {
+    tick: 0,
+    self: { x: 0, y: 1, facing: 1, grounded: true },
+    ball: { x: 4, y: 1, vx: 0, vy: 0 },
+    arena: { leftBellX: -9, rightBellX: 9, wallInnerX: 11.5, climb: undefined },
+  };
+  const f1 = samplePracticeBotInput(0, viewWithoutClimb, DEFAULT_CONFIG);
+  const f2 = samplePracticeBotInput(0, viewWithClimbUndefined, DEFAULT_CONFIG);
+  expect(f1).toEqual(f2);
+});
+
+test("determinism: same view with climb path always produces identical frame", () => {
+  const view: BotWorldView = {
+    tick: 0,
+    self: { x: 22, y: 1, facing: 1, grounded: true },
+    ball: { x: 25, y: 6, vx: 0, vy: 0 },
+    arena: {
+      leftBellX: -31,
+      rightBellX: 31,
+      wallInnerX: 35.5,
+      climb: [
+        { x: 22, surfaceY: 3.0 },
+        { x: 29, surfaceY: 6.0 },
+      ],
+    },
+  };
+  const f1 = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  const f2 = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  expect(f1).toEqual(f2);
+});

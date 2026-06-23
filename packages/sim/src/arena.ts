@@ -35,6 +35,17 @@ export interface BellDef {
   hitZone: CircleZone; // pure-geometric Bell Ring detection target
 }
 
+/** A platform top the bot stands on while climbing toward a bell. */
+export interface ClimbWaypoint {
+  x: number;
+  surfaceY: number;
+}
+/** Per-side ordered climb paths (floor → … → bell column). */
+export interface ArenaClimb {
+  left: ClimbWaypoint[];
+  right: ClimbWaypoint[];
+}
+
 export interface ArenaDef {
   id: string;
   colliders: ColliderDef[]; // inserted in array order (determinism contract)
@@ -44,6 +55,8 @@ export interface ArenaDef {
   /** @deprecated Use playerSpawns[0] instead. Kept for compatibility. */
   playerSpawn: { x: number; y: number };
   ballSpawn: { x: number; y: number };
+  /** Optional bot climb ladder per side (absent → bot uses ground+jump only). */
+  botClimb?: ArenaClimb;
 }
 
 /** The set of available arena ids. */
@@ -104,6 +117,16 @@ export const FLAT_DOJO: ArenaDef = {
   ],
   playerSpawn: { x: -4, y: 1 }, // deprecated alias for slot 0
   ballSpawn: { x: 0, y: 6 },
+  botClimb: {
+    left: [
+      { x: -22, surfaceY: 3.0 },
+      { x: -29, surfaceY: 6.0 },
+    ],
+    right: [
+      { x: 22, surfaceY: 3.0 },
+      { x: 29, surfaceY: 6.0 },
+    ],
+  },
 };
 
 // Pillared Temple: 84-unit-wide arena with two pairs of interior pillars
@@ -194,6 +217,16 @@ export const TWIN_LEDGE: ArenaDef = {
   ],
   playerSpawn: { x: -4, y: 1 },
   ballSpawn: { x: 0, y: 6 },
+  botClimb: {
+    left: [
+      { x: -16, surfaceY: 3.0 },
+      { x: -34, surfaceY: 4.5 },
+    ],
+    right: [
+      { x: 16, surfaceY: 3.0 },
+      { x: 34, surfaceY: 4.5 },
+    ],
+  },
 };
 
 /** Registry of all available arenas, keyed by ArenaId. */

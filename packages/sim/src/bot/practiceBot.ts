@@ -32,7 +32,13 @@ export interface BotWorldView {
    * Optional for backward compatibility with legacy test fixtures; the server
    * always populates this. Defaults to FLAT_DOJO geometry when absent.
    */
-  arena?: { leftBellX: number; rightBellX: number; wallInnerX: number };
+  arena?: {
+    leftBellX: number;
+    rightBellX: number;
+    wallInnerX: number;
+    /** Ordered ladder toward THIS bot's target bell (absent → no ladder). */
+    climb?: { x: number; surfaceY: number }[];
+  };
 }
 
 /**
@@ -100,6 +106,33 @@ export function samplePracticeBotInput(
   } else {
     // Chase ball horizontally; if ball is exactly at x, default to attacking direction.
     moveX = dxBall !== 0 ? Math.sign(dxBall) : team === 0 ? 1 : -1;
+  }
+
+  // ── Climb mode (gated) ──
+  // Engage the ladder only when there is a vertical reason: the ball is meaningfully
+  // above us AND on the attacking side (past mid toward the target bell), or we are in
+  // the target bell's column with the ball nearby. Otherwise fall through to ground play.
+  const climb = view.arena?.climb;
+  const ballHighAttacking =
+    ball.y - self.y > 2 &&
+    Math.sign(ball.x) === Math.sign(targetBellX) &&
+    Math.abs(ball.x) > Math.abs(targetBellX) * 0.4;
+  if (climb && climb.length > 0 && ballHighAttacking) {
+    // Next waypoint above our current feet height (self.y is body centre).
+    const feet = self.y - config.player.halfH;
+    const next = climb.find((w) => w.surfaceY > feet + 0.2);
+    if (next) {
+      const towardX = Math.sign(next.x - self.x) || (team === 0 ? 1 : -1);
+      const underWaypoint = Math.abs(self.x - next.x) < 1.0;
+      return {
+        ...EMPTY_INPUT,
+        moveX: towardX,
+        // Jump when grounded and roughly under the next step.
+        jumpHeld: underWaypoint && self.grounded,
+        jumpPressed: underWaypoint && self.grounded,
+      };
+    }
+    // At/above the top waypoint: fall through to strike-toward-bell logic below.
   }
 
   // Strike when the ball is in reach AND the bot is either facing the target Bell

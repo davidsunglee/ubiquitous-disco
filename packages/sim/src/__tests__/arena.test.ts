@@ -164,7 +164,6 @@ function testArenaBellHitZones(arena: ArenaDef): void {
 }
 
 for (const id of ARENA_IDS) {
-  // biome-ignore lint/style/noNonNullAssertion: ARENA_IDS is derived from the ARENAS keys, so ARENAS[id] is always defined
   const arena = ARENAS[id]!;
 
   test(`[${id}] colliders and bells are mirror-symmetric about x=0`, () => {

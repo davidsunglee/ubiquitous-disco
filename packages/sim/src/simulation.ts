@@ -309,7 +309,8 @@ export function createSimulation(opts: {
   const resolveAll = () => {
     resolved = [];
     for (const s of activeSlots) {
-      resolved[s] = resolveCharacter(characterDefs[s]!, config);
+      const def = characterDefs[s] ?? CHARACTERS.sifu;
+      resolved[s] = resolveCharacter(def, config);
     }
   };
   resolveAll();
@@ -739,7 +740,8 @@ export function createSimulation(opts: {
       resolveAll();
       for (const s of activeSlots) {
         const a = actors[s];
-        if (a) a.character = resolved[s]!;
+        const r = resolved[s];
+        if (a && r) a.character = r;
       }
     },
   };

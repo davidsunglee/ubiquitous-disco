@@ -830,3 +830,56 @@ test("RoomReady carries per-slot character ids from the manifest", async () => {
   expect((chars as unknown[])[0]).toBe("panda");
   expect((chars as unknown[])[2]).toBe("vipra");
 });
+
+// ── Phase 2 (FLI-9): bot climb path threading ──────────────────────────────────
+
+test("buildBotWorldView carries climbLeft and climbRight for Flat Dojo", () => {
+  // Flat Dojo has botClimb defined; verify the shared world view includes both sides.
+  const room = makeRoom();
+  room.testConfigureFromManifest(manifest2v2([3])); // slot 3 is bot
+
+  // Access the private method via casting.
+  const wv = (
+    room as unknown as {
+      buildBotWorldView(): {
+        climbLeft?: { x: number; surfaceY: number }[];
+        climbRight?: { x: number; surfaceY: number }[];
+      };
+    }
+  ).buildBotWorldView();
+
+  // Flat Dojo botClimb: left path starts at x=-22, right path starts at x=22.
+  expect(wv.climbLeft).toBeDefined();
+  expect(wv.climbRight).toBeDefined();
+  expect(wv.climbLeft?.[0]?.x).toBe(-22);
+  expect(wv.climbRight?.[0]?.x).toBe(22);
+});
+
+test("tickOnce threads the attacking-side climb into the bot slot view (Flat Dojo)", () => {
+  // Slot 3 is on Team 1 (attacks left), so its climb should be climbLeft.
+  // Slot 0 is on Team 0 (attacks right), so its climb should be climbRight.
+  const room = makeRoom();
+  room.testConfigureFromManifest(manifest2v2([3])); // slot 3 is bot
+
+  // Intercept the view passed to the bot source's take() by wrapping the source.
+  let capturedView: import("@bb/sim").BotWorldView | undefined;
+  const originalSrc = room.inputSources.get(3)!;
+  (
+    room as unknown as {
+      sources: Map<number, import("../slotInputSource").SlotInputSource>;
+    }
+  ).sources.set(3, {
+    ...originalSrc,
+    take(view: import("@bb/sim").BotWorldView) {
+      capturedView = view;
+      return originalSrc.take(view);
+    },
+  });
+
+  const drive = room as unknown as { tickOnce(): void };
+  drive.tickOnce();
+
+  // Slot 3 = Team 1 → attacks left bell → climb should be climbLeft (x=-22 first).
+  expect(capturedView?.arena?.climb).toBeDefined();
+  expect(capturedView?.arena?.climb?.[0]?.x).toBe(-22);
+});
