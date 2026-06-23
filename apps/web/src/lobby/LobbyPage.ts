@@ -81,9 +81,15 @@ export class LobbyPage {
     const profile = this.profile;
 
     this.root = document.createElement("div");
+    // max-height:100vh + overflow-y:auto make the lobby scroll *internally*: the
+    // overlay's #lobby-container is position:fixed (viewport-height), so once the
+    // content (slots + stat table + host controls) exceeds the viewport, the
+    // Start button would otherwise overflow below the fold with no way to scroll
+    // to it. box-sizing keeps the 32px padding inside the 100vh budget.
     this.root.style.cssText =
       "display:flex;flex-direction:column;align-items:center;" +
-      "min-height:100vh;background:#1a1a1a;color:#eee;font-family:monospace;padding:32px 16px;gap:24px;" +
+      "min-height:100vh;max-height:100vh;overflow-y:auto;box-sizing:border-box;" +
+      "background:#1a1a1a;color:#eee;font-family:monospace;padding:32px 16px;gap:24px;" +
       "pointer-events:auto;";
 
     // Title + code display
