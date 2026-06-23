@@ -42,6 +42,7 @@ import {
   SimulatedTransport,
 } from "../net/SimulatedTransport";
 import { attemptLandscapeLock } from "../orientation";
+import { overtimeBellRing } from "../render/bellHitZone";
 import {
   bellSubjectFromWorld,
   GroupCamera,
@@ -1319,11 +1320,28 @@ export class GameScene extends Phaser.Scene {
    * brighter for a moment via bellFlash.
    */
   private drawBells(): void {
-    for (const bell of this.activeArena.bells) {
+    // Overtime Pressure Ramp: during Golden Goal the sim grows each Bell's
+    // scoring radius. Draw a pulsing ring at the effective radius (in arena
+    // order, matching getBellHitRadii) so the visible hit-zone tracks scoring.
+    const phase = this.sim.getMatchState().phase;
+    const hitRadii = this.sim.getBellHitRadii();
+    for (let i = 0; i < this.activeArena.bells.length; i++) {
+      const bell = this.activeArena.bells[i];
+      if (!bell) continue;
       const art = bell.art;
       const flash = this.bellFlash[bell.id];
       const base = bell.id === "left" ? 0x3aa0c0 : 0xc06a3a;
       const color = flash > 0 ? 0xffffff : base;
+      const overtime = overtimeBellRing(phase, hitRadii[i] ?? 0, this.simTick);
+      if (overtime) {
+        this.gfx
+          .lineStyle(2, 0xff5a5a, overtime.alpha)
+          .strokeCircle(
+            toScreenX(bell.hitZone.x),
+            toScreenY(bell.hitZone.y),
+            overtime.radius * PX_PER_UNIT,
+          );
+      }
       this.gfx
         .fillStyle(color, 1)
         .fillRect(
