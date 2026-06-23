@@ -88,6 +88,7 @@ export function stepSpecial(
           ny * config.combat.strikePlayerImpulse * 0.5 +
             config.combat.strikePlayerImpulse * 0.5,
         );
+        target.lastHitBy = slot; // Phase 7: striker attribution (event-only, not hashed)
         target.stagger += config.combat.staggerPerHit;
         target.staggerDecayDelay = config.combat.staggerGraceTicks;
         if (target.stagger >= config.combat.staggerThreshold) {
@@ -164,6 +165,7 @@ export function stepSpecial(
           target.vy,
           Math.abs(ny) * impulse * 0.4 + impulse * 0.3,
         );
+        target.lastHitBy = slot; // Phase 7: striker attribution (event-only, not hashed)
         target.stagger += config.combat.staggerPerHit;
         target.staggerDecayDelay = config.combat.staggerGraceTicks;
         if (target.stagger >= config.combat.staggerThreshold) {
@@ -207,6 +209,7 @@ export function stepSpecial(
         // in the blink direction and within 1.5 vertically.
         if (dx * actor.facing < 0 || Math.abs(dx) > halfDist + 1) continue;
         if (Math.abs(dy) > 1.5) continue;
+        target.lastHitBy = slot; // Phase 7: striker attribution (event-only, not hashed)
         target.stagger += config.combat.staggerPerHit;
         target.staggerDecayDelay = config.combat.staggerGraceTicks;
         if (target.stagger >= config.combat.staggerThreshold) {
@@ -300,6 +303,7 @@ export function stepSpecial(
           target.vy,
           Math.abs(ny) * impulse * 0.5 + impulse * 0.3,
         );
+        target.lastHitBy = slot; // Phase 7: striker attribution (event-only, not hashed)
         target.stagger += config.combat.staggerPerHit;
         target.staggerDecayDelay = config.combat.staggerGraceTicks;
         if (target.stagger >= config.combat.staggerThreshold) {

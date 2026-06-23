@@ -3,6 +3,7 @@ import {
   DEFAULT_RECONNECT_CONFIG,
   type MatchClosed,
   type MatchManifest,
+  type MatchSummary,
   type PlayerInput,
   type PlayerSlotId,
   uint8ArrayToBase64,
@@ -129,6 +130,23 @@ export class MatchRoom extends Room {
     PlayerSlotId,
     { launchId: string; joinToken: string }
   >();
+
+  /**
+   * Phase 7 (FLI-9): balance telemetry counters, drained from SimEvents each
+   * tick. Aggregated outside the deterministic sim core — no hash impact.
+   */
+  private tele = {
+    bellRings: 0,
+    knockdowns: 0,
+    /** FF knockdowns: attributed via the knockdown event's striker slot (bySlot). */
+    friendlyFireKnockdowns: 0,
+    /** Tick at which the first "playing" phase began (set when phase→playing). */
+    startTick: 0,
+    /** Tick at which matchEnd was observed. */
+    endTick: 0,
+    /** Number of disconnect events observed (slot reservations). */
+    disconnects: 0,
+  };
 
   /**
    * onCreate runs before any onJoin. The sim + input sources are NOT built here
@@ -318,6 +336,32 @@ export class MatchRoom extends Room {
     this.sim.step(inputRow);
     this.serverTick += 1;
 
+    // Phase 7 (FLI-9): drain SimEvents and aggregate balance telemetry.
+    // The server did not drain events before this phase — only the client did.
+    for (const ev of this.sim.drainEvents()) {
+      if (ev.type === "bellRing") {
+        this.tele.bellRings += 1;
+      } else if (ev.type === "knockdown") {
+        this.tele.knockdowns += 1;
+        // Friendly-fire attribution (Phase 7, §7.2 escalation): the knockdown event
+        // carries the striker slot (`bySlot`, -1 if unattributed). A knockdown is
+        // friendly fire when the striker and target are on the same team. Event-only
+        // attribution — no hashed-state change.
+        if (
+          ev.bySlot >= 0 &&
+          teamForPlayerSlot(ev.bySlot as PlayerSlotId) ===
+            teamForPlayerSlot(ev.slot as PlayerSlotId)
+        ) {
+          this.tele.friendlyFireKnockdowns += 1;
+        }
+      } else if (ev.type === "matchPhase" && ev.phase === "playing") {
+        this.tele.startTick = this.serverTick;
+      } else if (ev.type === "matchEnd") {
+        this.tele.endTick = this.serverTick;
+        this.emitMatchSummary(ev.winner, ev.scores);
+      }
+    }
+
     if (this.serverTick % SNAPSHOT_EVERY === 0) {
       const auth = toAuthoritativeState(this.sim);
 
@@ -416,6 +460,61 @@ export class MatchRoom extends Room {
     // First-time join — record the launch options for potential future reclaim.
     this.slotLaunchOptions.set(claimedSlot, { launchId, joinToken });
     this.seatAndAnnounce(client, claimedSlot);
+  }
+
+  /**
+   * Phase 7 (FLI-9): build and emit the structured MatchSummary.
+   *
+   * Called once per match when the server drains a "matchEnd" SimEvent.
+   * Writes a structured log (console.info JSON) and broadcasts to all clients.
+   *
+   * Network-quality fields (RTT, jitter) are unavailable server-side without
+   * per-client round-trip sampling; they are left as 0 here. Clients that have
+   * live RTT data (from periodic `room.ping()` sampling) can supplement their
+   * local display with actual RTT values.
+   */
+  private emitMatchSummary(winner: number | "tie", scores: number[]): void {
+    const mf = this.manifest;
+    if (!mf) return; // no manifest → not a launched match
+
+    const botSlotIds = mf.slots
+      .filter((s) => s.kind === "bot")
+      .map((s) => s.slotId);
+    const mode = mf.settings.mode;
+
+    const summary: MatchSummary = {
+      type: "MatchSummary",
+      launchId: mf.launchId,
+      arenaId: mf.settings.arenaId,
+      mode,
+      durationTicks:
+        this.tele.endTick > 0
+          ? this.tele.endTick - this.tele.startTick
+          : this.serverTick,
+      scores: [...scores],
+      winner,
+      slots: mf.slots.map((s) => ({
+        slotId: s.slotId,
+        characterId: s.characterId,
+        isBot: s.kind === "bot",
+      })),
+      bellRings: this.tele.bellRings,
+      knockdowns: this.tele.knockdowns,
+      friendlyFireKnockdowns: this.tele.friendlyFireKnockdowns,
+      botSlots: botSlotIds,
+      net: {
+        rttMs: 0,
+        jitterMs: 0,
+        reconciliationCorrections: 0,
+        disconnects: this.tele.disconnects,
+      },
+    };
+
+    // Structured server-side log (queryable by ops/balance tooling).
+    console.info(JSON.stringify(summary));
+
+    // Broadcast to all connected clients so they can render the overlay.
+    this.broadcast("MatchSummary", summary);
   }
 
   /** Build the per-slot character id array (indexed by PlayerSlotId) from the manifest. */
@@ -530,6 +629,9 @@ export class MatchRoom extends Room {
    *   On expiry, fail-closes the room with `reconnect-expired`.
    */
   private reserveSlot(slot: PlayerSlotId): void {
+    // Phase 7: count human disconnects for the match summary net block.
+    this.tele.disconnects += 1;
+
     // Save the original human source and replace with empty source.
     const originalSource = this.sources.get(slot);
     if (originalSource) {

@@ -1,4 +1,4 @@
-import type { MatchLaunch } from "@bb/protocol";
+import type { MatchLaunch, MatchSummary } from "@bb/protocol";
 import {
   type ArenaDef,
   CHARACTERS,
@@ -56,6 +56,7 @@ import {
 } from "../render/worldToScreen";
 import { ConnectionOverlay } from "./ConnectionOverlay";
 import { type HudBridge, hudBridge } from "./HudScene";
+import { renderMatchSummaryDOM } from "./matchSummaryOverlay";
 import { OrientationOverlay } from "./OrientationOverlay";
 import {
   type FailClosedReason,
@@ -212,6 +213,23 @@ export class GameScene extends Phaser.Scene {
   private matchSummaryEl!: HTMLElement;
   /** Default-route "Play Online →" link (hotseat only); hidden once a match starts. */
   private playOnlineEl: HTMLElement | null = null;
+
+  /**
+   * Phase 7 (FLI-9): hotseat balance telemetry counters.
+   * Incremented from drained SimEvents during hotseat play; used to build a
+   * client-side MatchSummary when the match ends (no server summary for hotseat).
+   */
+  private hotseatTele = {
+    bellRings: 0,
+    knockdowns: 0,
+  };
+
+  /**
+   * Phase 7 (FLI-9): true once renderMatchSummaryOverlay() has populated the
+   * match-summary element with structured fields. Prevents updateMatchHud from
+   * overwriting the structured content with the plain text fallback.
+   */
+  private matchSummaryRendered = false;
 
   constructor() {
     super("GameScene");
@@ -474,19 +492,25 @@ export class GameScene extends Phaser.Scene {
     }
     if (m.phase === "complete") {
       this.matchSummaryEl.style.display = "block";
-      let winnerText: string;
-      if (m.winner === -1) {
-        winnerText = "DRAW";
-      } else if (this.netLoop !== null) {
-        // Networked: compare winner (Team index) against this client's team.
-        const myTeam = teamForPlayerSlot(this.netClient.slot as PlayerSlotId);
-        winnerText = m.winner === myTeam ? "YOU WIN" : "YOU LOSE";
-      } else {
-        winnerText = `P${m.winner + 1} WINS`;
+      // Phase 7: if renderMatchSummaryOverlay() already populated structured
+      // content (from a MatchSummary server message or hotseat summary), leave
+      // it intact. Only fall back to the plain text when no summary has been set.
+      if (!this.matchSummaryRendered) {
+        let winnerText: string;
+        if (m.winner === -1) {
+          winnerText = "DRAW";
+        } else if (this.netLoop !== null) {
+          // Networked: compare winner (Team index) against this client's team.
+          const myTeam = teamForPlayerSlot(this.netClient.slot as PlayerSlotId);
+          winnerText = m.winner === myTeam ? "YOU WIN" : "YOU LOSE";
+        } else {
+          winnerText = `P${m.winner + 1} WINS`;
+        }
+        this.matchSummaryEl.textContent = `${winnerText} — Press Jump to Rematch`;
       }
-      this.matchSummaryEl.textContent = `${winnerText} — Press Jump to Rematch`;
     } else {
       this.matchSummaryEl.style.display = "none";
+      this.matchSummaryRendered = false;
     }
   }
 
@@ -787,6 +811,13 @@ export class GameScene extends Phaser.Scene {
     this.netLoop.start();
     console.info(`[net] NetLoop started (slot ${slot})`);
 
+    // Phase 7 (FLI-9): wire MatchSummary handler — server broadcasts once per
+    // match when it observes matchEnd. Renders the structured overlay.
+    this.netClient.onMessage("MatchSummary", (msg) => {
+      const summary = msg as MatchSummary;
+      this.renderMatchSummaryOverlay(summary);
+    });
+
     // Phase 5/6: fail-closed — wired exactly once per NetClient instance. The
     // launch path may already have wired this same instance (in
     // startLaunchedMatch); wireFailClosed() de-dupes so both fire-once chains
@@ -1062,13 +1093,18 @@ export class GameScene extends Phaser.Scene {
       this.cur = this.sim.getRenderState();
       // Drain sim events each tick and surface Bell Ring feedback.
       for (const event of this.sim.drainEvents()) {
-        if (event.type === "bellRing") this.onBellRing(event.bell);
-        else if (event.type === "matchPhase") this.onMatchPhase(event.phase);
+        if (event.type === "bellRing") {
+          this.hotseatTele.bellRings += 1;
+          this.onBellRing(event.bell);
+        } else if (event.type === "matchPhase") this.onMatchPhase(event.phase);
         else if (event.type === "matchEnd")
           this.onMatchEnd(event.winner, event.scores);
         else if (event.type === "playerHit")
           this.onPlayerHit(event.slot, event.knockdown);
-        else if (event.type === "knockdown") this.onKnockdown(event.slot);
+        else if (event.type === "knockdown") {
+          this.hotseatTele.knockdowns += 1;
+          this.onKnockdown(event.slot);
+        }
       }
       this.accumulator -= this.FIXED_STEP;
 
@@ -1154,6 +1190,40 @@ export class GameScene extends Phaser.Scene {
   private onMatchEnd(winner: number | "tie", scores: number[]): void {
     const label = winner === "tie" ? "TIE" : `P${(winner as number) + 1} WINS`;
     console.info(`[match] END — ${label}  ${scores.join("-")}`);
+    // Phase 7 (FLI-9): build a hotseat MatchSummary from local counters.
+    // Network fields are absent/zero (hotseat has no server connection).
+    const matchState = this.sim.getMatchState();
+    const activeSlots = Object.keys(this.sim.getRenderState().players).map(
+      (k) => Number(k) as import("@bb/sim").PlayerSlotId,
+    );
+    const hotseatSummary: MatchSummary = {
+      type: "MatchSummary",
+      launchId: "hotseat",
+      arenaId: this.activeArena.id,
+      mode: activeSlots.length > 2 ? "2v2" : "1v1",
+      durationTicks: matchState.timer !== undefined ? matchState.timer : 0,
+      scores: [...scores],
+      winner,
+      slots: activeSlots.map((slotId) => ({
+        slotId,
+        characterId: "sifu" as import("@bb/sim").CharacterId,
+        isBot: false,
+      })),
+      bellRings: this.hotseatTele.bellRings,
+      knockdowns: this.hotseatTele.knockdowns,
+      friendlyFireKnockdowns: 0,
+      botSlots: [],
+      net: {
+        rttMs: 0,
+        jitterMs: 0,
+        reconciliationCorrections: 0,
+        disconnects: 0,
+      },
+    };
+    this.renderMatchSummaryOverlay(hotseatSummary);
+    // Reset counters for the next round/rematch.
+    this.hotseatTele.bellRings = 0;
+    this.hotseatTele.knockdowns = 0;
   }
 
   private onKnockdown(slot: number): void {
@@ -1164,6 +1234,28 @@ export class GameScene extends Phaser.Scene {
   private onPlayerHit(slot: number, knockdown: boolean): void {
     this.hitFlash[slot] = 1; // full intensity, decays in tickBellFeedback
     console.info(`[combat] P${slot + 1} hit${knockdown ? " (KNOCKDOWN)" : ""}`);
+  }
+
+  /**
+   * Phase 7 (FLI-9): populate the match-summary overlay with structured
+   * balance telemetry fields. Called on matchEnd (hotseat: built locally;
+   * networked: populated from the server's MatchSummary broadcast).
+   *
+   * Each field is rendered as a child element with a `data-testid="match-summary-*"`
+   * attribute so automated and e2e tests can assert on individual fields.
+   */
+  private renderMatchSummaryOverlay(summary: MatchSummary): void {
+    const el = this.matchSummaryEl;
+    el.style.display = "block";
+    this.matchSummaryRendered = true;
+
+    renderMatchSummaryDOM(el, summary, {
+      networked: this.netLoop !== null,
+      localSlot:
+        this.netLoop !== null
+          ? (this.netClient.slot as import("@bb/sim").PlayerSlotId)
+          : undefined,
+    });
   }
 
   /** Decay the banner alpha and per-Bell flash intensity over real time. */

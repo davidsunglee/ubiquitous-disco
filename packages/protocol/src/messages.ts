@@ -130,6 +130,64 @@ export interface Telemetry {
   ackLag: number;
 }
 
+// ── Balance telemetry (Phase 7 — FLI-9) ─────────────────────────────────────
+
+/**
+ * Server → Client: structured match summary emitted once per match, when the
+ * server observes the sim's `matchEnd` event. Also written as a server-side
+ * structured log for balance analytics. No sim state — aggregated outside the
+ * deterministic core so the golden hash is unaffected.
+ */
+export interface MatchSummary {
+  type: "MatchSummary";
+  /** The launchId from the match manifest (or "hotseat" for local play). */
+  launchId: string;
+  /** Arena identifier (e.g. "flat-dojo"). */
+  arenaId: string;
+  /** Match mode: 1v1 or 2v2. */
+  mode: "1v1" | "2v2";
+  /** Total ticks elapsed from match start to matchEnd. */
+  durationTicks: number;
+  /** Per-team scores at match end (indexed by team: [team0score, team1score]). */
+  scores: number[];
+  /** Winning team index (0 or 1), or "tie" for a draw. */
+  winner: number | "tie";
+  /** Per-slot breakdown (ordered by slotId). */
+  slots: {
+    slotId: import("@bb/sim").PlayerSlotId;
+    characterId: import("@bb/sim").CharacterId;
+    isBot: boolean;
+  }[];
+  /** Total bell rings scored in the match. */
+  bellRings: number;
+  /** Total player knockdowns (across all slots). */
+  knockdowns: number;
+  /**
+   * Friendly-fire knockdowns (a striker knocking down a teammate). Attributed
+   * via the `knockdown` SimEvent's striker slot (`bySlot`): counted when the
+   * striker and target are on the same team. Event-only attribution — no
+   * hashed sim state is involved.
+   */
+  friendlyFireKnockdowns: number;
+  /** Slot ids that are bots in this match. */
+  botSlots: import("@bb/sim").PlayerSlotId[];
+  /**
+   * Network-quality fields (absent/zero for hotseat and server-reconstructed
+   * summaries where RTT is not available).
+   */
+  net: {
+    rttMs: number;
+    jitterMs: number;
+    reconciliationCorrections: number;
+    disconnects: number;
+  };
+}
+
+export const serializeMatchSummary = (m: MatchSummary): string =>
+  JSON.stringify(m);
+export const deserializeMatchSummary = (s: string): MatchSummary =>
+  JSON.parse(s) as MatchSummary;
+
 // grows in later phases
 export type ServerMessage =
   | RoomReady
@@ -137,7 +195,8 @@ export type ServerMessage =
   | InputAck
   | WorldSnapshot
   | MatchClosed
-  | Telemetry;
+  | Telemetry
+  | MatchSummary;
 export type ClientMessage = PlayerInput;
 
 // ── (De)serializers ───────────────────────────────────────────────────────────
@@ -168,3 +227,5 @@ export const deserializeMatchClosed = (s: string): MatchClosed =>
 export const serializeTelemetry = (m: Telemetry): string => JSON.stringify(m);
 export const deserializeTelemetry = (s: string): Telemetry =>
   JSON.parse(s) as Telemetry;
+
+// MatchSummary serializers are co-located with the type above (§7.1).

@@ -17,12 +17,15 @@
 import {
   base64ToUint8Array,
   type ClaimResponse,
+  deserializeMatchSummary,
   type MatchManifest,
   type MatchManifestSlot,
+  type MatchSummary,
   type PlayerSlotId,
+  serializeMatchSummary,
   uint8ArrayToBase64,
 } from "@bb/protocol";
-import { EMPTY_INPUT, type InputFrame, initSim } from "@bb/sim";
+import { DEFAULT_CONFIG, EMPTY_INPUT, type InputFrame, initSim } from "@bb/sim";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { InputBuffer } from "../inputBuffer";
 import { MatchRoom } from "../MatchRoom";
@@ -882,4 +885,243 @@ test("tickOnce threads the attacking-side climb into the bot slot view (Flat Doj
   // Slot 3 = Team 1 → attacks left bell → climb should be climbLeft (x=-22 first).
   expect(capturedView?.arena?.climb).toBeDefined();
   expect(capturedView?.arena?.climb?.[0]?.x).toBe(-22);
+});
+
+// ── Phase 7 (FLI-9): balance telemetry MatchSummary ──────────────────────────
+
+test("MatchSummary protocol round-trip: serialize then deserialize is identity", () => {
+  const summary: MatchSummary = {
+    type: "MatchSummary",
+    launchId: "L-test",
+    arenaId: "flat-dojo",
+    mode: "1v1",
+    durationTicks: 1000,
+    scores: [3, 1],
+    winner: 0,
+    slots: [
+      { slotId: 0, characterId: "panda", isBot: false },
+      { slotId: 2, characterId: "vipra", isBot: true },
+    ],
+    bellRings: 4,
+    knockdowns: 7,
+    friendlyFireKnockdowns: 0,
+    botSlots: [2],
+    net: {
+      rttMs: 42,
+      jitterMs: 5,
+      reconciliationCorrections: 3,
+      disconnects: 0,
+    },
+  };
+
+  const json = serializeMatchSummary(summary);
+  const restored = deserializeMatchSummary(json);
+
+  expect(restored.type).toBe("MatchSummary");
+  expect(restored.launchId).toBe("L-test");
+  expect(restored.arenaId).toBe("flat-dojo");
+  expect(restored.mode).toBe("1v1");
+  expect(restored.scores).toEqual([3, 1]);
+  expect(restored.winner).toBe(0);
+  expect(restored.bellRings).toBe(4);
+  expect(restored.knockdowns).toBe(7);
+  expect(restored.friendlyFireKnockdowns).toBe(0);
+  expect(restored.botSlots).toEqual([2]);
+  expect(restored.net.rttMs).toBe(42);
+  expect(restored.slots).toHaveLength(2);
+  expect(restored.slots[0]?.characterId).toBe("panda");
+  expect(restored.slots[1]?.characterId).toBe("vipra");
+  expect(restored.slots[1]?.isBot).toBe(true);
+});
+
+/**
+ * Helper: push a jumpPressed frame into the human slot's InputBuffer so that
+ * the server's tickOnce() sees a jump on the next step — transitioning the sim
+ * from preRound to playing.
+ */
+function pushJumpToBuffer(
+  room: ReturnType<typeof makeRoom>,
+  slot: PlayerSlotId,
+): void {
+  const buf = room.inputBuffers.get(slot);
+  if (buf) {
+    buf.push([
+      { seq: 1, input: { ...EMPTY_INPUT, jumpPressed: true, jumpHeld: true } },
+    ]);
+  }
+}
+
+test("server drains events each tick (not just the client)", () => {
+  // Prior to Phase 7, only the client drained SimEvents. Verify that after
+  // configuring a short match and ticking to completion, the server broadcasts
+  // a MatchSummary (which requires events to have been drained).
+  const room = makeRoom();
+  // 1v1 manifest, match length = 5 ticks (timer expires quickly).
+  const mf: MatchManifest = {
+    launchId: "L-drain",
+    slots: [
+      { slotId: 0, kind: "human", playerId: "p0", characterId: "sifu" },
+      { slotId: 2, kind: "bot", characterId: "sifu" },
+    ] as MatchManifestSlot[],
+    settings: { mode: "1v1", matchLengthTicks: 5, arenaId: "flat-dojo" },
+  };
+  room.testConfigureFromManifest(mf);
+
+  // Disable goldenGoal so the match ends at regulation (timer=0 → complete even
+  // on a tie). Also disable scoring pause/reset delays so the match finishes fast.
+  room.simulation.updateConfig({
+    match: {
+      ...DEFAULT_CONFIG.match,
+      lengthTicks: 5,
+      goldenGoal: false,
+      scoringPauseTicks: 0,
+      resetTicks: 0,
+    },
+  });
+
+  const drive = room as unknown as { tickOnce(): void };
+
+  // Push a jump frame so tickOnce transitions preRound → playing on the first tick.
+  pushJumpToBuffer(room, 0);
+
+  // Tick repeatedly until the match is complete (timer expires after ≤ 10 ticks).
+  for (let i = 0; i < 20; i++) {
+    drive.tickOnce();
+    if (room.simulation.getMatchState().phase === "complete") break;
+  }
+
+  // Verify the MatchSummary was broadcast.
+  const summaryMsgs = room.broadcastMessages.filter(
+    (m) => m.type === "MatchSummary",
+  );
+  expect(summaryMsgs.length).toBeGreaterThanOrEqual(1);
+});
+
+test("MatchSummary contains all required fields at matchEnd", () => {
+  const room = makeRoom();
+  // 1v1 manifest with a panda bot and vipra human; short match.
+  const mf: MatchManifest = {
+    launchId: "L-summary",
+    slots: [
+      { slotId: 0, kind: "human", playerId: "p0", characterId: "vipra" },
+      { slotId: 2, kind: "bot", characterId: "panda" },
+    ] as MatchManifestSlot[],
+    settings: { mode: "1v1", matchLengthTicks: 5, arenaId: "flat-dojo" },
+  };
+  room.testConfigureFromManifest(mf);
+
+  // Disable goldenGoal so a tied timer → complete immediately.
+  room.simulation.updateConfig({
+    match: {
+      ...DEFAULT_CONFIG.match,
+      lengthTicks: 5,
+      goldenGoal: false,
+      scoringPauseTicks: 0,
+      resetTicks: 0,
+    },
+  });
+
+  const drive = room as unknown as { tickOnce(): void };
+
+  // Push a jump frame into the human slot's buffer → tickOnce transitions preRound → playing.
+  pushJumpToBuffer(room, 0);
+
+  // Run until complete.
+  for (let i = 0; i < 30; i++) {
+    drive.tickOnce();
+    if (room.simulation.getMatchState().phase === "complete") break;
+  }
+
+  const summaryMsgs = room.broadcastMessages.filter(
+    (m) => m.type === "MatchSummary",
+  );
+  expect(summaryMsgs.length).toBeGreaterThanOrEqual(1);
+
+  const payload = summaryMsgs[0]?.payload as MatchSummary;
+  // Required fields.
+  expect(payload.type).toBe("MatchSummary");
+  expect(payload.launchId).toBe("L-summary");
+  expect(payload.arenaId).toBe("flat-dojo");
+  expect(payload.mode).toBe("1v1");
+  expect(payload.scores).toHaveLength(2);
+  expect(["0", "1", "tie"].includes(String(payload.winner))).toBe(true);
+  // Per-slot characterId picks must be present.
+  expect(payload.slots).toHaveLength(2);
+  const slot0 = payload.slots.find((s) => s.slotId === 0);
+  const slot2 = payload.slots.find((s) => s.slotId === 2);
+  expect(slot0?.characterId).toBe("vipra");
+  expect(slot0?.isBot).toBe(false);
+  expect(slot2?.characterId).toBe("panda");
+  expect(slot2?.isBot).toBe(true);
+  // Bot slots list.
+  expect(payload.botSlots).toContain(2);
+  // Duration must be > 0.
+  expect(payload.durationTicks).toBeGreaterThan(0);
+  // Telemetry counters are ≥ 0 (no negative sentinel).
+  expect(payload.bellRings).toBeGreaterThanOrEqual(0);
+  expect(payload.knockdowns).toBeGreaterThanOrEqual(0);
+  expect(payload.friendlyFireKnockdowns).toBe(0);
+  // Net block present.
+  expect(payload.net).toBeDefined();
+  expect(typeof payload.net.rttMs).toBe("number");
+  expect(typeof payload.net.disconnects).toBe("number");
+});
+
+test("the drain counts a same-team knockdown as friendly fire (cross-team is not)", () => {
+  const room = makeRoom();
+  room.testConfigureFromManifest(manifest2v2());
+
+  // Script one tick of knockdown events on the live sim: striker slot 0 knocks
+  // down slot 1 (both Team 0 → friendly fire) and slot 2 (Team 1 → not FF).
+  // teamForPlayerSlot: {0,1}=Team 0, {2,3}=Team 1.
+  const sim = room.simulation as unknown as {
+    drainEvents: () => unknown[];
+  };
+  const realDrain = sim.drainEvents.bind(sim);
+  let scripted: unknown[] | null = [
+    { type: "knockdown", slot: 1, bySlot: 0, tick: 1 }, // same team → FF
+    { type: "knockdown", slot: 2, bySlot: 0, tick: 1 }, // cross team → not FF
+  ];
+  sim.drainEvents = () => {
+    if (scripted) {
+      const s = scripted;
+      scripted = null;
+      return s;
+    }
+    return realDrain();
+  };
+
+  (room as unknown as { tickOnce(): void }).tickOnce();
+
+  const tele = (
+    room as unknown as {
+      tele: { knockdowns: number; friendlyFireKnockdowns: number };
+    }
+  ).tele;
+  expect(tele.knockdowns).toBe(2);
+  expect(tele.friendlyFireKnockdowns).toBe(1);
+});
+
+test("MatchSummary disconnect count increments when a slot is reserved (onLeave)", async () => {
+  const room = makeRoom();
+  const mf = manifest2v2();
+  const tokenSlot: Record<string, PlayerSlotId> = { t0: 0, t1: 1 };
+  claimImpl = async (_l, token) => ({
+    ok: true,
+    playerSlotId: tokenSlot[token] as PlayerSlotId,
+    manifest: mf,
+  });
+
+  const clientA = makeClient("session-a");
+  const clientB = makeClient("session-b");
+  (room as unknown as { clients: unknown[] }).clients.push(clientA, clientB);
+  await room.onJoin(clientA as never, { launchId: "L1", joinToken: "t0" });
+  await room.onJoin(clientB as never, { launchId: "L1", joinToken: "t1" });
+
+  // A leaves — slot 0 is reserved.
+  room.onLeave(clientA as never);
+
+  // The disconnect should have been counted.
+  const tele = (room as unknown as { tele: { disconnects: number } }).tele;
+  expect(tele.disconnects).toBe(1);
 });

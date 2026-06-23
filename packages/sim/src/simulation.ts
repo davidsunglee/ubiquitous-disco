@@ -99,7 +99,8 @@ export type SimEvent =
     }
   | {
       type: "knockdown";
-      slot: number;
+      slot: number; // the target slot that was knocked down
+      bySlot: number; // Phase 7: striker slot that dealt it (-1 if unattributed)
       tick: number;
     }
   | {
@@ -426,7 +427,12 @@ export function createSimulation(opts: {
             });
           }
           if (newlyDown) {
-            events.push({ type: "knockdown", slot: t, tick });
+            events.push({
+              type: "knockdown",
+              slot: t,
+              bySlot: a.lastHitBy,
+              tick,
+            });
           }
         }
 

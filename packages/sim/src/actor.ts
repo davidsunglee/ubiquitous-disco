@@ -38,6 +38,12 @@ export interface Actor {
   specialCooldown: number;
   /** Phase 4 (FLI-9): remaining mid-air jumps (initialized from character.airJumps; reset on landing). */
   airJumpsRemaining: number;
+  /**
+   * Phase 7 (FLI-9): slot of the actor who most recently struck this target this
+   * tick (-1 = none). Used ONLY for event attribution (e.g. friendly-fire
+   * knockdowns) — transient, NOT serialized and NOT folded into hashState().
+   */
+  lastHitBy: number;
   /** Resolved per-actor character (stats/special/airJumps). Static config — NOT hashed. */
   character: ResolvedCharacter;
 }
@@ -62,6 +68,7 @@ export function createActor(
     staggerDecayDelay: 0,
     specialCooldown: 0,
     airJumpsRemaining: character.airJumps,
+    lastHitBy: -1,
     character,
   };
 }
@@ -94,6 +101,9 @@ export function serializeActor(actor: Actor): Uint8Array {
   // Phase 4 (FLI-9) appends 4 bytes:
   //   airJumpsRemaining i32 (4) = 4
   // Total: 64 bytes.
+  // NOTE: Phase 7's lastHitBy is intentionally NOT serialized — it is transient
+  // event-attribution metadata, excluded from hashState() (so the golden hash is
+  // unchanged).
   const buf = new ArrayBuffer(
     8 + 8 + 1 + 1 + 4 + 8 + 4 + 1 + 8 + 4 + 4 + 1 + 4 + 4 + 4,
   );

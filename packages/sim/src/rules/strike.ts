@@ -131,6 +131,9 @@ export function stepStrike(
       ny * c.strikePlayerImpulse * 0.5 + c.strikePlayerImpulse * 0.4,
     );
 
+    // Attribute this hit to the striker (Phase 7: event-only, not hashed) so the
+    // sim's knockdown/playerHit events can report who dealt the blow.
+    target.lastHitBy = slot;
     target.stagger += c.staggerPerHit;
     // Refresh the grace window so stagger holds (doesn't decay) between the hits
     // of an exchange — this makes Knockdown depend on hit COUNT, not hit timing.
