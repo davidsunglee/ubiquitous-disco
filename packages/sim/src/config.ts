@@ -1,4 +1,4 @@
-export const SIM_CONFIG_VERSION = 8;
+export const SIM_CONFIG_VERSION = 9; // FLI-11: new default feel + appended strike-window actor fields
 
 export interface MovementConfig {
   moveSpeed: number; // world units / second of horizontal movement
@@ -97,13 +97,13 @@ export const DEFAULT_CONFIG: SimConfig = {
   },
   strike: {
     minChargeTicks: 1,
-    maxChargeTicks: 24,
-    minImpulse: 6,
-    maxImpulse: 16,
-    upwardBias: 0.5,
-    reach: 2,
-    headerUpwardBias: 1.2,
-    spikeMultiplier: 1.6,
+    maxChargeTicks: 10,
+    minImpulse: 7.5,
+    maxImpulse: 14,
+    upwardBias: 0.75,
+    reach: 2.55,
+    headerUpwardBias: 1.9,
+    spikeMultiplier: 1.35,
   },
   match: {
     lengthTicks: 5400, // 3:00 @ 30 Hz

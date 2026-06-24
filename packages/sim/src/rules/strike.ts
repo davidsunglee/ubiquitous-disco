@@ -10,12 +10,13 @@ import { applyHit } from "./hit";
  * While `strikeHeld`, the actor's `charge` accumulator increases by one tick,
  * clamped to [minChargeTicks, maxChargeTicks]. On `strikeReleased` the charge is
  * normalized to [0, 1], used to lerp the impulse magnitude between min and max,
- * and applied to the ball along a direction shaped by `moveX/moveY` plus a
- * configurable upward bias (the "pop"). A bare tap (press+release in one tick,
- * never charged) still lands as a min-charge Strike.
+ * and the impulse vector is snapshotted onto the actor for the 3-tick active
+ * window. The window resolves against the ball on the release tick AND up to 2
+ * grace ticks — one ball-hit per swing. A bare tap still connects immediately if
+ * the ball is in reach on the release tick (window tick 1).
  *
- * The Strike only connects when the ball is within `strike.reach` of the player;
- * either way the charge resets afterward.
+ * FLI-11: replaced the single-tick ball contact with a 3-tick active window so
+ * aerial contacts are forgiving. Player-vs-player knockback stays release-tick-only.
  */
 /**
  * Strike: tap / hold-to-charge / directional shaping / upward pop.
@@ -52,20 +53,12 @@ export function stepStrike(
     actor.charge = Math.min(base, s.maxChargeTicks);
   }
 
-  if (!input.strikeReleased) return;
+  // ── On release: snapshot the impulse vector + open the 3-tick window ──
+  if (input.strikeReleased) {
+    // A tap that never registered held charge still counts as a min-charge Strike.
+    const chargeTicks = Math.max(actor.charge, s.minChargeTicks);
+    actor.charge = 0;
 
-  // A tap that never registered held charge still counts as a min-charge Strike.
-  const chargeTicks = Math.max(actor.charge, s.minChargeTicks);
-  actor.charge = 0;
-
-  const player = world.playerPos(slot);
-
-  // ── Ball connection ──
-  const ball = world.ballPos();
-  const bdx = ball.x - player.x;
-  const bdy = ball.y - player.y;
-  const reach = actor.character.stats.strikeReach;
-  if (Math.hypot(bdx, bdy) <= reach) {
     // Charge fraction in [0, 1] across the configured charge window.
     const span = Math.max(1, s.maxChargeTicks - s.minChargeTicks);
     const t = Math.min(1, Math.max(0, (chargeTicks - s.minChargeTicks) / span));
@@ -91,49 +84,64 @@ export function stepStrike(
     }
 
     const len = Math.hypot(shapeX, shapeY) || 1;
-    const nx = shapeX / len;
-    const ny = shapeY / len;
+    actor.strikeImpulseX = (shapeX / len) * magnitude;
+    actor.strikeImpulseY = (shapeY / len) * magnitude;
+    actor.strikeActiveTicks = 3;
 
-    world.applyBallImpulse(nx * magnitude, ny * magnitude);
+    // ── Player-vs-player knockback: RELEASE-TICK ONLY (unchanged) ──
+    // INVARIANT (2v2 Friendly Fire): the target set is every non-self slot with
+    // NO team filter — teammate Strikes connect at full strength by design.
+    // Do not add same-team exclusion here (see match.test.ts FF coverage).
+    // Resolved from start-of-tick positions (world.playerPos reads the current
+    // kinematic position before this tick's move is applied). Both strikes in a
+    // mutual trade are resolved independently, so both land.
+    const player = world.playerPos(slot);
+    const c = config.combat;
+    const reach = actor.character.stats.strikeReach;
+    for (let ti = 0; ti < actors.length; ti++) {
+      if (ti === slot) continue;
+      const target = actors[ti];
+      if (!target) continue;
+      // Anti-stunlock: a target is immune both while DOWN and during the recovery
+      // i-frames that follow. Together this is a continuous "can't be re-knocked-down"
+      // window (knockdown duration + invuln). Without the knockdown guard, mashing
+      // hits on a grounded target keeps resetting knockdownTicks so they never reach
+      // the stand-up edge that grants i-frames — a permanent stunlock.
+      if (target.knockdownTicks > 0) continue; // already down: immune
+      if (target.invulnTicks > 0) continue; // recovery i-frames: immune
+      const tp = world.playerPos(ti);
+      const dx = tp.x - player.x;
+      const dy = tp.y - player.y;
+      if (Math.hypot(dx, dy) > reach + c.playerHitRadius) continue; // out of reach
+
+      // Knockback away from the striker (fall back to facing direction on exact overlap).
+      const klen = Math.hypot(dx, dy) || 1;
+      const nx = dx / klen;
+      const ny = dy / klen;
+      target.vx = nx * c.strikePlayerImpulse;
+      // Give the target some upward momentum + horizontal knockback.
+      target.vy = Math.max(
+        target.vy,
+        ny * c.strikePlayerImpulse * 0.5 + c.strikePlayerImpulse * 0.4,
+      );
+
+      // Shared hit tail: attribution + stagger + maybe knockdown. The knockdown
+      // event is emitted by simulation.ts (it owns the event queue + tick).
+      applyHit(target, slot, config);
+    }
   }
 
-  // ── Player connection: deterministic geometry overlap vs each OTHER slot ──
-  // INVARIANT (2v2 Friendly Fire): the target set is every non-self slot with
-  // NO team filter — teammate Strikes connect at full strength by design.
-  // Do not add same-team exclusion here (see match.test.ts FF coverage).
-  // Resolved from start-of-tick positions (world.playerPos reads the current
-  // kinematic position before this tick's move is applied). Both strikes in a
-  // mutual trade are resolved independently, so both land.
-  const c = config.combat;
-  for (let t = 0; t < actors.length; t++) {
-    if (t === slot) continue;
-    const target = actors[t];
-    if (!target) continue;
-    // Anti-stunlock: a target is immune both while DOWN and during the recovery
-    // i-frames that follow. Together this is a continuous "can't be re-knocked-down"
-    // window (knockdown duration + invuln). Without the knockdown guard, mashing
-    // hits on a grounded target keeps resetting knockdownTicks so they never reach
-    // the stand-up edge that grants i-frames — a permanent stunlock.
-    if (target.knockdownTicks > 0) continue; // already down: immune
-    if (target.invulnTicks > 0) continue; // recovery i-frames: immune
-    const tp = world.playerPos(t);
-    const dx = tp.x - player.x;
-    const dy = tp.y - player.y;
-    if (Math.hypot(dx, dy) > reach + c.playerHitRadius) continue; // out of reach
-
-    // Knockback away from the striker (fall back to facing direction on exact overlap).
-    const len = Math.hypot(dx, dy) || 1;
-    const nx = dx / len;
-    const ny = dy / len;
-    target.vx = nx * c.strikePlayerImpulse;
-    // Give the target some upward momentum + horizontal knockback.
-    target.vy = Math.max(
-      target.vy,
-      ny * c.strikePlayerImpulse * 0.5 + c.strikePlayerImpulse * 0.4,
-    );
-
-    // Shared hit tail: attribution + stagger + maybe knockdown. The knockdown
-    // event is emitted by simulation.ts (it owns the event queue + tick).
-    applyHit(target, slot, config);
+  // ── Active-window ball resolution: runs every tick the window is live ──
+  // (release tick is window tick 1; up to 2 grace ticks follow). One hit/swing.
+  if (actor.strikeActiveTicks > 0) {
+    const player = world.playerPos(slot);
+    const ball = world.ballPos();
+    const reach = actor.character.stats.strikeReach;
+    if (Math.hypot(ball.x - player.x, ball.y - player.y) <= reach) {
+      world.applyBallImpulse(actor.strikeImpulseX, actor.strikeImpulseY);
+      actor.strikeActiveTicks = 0; // one ball-hit per swing
+    } else {
+      actor.strikeActiveTicks -= 1;
+    }
   }
 }

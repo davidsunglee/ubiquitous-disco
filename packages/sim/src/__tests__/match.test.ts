@@ -55,54 +55,86 @@ function newSim(matchOverride: Record<string, unknown> = {}) {
  *
  * For the default 1v1 [0, 2] template, valid driver slots are 0 and 2.
  */
+/**
+ * Walk the driver player into position and strike the ball toward `bellSide`.
+ *
+ * FLI-11 Phase 3 ceiling-bounce approach:
+ * With upwardBias=0.75, moveY=1 (grounded), minImpulse=7.5 and mass=0.35 the
+ * strike gives velocity ≈(10.6, 18.6) u/s when ball.vy≈0 (no speed-cap clamp).
+ * Ball hits COMPACT_DOJO ceiling at x≈5.1 and bounces back to Bell height (y≈5)
+ * near x≈8.5–9.6 — inside the Bell zone (center x=±9, radius 0.8+0.38=1.18).
+ *
+ * Timing constraint: ball must be at y < 1.5 AND |vy| < 2.5 (near bounce peak).
+ * If ball has large upward vy the combined velocity exceeds maxSpeed=22 and the
+ * direction changes, sending the ball to the wrong x. The 5th bounce peak occurs
+ * around tick 229 (y≈0.96, vy≈0) — reliably within the check window.
+ *
+ * Does NOT drain events — the consuming test handles event / phase detection.
+ */
 function ringBell(
   sim: ReturnType<typeof newSim>,
   bellSide: "left" | "right",
   driverSlot: 0 | 2,
 ): void {
-  // Let everyone settle (sparse: both active slots get EMPTY_INPUT).
   const emptyRow = (): InputFrame[] => {
     const r: InputFrame[] = [];
     r[0] = EMPTY_INPUT;
     r[2] = EMPTY_INPUT;
     return r;
   };
-  // FLI-11 Phase 2: ball gravityScale lowered to 0.32 — ball falls much more
-  // slowly from y=5 in COMPACT_DOJO. Use 90 settle ticks so the ball has time
-  // to descend and bounce to reachable height before the driver walks in.
-  for (let i = 0; i < 90; i++) sim.step(emptyRow());
-  // Walk driver toward ball.
-  const moveX = driverSlot === 0 ? 1 : -1;
-  for (let i = 0; i < 80; i++) {
-    const row = emptyRow();
-    row[driverSlot] = frame({ moveX });
-    sim.step(row);
-    const s = sim.getRenderState();
-    const p = s.players[driverSlot];
-    if (!p) break;
-    const d = Math.hypot(s.ball.x - p.x, s.ball.y - p.y);
-    if (d <= DEFAULT_CONFIG.strike.reach * 0.9) break;
-  }
-  // Charge and release strike toward the target bell.
+
   const dirX = bellSide === "right" ? 1 : -1;
-  const strikeInput = (held: boolean, released = false): InputFrame =>
-    frame({
-      moveX: dirX,
-      moveY: 1,
-      strikeHeld: held,
-      strikePressed: held && !released,
-      strikeReleased: released,
-    });
+  const reach = DEFAULT_CONFIG.strike.reach;
 
-  const rowWithStrike = (held: boolean, released = false): InputFrame[] => {
-    const r = emptyRow();
-    r[driverSlot] = strikeInput(held, released);
-    return r;
-  };
+  // Walk driver 12 ticks toward ball to get within reach without overshooting.
+  for (let i = 0; i < 12; i++) {
+    const row = emptyRow();
+    row[driverSlot] = frame({ moveX: dirX });
+    sim.step(row);
+  }
 
-  sim.step(rowWithStrike(true));
-  for (let i = 0; i < 8; i++) sim.step(rowWithStrike(true));
-  sim.step(rowWithStrike(false, true));
+  // Idle until ball reaches a low-bounce-peak state: y < 1.5 AND |vy| < 2.5.
+  // At that moment the impulse won't be clamped and the trajectory is reliable.
+  for (let wait = 0; wait < 600; wait++) {
+    const s = sim.getRenderState();
+    const v = sim.getBallVel();
+
+    if (s.ball.y < 1.5 && Math.abs(v.vy) < 2.5 && Math.abs(s.ball.x) < 5) {
+      // Walk driver into reach if they drifted away.
+      const p = s.players[driverSlot];
+      if (p && Math.hypot(s.ball.x - p.x, s.ball.y - p.y) > reach) {
+        for (let j = 0; j < 8; j++) {
+          const row = emptyRow();
+          row[driverSlot] = frame({ moveX: dirX });
+          sim.step(row);
+          const s2 = sim.getRenderState();
+          const p2 = s2.players[driverSlot];
+          if (!p2) break;
+          if (Math.hypot(s2.ball.x - p2.x, s2.ball.y - p2.y) <= reach) break;
+        }
+      }
+      // Strike: ceiling-bounce arc into Bell zone.
+      const pressRow = emptyRow();
+      pressRow[driverSlot] = frame({
+        moveX: dirX,
+        moveY: 1,
+        strikeHeld: true,
+        strikePressed: true,
+      });
+      sim.step(pressRow);
+
+      const releaseRow = emptyRow();
+      releaseRow[driverSlot] = frame({
+        moveX: dirX,
+        moveY: 1,
+        strikeReleased: true,
+      });
+      sim.step(releaseRow);
+      return;
+    }
+
+    sim.step(emptyRow());
+  }
 }
 
 /** Empty input row for the default 1v1 [0, 2] template. */
@@ -369,38 +401,48 @@ test("2v2: ringing the right Bell credits Team 0 (opposing Team 1 defends)", () 
   sim.step(startRow);
   expect(sim.getMatchState().phase).toBe("playing");
 
-  // FLI-11 Phase 2: ball gravityScale 0.32 — floaty ball falls slowly from y=5;
-  // use 90 settle ticks so the ball descends to reachable height.
-  for (let i = 0; i < 90; i++) sim.step(emptyRow2v2());
-
-  // Walk slot 0 toward ball and release a charged right-ward Strike.
-  const moveX = 1;
-  for (let i = 0; i < 80; i++) {
+  // FLI-11 Phase 3: ceiling-bounce approach (same as ringBell helper).
+  // Walk slot 0 twelve ticks to get within reach of ball without overshooting.
+  for (let i = 0; i < 12; i++) {
     const r = emptyRow2v2();
-    r[0] = frame({ moveX });
+    r[0] = frame({ moveX: 1 });
     sim.step(r);
+  }
+  // Idle until ball reaches a low-bounce-peak: y < 1.5 AND |vy| < 2.5.
+  const reach2v2 = DEFAULT_CONFIG.strike.reach;
+  for (let wait = 0; wait < 600; wait++) {
     const s = sim.getRenderState();
-    const p = s.players[0];
-    if (!p) break;
-    if (
-      Math.hypot(s.ball.x - p.x, s.ball.y - p.y) <=
-      DEFAULT_CONFIG.strike.reach * 0.9
-    )
+    const v = sim.getBallVel();
+    if (s.ball.y < 1.5 && Math.abs(v.vy) < 2.5 && Math.abs(s.ball.x) < 5) {
+      // Ensure slot 0 is in reach of ball.
+      const p = s.players[0];
+      if (p && Math.hypot(s.ball.x - p.x, s.ball.y - p.y) > reach2v2) {
+        for (let j = 0; j < 8; j++) {
+          const r = emptyRow2v2();
+          r[0] = frame({ moveX: 1 });
+          sim.step(r);
+          const s2 = sim.getRenderState();
+          const p2 = s2.players[0];
+          if (!p2) break;
+          if (Math.hypot(s2.ball.x - p2.x, s2.ball.y - p2.y) <= reach2v2) break;
+        }
+      }
+      // Strike: ceiling-bounce arc into Bell zone.
+      const pressRow = emptyRow2v2();
+      pressRow[0] = frame({
+        moveX: 1,
+        moveY: 1,
+        strikeHeld: true,
+        strikePressed: true,
+      });
+      sim.step(pressRow);
+      const releaseRow = emptyRow2v2();
+      releaseRow[0] = frame({ moveX: 1, moveY: 1, strikeReleased: true });
+      sim.step(releaseRow);
       break;
+    }
+    sim.step(emptyRow2v2());
   }
-  for (let i = 0; i < 9; i++) {
-    const r = emptyRow2v2();
-    r[0] = frame({
-      moveX: 1,
-      moveY: 1,
-      strikeHeld: true,
-      strikePressed: i === 0,
-    });
-    sim.step(r);
-  }
-  const releaseRow = emptyRow2v2();
-  releaseRow[0] = frame({ moveX: 1, moveY: 1, strikeReleased: true });
-  sim.step(releaseRow);
 
   // Wait for bellRing event.
   let scoringTeam = -1;

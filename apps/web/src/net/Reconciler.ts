@@ -145,6 +145,9 @@ export class Reconciler {
               staggerDecayDelay: p.staggerDecayDelay,
               specialCooldown: p.specialCooldown,
               airJumpsRemaining: p.airJumpsRemaining,
+              strikeActiveTicks: p.strikeActiveTicks,
+              strikeImpulseX: p.strikeImpulseX,
+              strikeImpulseY: p.strikeImpulseY,
             }
           : p,
       ),

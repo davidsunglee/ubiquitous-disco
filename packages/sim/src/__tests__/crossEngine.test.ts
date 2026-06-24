@@ -25,8 +25,8 @@ import {
 // Golden hash computed on V8 (Node 22 / Vitest 4.1.9, @dimforge/rapier2d-deterministic-compat 0.19.x).
 // If Bun/JSC diverges, this fails under `bun --bun vitest run`.
 // To regenerate: run this test with EXPECTED_HASH = "PLACEHOLDER" and read the console output.
-// FLI-11 Phase 2: ball feel values changed (radius 0.38, restitution 0.82, gravityScale 0.32, mass 0.35, maxSpeed 22, playerPush 6).
-const EXPECTED_HASH = "178cbfc5";
+// FLI-11 Phase 3: strike-window actor fields appended (actor 64→84 bytes); strike feel retuned; SIM_CONFIG_VERSION 8→9.
+const EXPECTED_HASH = "e70041fe";
 
 beforeAll(async () => {
   await initSim();

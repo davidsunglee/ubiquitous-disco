@@ -190,6 +190,9 @@ describe("applyAuthoritativeState", () => {
     a0.staggerDecayDelay = 5;
     a0.ticksSinceGrounded = 9;
     a0.airDashAvailable = false;
+    a0.strikeActiveTicks = 2;
+    a0.strikeImpulseX = 3.25;
+    a0.strikeImpulseY = -1.5;
     snap.rngState = 0x1234_abcd;
     serverSim.restoreSnapshot(snap);
 
@@ -211,6 +214,9 @@ describe("applyAuthoritativeState", () => {
     expect(clientActor.staggerDecayDelay).toBe(serverActor.staggerDecayDelay);
     expect(clientActor.ticksSinceGrounded).toBe(serverActor.ticksSinceGrounded);
     expect(clientActor.airDashAvailable).toBe(serverActor.airDashAvailable);
+    expect(clientActor.strikeActiveTicks).toBe(serverActor.strikeActiveTicks);
+    expect(clientActor.strikeImpulseX).toBe(serverActor.strikeImpulseX);
+    expect(clientActor.strikeImpulseY).toBe(serverActor.strikeImpulseY);
     expect(clientSnap.rngState).toBe(snap.rngState);
   });
 
