@@ -200,6 +200,8 @@ export class MatchRoom extends Room {
     arena: { leftBellX: number; rightBellX: number; wallInnerX: number };
     climbLeft?: ClimbWaypoint[];
     climbRight?: ClimbWaypoint[];
+    bayRampBaseLeft?: number;
+    bayRampBaseRight?: number;
   } {
     const render = this.sim.getRenderState();
     const ballVel = this.sim.getBallVel();
@@ -228,7 +230,8 @@ export class MatchRoom extends Room {
     const wallInnerX =
       this.activeArena.bounds?.rightWallInnerX ??
       this.activeArena.colliders.reduce(
-        (max, c) => (c.x > 0 ? Math.max(max, c.x - c.halfW) : max),
+        (max, c) =>
+          c.kind === "box" && c.x > 0 ? Math.max(max, c.x - c.halfW) : max,
         0,
       );
 
@@ -244,6 +247,8 @@ export class MatchRoom extends Room {
       arena: { leftBellX, rightBellX, wallInnerX },
       climbLeft: this.activeArena.botClimb?.left,
       climbRight: this.activeArena.botClimb?.right,
+      bayRampBaseLeft: this.activeArena.bayRampBaseX?.left,
+      bayRampBaseRight: this.activeArena.bayRampBaseX?.right,
     };
   }
 
@@ -324,12 +329,20 @@ export class MatchRoom extends Room {
       const self = worldView.selves[s];
       const attackingClimb =
         teamForPlayerSlot(s) === 0 ? worldView.climbRight : worldView.climbLeft;
+      const ownBayBaseX =
+        teamForPlayerSlot(s) === 0
+          ? worldView.bayRampBaseLeft
+          : worldView.bayRampBaseRight;
       const view: BotWorldView = {
         tick: worldView.tick,
         ball: worldView.ball,
         // Provide a neutral self-view if the slot somehow has no render state.
         self: self ?? { x: 0, y: 0, facing: 1, grounded: false },
-        arena: { ...worldView.arena, climb: attackingClimb },
+        arena: {
+          ...worldView.arena,
+          climb: attackingClimb,
+          bayRampBaseX: ownBayBaseX,
+        },
       };
       const taken = src.take(view);
       inputRow[s] = taken.input ?? EMPTY_INPUT;

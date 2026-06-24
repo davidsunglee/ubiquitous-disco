@@ -887,7 +887,7 @@ test("buildBotWorldView derives wallInnerX from the active arena's right wall (a
   // most of the arena and refuses to advance toward its target Bell.
   const cases: { arenaId: string; expected: number }[] = [
     { arenaId: "flat-dojo", expected: 35.5 },
-    { arenaId: "pillared-temple", expected: 41.5 },
+    { arenaId: "temple-ascent", expected: 45.5 }, // bounds reshaped in Phase 3
     { arenaId: "twin-ledge", expected: 47.5 },
   ];
 
@@ -1152,6 +1152,104 @@ test("the drain counts a same-team knockdown as friendly fire (cross-team is not
   ).tele;
   expect(tele.knockdowns).toBe(2);
   expect(tele.friendlyFireKnockdowns).toBe(1);
+});
+
+// ── Phase 4 (FLI-12): bayRampBaseX threading ──────────────────────────────────
+
+test("buildBotWorldView carries bayRampBaseLeft and bayRampBaseRight for Temple Ascent", () => {
+  const room = makeRoom();
+  const mf = manifest2v2([3]);
+  mf.settings.arenaId = "temple-ascent";
+  room.testConfigureFromManifest(mf);
+
+  const wv = (
+    room as unknown as {
+      buildBotWorldView(): {
+        bayRampBaseLeft?: number;
+        bayRampBaseRight?: number;
+      };
+    }
+  ).buildBotWorldView();
+
+  // Temple Ascent: bayRampBaseX = { left: -30, right: 30 }
+  expect(wv.bayRampBaseLeft).toBe(-30);
+  expect(wv.bayRampBaseRight).toBe(30);
+});
+
+test("tickOnce threads own-side bayRampBaseX into the bot slot view (Temple Ascent)", () => {
+  // Temple Ascent has bayRampBaseX. Slot 3 is on Team 1 (own side = right bay),
+  // so its view should receive bayRampBaseX = 30 (the right ramp base x).
+  const room = makeRoom();
+  const mf = manifest2v2([3]);
+  mf.settings.arenaId = "temple-ascent";
+  room.testConfigureFromManifest(mf);
+
+  let capturedView: import("@bb/sim").BotWorldView | undefined;
+  const originalSrc = room.inputSources.get(3)!;
+  (
+    room as unknown as {
+      sources: Map<number, import("../slotInputSource").SlotInputSource>;
+    }
+  ).sources.set(3, {
+    ...originalSrc,
+    take(view: import("@bb/sim").BotWorldView) {
+      capturedView = view;
+      return originalSrc.take(view);
+    },
+  });
+
+  const drive = room as unknown as { tickOnce(): void };
+  drive.tickOnce();
+
+  // Slot 3 = Team 1 → own bay is right → bayRampBaseX should be 30.
+  expect(capturedView?.arena?.bayRampBaseX).toBe(30);
+});
+
+test("tickOnce threads own-side bayRampBaseX for Team-0 slot (Temple Ascent)", () => {
+  // Slot 0 is on Team 0 (own side = left bay), so its view should receive bayRampBaseX = -30.
+  const room = makeRoom();
+  const mf = manifest2v2([0]);
+  mf.settings.arenaId = "temple-ascent";
+  room.testConfigureFromManifest(mf);
+
+  let capturedView: import("@bb/sim").BotWorldView | undefined;
+  const originalSrc = room.inputSources.get(0)!;
+  (
+    room as unknown as {
+      sources: Map<number, import("../slotInputSource").SlotInputSource>;
+    }
+  ).sources.set(0, {
+    ...originalSrc,
+    take(view: import("@bb/sim").BotWorldView) {
+      capturedView = view;
+      return originalSrc.take(view);
+    },
+  });
+
+  const drive = room as unknown as { tickOnce(): void };
+  drive.tickOnce();
+
+  // Slot 0 = Team 0 → own bay is left → bayRampBaseX should be -30.
+  expect(capturedView?.arena?.bayRampBaseX).toBe(-30);
+});
+
+test("buildBotWorldView: bayRampBaseLeft/Right absent for arenas without bayRampBaseX (Flat Dojo)", () => {
+  const room = makeRoom();
+  const mf = manifest2v2([3]);
+  mf.settings.arenaId = "flat-dojo";
+  room.testConfigureFromManifest(mf);
+
+  const wv = (
+    room as unknown as {
+      buildBotWorldView(): {
+        bayRampBaseLeft?: number;
+        bayRampBaseRight?: number;
+      };
+    }
+  ).buildBotWorldView();
+
+  expect(wv.bayRampBaseLeft).toBeUndefined();
+  expect(wv.bayRampBaseRight).toBeUndefined();
 });
 
 test("MatchSummary disconnect count increments when a slot is reserved (onLeave)", async () => {

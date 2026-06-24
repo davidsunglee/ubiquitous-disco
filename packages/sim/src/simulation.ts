@@ -152,7 +152,13 @@ export interface DebugCircle {
   radius: number;
 }
 
-export type DebugCollider = DebugBox | DebugCircle;
+export interface DebugRamp {
+  kind: "ramp";
+  label: string;
+  points: [number, number][];
+}
+
+export type DebugCollider = DebugBox | DebugCircle | DebugRamp;
 
 // ── Opaque snapshot type for save/restore ────────────────────────────────────
 
@@ -730,18 +736,22 @@ export function createSimulation(opts: {
     getDebugColliders(): DebugCollider[] {
       const shapes: DebugCollider[] = [];
 
-      // Arena collider boxes.
+      // Arena collider shapes (box or ramp).
       for (let i = 0; i < arena.colliders.length; i++) {
         const c = arena.colliders[i];
         if (!c) continue;
-        shapes.push({
-          kind: "box",
-          label: `arena[${i}]`,
-          x: c.x,
-          y: c.y,
-          halfW: c.halfW,
-          halfH: c.halfH,
-        });
+        if (c.kind === "ramp") {
+          shapes.push({ kind: "ramp", label: `arena[${i}]`, points: c.points });
+        } else {
+          shapes.push({
+            kind: "box",
+            label: `arena[${i}]`,
+            x: c.x,
+            y: c.y,
+            halfW: c.halfW,
+            halfH: c.halfH,
+          });
+        }
       }
 
       // Player bounding boxes at current world positions (active slots only).

@@ -411,3 +411,87 @@ test("determinism: same view with climb path always produces identical frame", (
   const f2 = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
   expect(f1).toEqual(f2);
 });
+
+// ── Phase 4 (FLI-12): bay ramp-and-pocket defense ────────────────────────────
+// Temple Ascent has bayRampBaseX: { left: -30, right: 30 }. The server threads
+// the own-side base x per slot. These tests exercise the pure bot function with
+// an explicit bayRampBaseX to verify the bay-defense branch.
+
+const TEMPLE_ARENA = {
+  leftBellX: -43,
+  rightBellX: 43,
+  wallInnerX: 45.5,
+  bayRampBaseX: -30, // Team 0 own side (left bay)
+} as const;
+
+test("Team-0 bot with ball deep in left bay moves toward own Bell (ascends ramp)", () => {
+  // Ball is past the ramp base x (|ball.x| >= |bayRampBaseX|) on the own side.
+  // The bot should move toward ownBellX (-43) rather than a flat stop.
+  const view: BotWorldView = {
+    tick: 5,
+    self: { x: -20, y: 1, facing: -1, grounded: true },
+    ball: { x: -35, y: 2, vx: 0, vy: 0 }, // |−35| ≥ |−30| → in left bay
+    arena: TEMPLE_ARENA,
+  };
+  const frame = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  // Bot should ascend toward own Bell (moveX < 0 = toward left)
+  expect(Math.sign(frame.moveX)).toBe(-1);
+});
+
+test("Team-0 bot with high ball in own bay jumps to contest under the eave", () => {
+  // Ball is in the own bay AND above HIGH_BALL_JUMP_DY from self — bot should jump.
+  const HIGH_BALL_JUMP_DY = 0.8;
+  const view: BotWorldView = {
+    tick: 5,
+    self: { x: -35, y: 4, facing: -1, grounded: true },
+    ball: { x: -40, y: 4 + HIGH_BALL_JUMP_DY + 0.5, vx: 0, vy: 0 }, // high in bay
+    arena: TEMPLE_ARENA,
+  };
+  // Verify ball is in bay: |ball.x|=40 >= |bayRampBaseX|=30, sign matches team-0 (left)
+  const dist = Math.hypot(view.ball.x - view.self.x, view.ball.y - view.self.y);
+  expect(dist).toBeGreaterThan(DEFAULT_CONFIG.strike.reach); // out of reach so no strike
+  const frame = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  expect(frame.jumpPressed).toBe(true);
+});
+
+test("Team-0 bot in own bay strikes toward center even when ball is dangerous", () => {
+  // In-bay + in reach: a strike away from the Bell is the defensive clear.
+  // Even though ballDangerous is true (ball moving fast left, already left of center),
+  // the bot should still strike because inOwnBay overrides ballDangerous.
+  const view: BotWorldView = {
+    tick: 5,
+    // Bot is near the bell, ball is in reach
+    self: { x: -41, y: 4, facing: 1, grounded: true }, // facing right (toward center)
+    ball: { x: -40, y: 4, vx: -5, vy: 0 }, // dangerous: moving left, left of center
+    arena: TEMPLE_ARENA,
+  };
+  // Confirm ball is in reach
+  const dist = Math.hypot(view.ball.x - view.self.x, view.ball.y - view.self.y);
+  expect(dist).toBeLessThanOrEqual(DEFAULT_CONFIG.strike.reach);
+  const frame = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  expect(frame.strikeHeld).toBe(true);
+});
+
+test("open-center: no bayRampBaseX → behavior unchanged (chase ball normally)", () => {
+  // When arena has no bayRampBaseX (Flat Dojo / Twin Ledge / legacy), the bot
+  // should behave exactly as before: just chase the ball.
+  const viewWithBay: BotWorldView = {
+    tick: 5,
+    self: { x: -5, y: 1, facing: 1, grounded: true },
+    ball: { x: 3, y: 1, vx: 0, vy: 0 },
+    arena: { leftBellX: -9, rightBellX: 9, wallInnerX: 11.5 }, // no bayRampBaseX
+  };
+  const viewNoBay: BotWorldView = {
+    tick: 5,
+    self: { x: -5, y: 1, facing: 1, grounded: true },
+    ball: { x: 3, y: 1, vx: 0, vy: 0 },
+    // explicitly absent
+  };
+  const frameWithBay = samplePracticeBotInput(0, viewWithBay, DEFAULT_CONFIG);
+  const frameNoBay = samplePracticeBotInput(0, viewNoBay, DEFAULT_CONFIG);
+  // Both should chase the ball to the right
+  expect(Math.sign(frameWithBay.moveX)).toBe(1);
+  expect(Math.sign(frameNoBay.moveX)).toBe(1);
+  // Strike behavior also unchanged (ball on right side, facing right = facing target bell)
+  expect(frameWithBay.strikeHeld).toEqual(frameNoBay.strikeHeld);
+});

@@ -38,6 +38,8 @@ export interface BotWorldView {
     wallInnerX: number;
     /** Ordered ladder toward THIS bot's target bell (absent → no ladder). */
     climb?: { x: number; surfaceY: number }[];
+    /** This bot's own-side ramp base x (ball past it ⇒ ball in own bay). */
+    bayRampBaseX?: number;
   };
 }
 
@@ -95,12 +97,24 @@ export function samplePracticeBotInput(
       : ball.vx > 3 && ball.x > 0; // moving right, already right of centre
   const ballDangerous = ballTowardOwnBell;
 
-  // Primary movement: break out of a corner first, then retreat when dangerous,
-  // otherwise chase the ball.
+  // Bay detection: the ball is in the bot's own bay when it has crossed the ramp
+  // base x on the bot's own side. The server threads the own-side base x.
+  const ownSign = team === 0 ? -1 : 1;
+  const bayBaseX = arenaGeom.bayRampBaseX;
+  const inOwnBay =
+    bayBaseX !== undefined &&
+    Math.sign(ball.x) === ownSign &&
+    Math.abs(ball.x) >= Math.abs(bayBaseX);
+
+  // Primary movement: break out of a corner first, then contest in own bay,
+  // then retreat when dangerous, otherwise chase the ball.
   let moveX: number;
   if (cornered) {
     // Stop grinding into the wall; head back toward open play (and the target Bell).
     moveX = awayFromWall;
+  } else if (inOwnBay) {
+    // Ascend the ramp to contest the ball near the own Bell.
+    moveX = Math.sign(ownBellX - self.x) || ownSign;
   } else if (ballDangerous) {
     moveX = Math.sign(ownBellX - self.x);
   } else {
@@ -135,14 +149,17 @@ export function samplePracticeBotInput(
     // At/above the top waypoint: fall through to strike-toward-bell logic below.
   }
 
-  // Strike when the ball is in reach AND the bot is either facing the target Bell
-  // or clearing the ball out of a corner (where moveX already points to open play).
+  // Strike when the ball is in reach AND the bot is either facing the target Bell,
+  // clearing the ball out of a corner, or clearing from the own bay (inOwnBay
+  // overrides ballDangerous — a strike away from the Bell IS the defensive clear).
   const inReach = distBall <= stats.strikeReach;
   const facingTargetBell =
     Math.sign(targetBellX - self.x) ===
     Math.sign(moveX || (team === 0 ? 1 : -1));
   const wantStrike =
-    inReach && (facingTargetBell || cornered) && !ballDangerous;
+    inReach &&
+    (facingTargetBell || cornered || inOwnBay) &&
+    (!ballDangerous || inOwnBay);
 
   // Jump for a high/floaty ball (lower threshold so the bot contests the air).
   const HIGH_BALL_JUMP_DY = 0.8;

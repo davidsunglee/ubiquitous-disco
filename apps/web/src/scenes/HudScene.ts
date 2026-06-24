@@ -561,6 +561,15 @@ export class HudScene extends Phaser.Scene {
   private drawDebugColliders(): void {
     const shapes = hudBridge.getDebugColliders();
     for (const shape of shapes) {
+      if (shape.kind === "ramp") {
+        this.debugGfx.lineStyle(1, 0x888888, 0.7).strokePoints(
+          shape.points.map(
+            ([x, y]) => new Phaser.Math.Vector2(toScreenX(x), toScreenY(y)),
+          ),
+          true, // closePath
+        );
+        continue;
+      }
       const isHitZone = shape.label.endsWith("-hitzone");
       const isBell = shape.label.startsWith("bell-");
       const isPlayer = shape.label === "player";

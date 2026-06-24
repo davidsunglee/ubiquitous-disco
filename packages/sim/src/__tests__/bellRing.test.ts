@@ -6,6 +6,7 @@ import {
   EMPTY_INPUT,
   type InputFrame,
   initSim,
+  TEMPLE_ASCENT,
 } from "../index";
 import {
   advancePressureRamp,
@@ -513,4 +514,18 @@ test("getBellHitRadii reflects grown radius during golden goal (fast config)", (
   for (const r of radii) {
     expect(r).toBeGreaterThan(baseRadius);
   }
+});
+
+// ── Phase 3 (FLI-12): deterministic bell-ring geometry test ─────────────────
+
+test("Temple Ascent right Bell scores a ring when the ball reaches the pocket", () => {
+  const state = createBellRingState(TEMPLE_ASCENT);
+  const bell = TEMPLE_ASCENT.bells.find((b) => b.id === "right")!;
+  const r = DEFAULT_CONFIG.ball.radius;
+  // Ball exactly at the Bell center — should ring.
+  expect(
+    stepBellRing(TEMPLE_ASCENT, bell.hitZone.x, bell.hitZone.y, r, state),
+  ).toHaveLength(1);
+  // Re-armed only after leaving the zone; center field never rings.
+  expect(stepBellRing(TEMPLE_ASCENT, 0, 6, r, state)).toHaveLength(0);
 });

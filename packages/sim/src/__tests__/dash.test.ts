@@ -7,7 +7,7 @@ import {
   FLAT_DOJO,
   type InputFrame,
   initSim,
-  PILLARED_TEMPLE,
+  TEMPLE_ASCENT,
   TWIN_LEDGE,
 } from "../index";
 
@@ -78,6 +78,9 @@ const PHH = DEFAULT_CONFIG.player.halfH;
 function staticPenetration(arena: ArenaDef, px: number, py: number): number {
   let worst = 0;
   for (const c of arena.colliders) {
+    // Ramps are convex-hull shapes with no box halfW/halfH; skip them here.
+    // Ramp solidity is proven by the no-slip-under assertion in ramp.test.ts.
+    if (c.kind !== "box") continue;
     const ox = PHW + c.halfW - Math.abs(px - c.x);
     const oy = PHH + c.halfH - Math.abs(py - c.y);
     if (ox > 1e-4 && oy > 1e-4) worst = Math.max(worst, Math.min(ox, oy));
@@ -130,20 +133,16 @@ test("a downward Tele-Dash is clamped by the floor, not through it", () => {
   expect(worstPenetrationThrough(FLAT_DOJO, lead)).toBeLessThan(SKIN);
 });
 
-test("a sideways Tele-Dash is clamped by a suspended platform's face", () => {
-  // Walk toward the outer pillar in PILLARED_TEMPLE (x=±28, top y=3.0).
-  // From spawn at x=-4, walk right toward the right inner pillar (x=12)
-  // then jump to its height and blink right into the outer pillar face (x=28).
-  // With moveSpeed 7.2 (0.24u/tick), ~68 ticks reach x≈12; jump up and dash right.
+test("an upward Tele-Dash is clamped by the eave underside in TEMPLE_ASCENT", () => {
+  // The old outer pillars (x=±28) are gone. Repoint at the right eave (underside
+  // y=8.7, x≈37-45.5). From spawn at x=-4, walk right onto the ramp (starts at
+  // x=30), run up to the landing (y≈4), then blink straight up into the eave.
+  // With moveSpeed 7.2 (0.24u/tick), ~145 ticks carry the player onto the landing.
   const lead: InputFrame[] = [];
   for (let i = 0; i < 10; i++) lead.push(EMPTY_INPUT);
-  for (let i = 0; i < 55; i++) lead.push(frame({ moveX: 1 }));
-  lead.push(frame({ jumpPressed: true, jumpHeld: true, moveX: 1 }));
-  for (let i = 0; i < 10; i++) lead.push(frame({ jumpHeld: true, moveX: 1 }));
-  lead.push(
-    frame({ moveX: 1, dashPressed: true, dashHeld: true, jumpHeld: true }),
-  );
-  expect(worstPenetrationThrough(PILLARED_TEMPLE, lead)).toBeLessThan(SKIN);
+  for (let i = 0; i < 150; i++) lead.push(frame({ moveX: 1 }));
+  lead.push(frame({ moveY: 1, dashPressed: true, dashHeld: true }));
+  expect(worstPenetrationThrough(TEMPLE_ASCENT, lead)).toBeLessThan(SKIN);
 });
 
 test("an upward Tele-Dash is clamped by a suspended platform's underside", () => {

@@ -9,12 +9,13 @@ export type {
   CircleZone,
   ClimbWaypoint,
   ColliderDef,
+  RampCollider,
 } from "./arena";
 export {
   ARENAS,
   FLAT_DOJO,
-  PILLARED_TEMPLE,
   resolveArena,
+  TEMPLE_ASCENT,
   TWIN_LEDGE,
 } from "./arena";
 export type { BotWorldView } from "./bot/practiceBot";
@@ -74,6 +75,7 @@ export type {
   DebugBox,
   DebugCircle,
   DebugCollider,
+  DebugRamp,
   MatchPhase,
   MatchState,
   RenderState,

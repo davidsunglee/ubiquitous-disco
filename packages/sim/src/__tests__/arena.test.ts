@@ -15,12 +15,13 @@ import {
   type ArenaDef,
   type ArenaId,
   FLAT_DOJO,
-  PILLARED_TEMPLE,
   resolveArena,
+  TEMPLE_ASCENT,
   TWIN_LEDGE,
 } from "../arena";
+import { testArenaMirrorSymmetry } from "./helpers/arenaSymmetry";
 
-const ARENA_IDS: ArenaId[] = ["flat-dojo", "pillared-temple", "twin-ledge"];
+const ARENA_IDS: ArenaId[] = ["flat-dojo", "temple-ascent", "twin-ledge"];
 
 // ── Registry completeness ──────────────────────────────────────────────────────
 
@@ -31,8 +32,10 @@ test("ARENAS registry contains all three ArenaId keys", () => {
   }
 });
 
-test("ARENAS registry has exactly three entries", () => {
-  expect(Object.keys(ARENAS)).toHaveLength(3);
+test("ARENAS exposes the three canonical ids plus the pillared-temple alias", () => {
+  for (const id of ARENA_IDS) expect(ARENAS).toHaveProperty(id);
+  // Alias preserves old replays/manifests instead of falling back to Flat Dojo.
+  expect(resolveArena("pillared-temple")).toBe(TEMPLE_ASCENT);
 });
 
 test("ARENAS keys match the arena def ids", () => {
@@ -41,9 +44,9 @@ test("ARENAS keys match the arena def ids", () => {
   }
 });
 
-test("FLAT_DOJO, PILLARED_TEMPLE, TWIN_LEDGE are exported and match registry", () => {
+test("FLAT_DOJO, TEMPLE_ASCENT, TWIN_LEDGE are exported and match registry", () => {
   expect(ARENAS["flat-dojo"]).toBe(FLAT_DOJO);
-  expect(ARENAS["pillared-temple"]).toBe(PILLARED_TEMPLE);
+  expect(ARENAS["temple-ascent"]).toBe(TEMPLE_ASCENT);
   expect(ARENAS["twin-ledge"]).toBe(TWIN_LEDGE);
 });
 
@@ -51,7 +54,7 @@ test("FLAT_DOJO, PILLARED_TEMPLE, TWIN_LEDGE are exported and match registry", (
 
 test("resolveArena returns the correct arena for known ids", () => {
   expect(resolveArena("flat-dojo")).toBe(FLAT_DOJO);
-  expect(resolveArena("pillared-temple")).toBe(PILLARED_TEMPLE);
+  expect(resolveArena("temple-ascent")).toBe(TEMPLE_ASCENT);
   expect(resolveArena("twin-ledge")).toBe(TWIN_LEDGE);
 });
 
@@ -61,52 +64,6 @@ test("resolveArena falls back to FLAT_DOJO for unknown ids", () => {
 });
 
 // ── Per-arena property tests ───────────────────────────────────────────────────
-
-function testArenaMirrorSymmetry(arena: ArenaDef): void {
-  const name = arena.id;
-
-  // ── Collider mirror symmetry ──
-  // For every collider, there must be a collider with mirrored x (same |x|),
-  // same y, same halfW, same halfH. The collider may mirror itself if x=0.
-  for (const c of arena.colliders) {
-    const mirrorX = -c.x;
-    const hasMirror = arena.colliders.some(
-      (m) =>
-        Math.abs(m.x - mirrorX) < 1e-6 &&
-        Math.abs(m.y - c.y) < 1e-6 &&
-        Math.abs(m.halfW - c.halfW) < 1e-6 &&
-        Math.abs(m.halfH - c.halfH) < 1e-6,
-    );
-    expect(hasMirror, `[${name}] collider at x=${c.x} has no mirror`).toBe(
-      true,
-    );
-  }
-
-  // ── Bell mirror symmetry ──
-  // Left bell x = -rightBellX, same y, same radius, same halfW/halfH.
-  const leftBell = arena.bells.find((b) => b.id === "left");
-  const rightBell = arena.bells.find((b) => b.id === "right");
-  expect(leftBell, `[${name}] missing left bell`).toBeDefined();
-  expect(rightBell, `[${name}] missing right bell`).toBeDefined();
-  if (!leftBell || !rightBell) return;
-
-  expect(
-    Math.abs(leftBell.hitZone.x + rightBell.hitZone.x),
-    `[${name}] bell hitZone x not mirrored`,
-  ).toBeLessThan(1e-6);
-  expect(
-    Math.abs(leftBell.hitZone.y - rightBell.hitZone.y),
-    `[${name}] bell hitZone y not equal`,
-  ).toBeLessThan(1e-6);
-  expect(
-    Math.abs(leftBell.hitZone.radius - rightBell.hitZone.radius),
-    `[${name}] bell hitZone radius not equal`,
-  ).toBeLessThan(1e-6);
-  expect(
-    Math.abs(leftBell.art.x + rightBell.art.x),
-    `[${name}] bell art x not mirrored`,
-  ).toBeLessThan(1e-6);
-}
 
 function testArenaPlayerSpawns(arena: ArenaDef): void {
   expect(
@@ -179,9 +136,12 @@ for (const id of ARENA_IDS) {
   });
 
   test(`[${id}] is 72–96 world units wide (large-arena requirement)`, () => {
-    // The widest collider is the floor; its full width is 2 * halfW. Arenas are
-    // authored large (72–96u) so the adaptive camera engages and play feels big.
-    const width = 2 * Math.max(...arena.colliders.map((c) => c.halfW));
+    // The widest collider is always a box (floor/ceiling). Ramps carry no halfW.
+    // Arenas are authored large (72–96u) so the adaptive camera engages and play feels big.
+    const boxHalfWs = arena.colliders
+      .filter((c) => c.kind === "box")
+      .map((c) => c.halfW);
+    const width = 2 * Math.max(...boxHalfWs);
     expect(width, `[${id}] width must be ≥ 72`).toBeGreaterThanOrEqual(72);
     expect(width, `[${id}] width must be ≤ 96`).toBeLessThanOrEqual(96);
   });
@@ -192,7 +152,10 @@ for (const id of ARENA_IDS) {
 test("FLAT_DOJO is the flat open court: 4 colliders, high ceiling, low bells, no climb", () => {
   const at = (x: number, y: number) =>
     FLAT_DOJO.colliders.find(
-      (c) => Math.abs(c.x - x) < 0.01 && Math.abs(c.y - y) < 0.01,
+      (c) =>
+        c.kind === "box" &&
+        Math.abs(c.x - x) < 0.01 &&
+        Math.abs(c.y - y) < 0.01,
     );
   // Exactly four colliders: floor, two walls, ceiling.
   expect(FLAT_DOJO.colliders).toHaveLength(4);

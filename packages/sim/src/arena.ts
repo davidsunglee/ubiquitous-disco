@@ -5,7 +5,14 @@ export interface BoxCollider {
   halfW: number;
   halfH: number;
 }
-export type ColliderDef = BoxCollider;
+export interface RampCollider {
+  kind: "ramp";
+  /** World-space polygon vertices (absolute units), authored CCW. Built as a
+   *  solid convex hull, so vertex order is collision-irrelevant; order only
+   *  affects the renderer polygon fill. */
+  points: [number, number][];
+}
+export type ColliderDef = BoxCollider | RampCollider;
 
 // A circular Bell Hit-Zone (world units). Kept separate from the visible Bell art
 // so scoring geometry and visuals can diverge (the art may be larger/offset).
@@ -69,10 +76,12 @@ export interface ArenaDef {
   ballSpawn: { x: number; y: number };
   /** Optional bot climb ladder per side (absent → bot uses ground+jump only). */
   botClimb?: ArenaClimb;
+  /** Per-side x where each bay's ramp begins (for bot bay-detection). Optional. */
+  bayRampBaseX?: { left: number; right: number };
 }
 
 /** The set of available arena ids. */
-export type ArenaId = "flat-dojo" | "pillared-temple" | "twin-ledge";
+export type ArenaId = "flat-dojo" | "temple-ascent" | "twin-ledge";
 
 // Flat Dojo (FLI-11): a flat open aerial-volley court. Wide flat floor, two side
 // walls, and a high ceiling (underside ~20) that ricochets the floaty ball back
@@ -118,43 +127,65 @@ export const FLAT_DOJO: ArenaDef = {
   // No botClimb: Flat Dojo is flat; the bot plays the air (Phase 4).
 };
 
-// Pillared Temple: 84-unit-wide arena with two pairs of low interior hurdles
-// creating lane structure. Mirror-symmetric about x=0. Pillars are short
-// jumpable hurdles (tops at 2.0u and 3.0u) staggered ascending toward the bell.
-// Bells are lowered to y=5.5 so a floor jump + air-dash (apex ~3.6 + dash 3.0
-// ≈ 6.6u reach) clears them, but a bare floor single-jump (apex 3.6u) cannot.
-export const PILLARED_TEMPLE: ArenaDef = {
-  id: "pillared-temple",
-  // Side walls at x=±42, halfW 0.5 → inner faces at ∓41.5.
-  bounds: { leftWallInnerX: -41.5, rightWallInnerX: 41.5 },
+// Temple Ascent: ~92u-wide arena with a flat open center lane that ramps up into
+// two mirrored end bays. Each bay has a Bell hanging high under a raised eave
+// behind a mouth lip, sheltering it from top-down drops. Players run up the ramp
+// to land on the elevated platform and contest with Jump/Strike under the eave.
+// Mirror-symmetric about x=0. Authored in world units (X right, Y up).
+export const TEMPLE_ASCENT: ArenaDef = {
+  id: "temple-ascent",
+  // Side walls at x=±46, halfW 0.5 → inner faces at ∓45.5.
+  bounds: { leftWallInnerX: -45.5, rightWallInnerX: 45.5 },
   colliders: [
-    // floor (84 units wide)
-    { kind: "box", x: 0, y: -0.5, halfW: 42, halfH: 0.5 },
-    // left wall: inner face at x = -41.5
-    { kind: "box", x: -42, y: 5, halfW: 0.5, halfH: 6 },
-    // right wall: inner face at x = 41.5
-    { kind: "box", x: 42, y: 5, halfW: 0.5, halfH: 6 },
-    // inner pillar pair: low hurdles flanking centre; top surface y = 2.0
-    { kind: "box", x: -12, y: 1.0, halfW: 0.6, halfH: 1.0 },
-    { kind: "box", x: 12, y: 1.0, halfW: 0.6, halfH: 1.0 },
-    // outer pillar pair: slightly taller hurdles toward the bells; top surface y = 3.0
-    { kind: "box", x: -28, y: 1.5, halfW: 0.6, halfH: 1.5 },
-    { kind: "box", x: 28, y: 1.5, halfW: 0.6, halfH: 1.5 },
-    // ceiling
-    { kind: "box", x: 0, y: 11.5, halfW: 42, halfH: 0.5 },
+    // [0] flat center floor (x -30..+30)
+    { kind: "box", x: 0, y: -0.5, halfW: 30, halfH: 0.5 },
+    // [1] left wall: inner face at x = -45.5, top y17.5
+    { kind: "box", x: -46, y: 8.5, halfW: 0.5, halfH: 9.0 },
+    // [2] right wall: inner face at x = 45.5, top y17.5
+    { kind: "box", x: 46, y: 8.5, halfW: 0.5, halfH: 9.0 },
+    // [3] left slope+landing: ramp rises from x=-30,y=0 to landing at x=-43,y=4
+    {
+      kind: "ramp",
+      points: [
+        [-30, 0],
+        [-45.5, 0],
+        [-45.5, 4],
+        [-43, 4],
+      ],
+    },
+    // [4] right slope+landing (mirror)
+    {
+      kind: "ramp",
+      points: [
+        [30, 0],
+        [45.5, 0],
+        [45.5, 4],
+        [43, 4],
+      ],
+    },
+    // [5] left eave: underside y8.7 (x -37...-45.5)
+    { kind: "box", x: -41.25, y: 9.1, halfW: 4.25, halfH: 0.4 },
+    // [6] right eave (mirror)
+    { kind: "box", x: 41.25, y: 9.1, halfW: 4.25, halfH: 0.4 },
+    // [7] left mouth lip: hangs y7.3..8.7 at the bay mouth
+    { kind: "box", x: -37.3, y: 8.0, halfW: 0.3, halfH: 0.7 },
+    // [8] right mouth lip (mirror)
+    { kind: "box", x: 37.3, y: 8.0, halfW: 0.3, halfH: 0.7 },
+    // [9] ceiling: underside y17.5
+    { kind: "box", x: 0, y: 17.5, halfW: 46, halfH: 0.5 },
   ],
   bells: [
     {
       id: "left",
       defends: "left",
-      art: { kind: "box", x: -36, y: 5.5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: -36, y: 5.5, radius: 0.8 },
+      art: { kind: "box", x: -43, y: 6.3, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: -43, y: 6.3, radius: 1.0 },
     },
     {
       id: "right",
       defends: "right",
-      art: { kind: "box", x: 36, y: 5.5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: 36, y: 5.5, radius: 0.8 },
+      art: { kind: "box", x: 43, y: 6.3, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: 43, y: 6.3, radius: 1.0 },
     },
   ],
   playerSpawns: [
@@ -165,6 +196,8 @@ export const PILLARED_TEMPLE: ArenaDef = {
   ],
   playerSpawn: { x: -4, y: 1 },
   ballSpawn: { x: 0, y: 6 },
+  // botClimb intentionally absent — the ramp is a run-up, not a staged ladder.
+  bayRampBaseX: { left: -30, right: 30 },
 };
 
 // Twin Ledge: 96-unit-wide open floor with stepped symmetric side ledges (a
@@ -224,10 +257,11 @@ export const TWIN_LEDGE: ArenaDef = {
   },
 };
 
-/** Registry of all available arenas, keyed by ArenaId. */
-export const ARENAS: Record<ArenaId, ArenaDef> = {
+/** Registry of all available arenas, keyed by ArenaId (plus back-compat alias). */
+export const ARENAS: Record<string, ArenaDef> = {
   "flat-dojo": FLAT_DOJO,
-  "pillared-temple": PILLARED_TEMPLE,
+  "temple-ascent": TEMPLE_ASCENT,
+  "pillared-temple": TEMPLE_ASCENT, // back-compat alias (old replays/manifests)
   "twin-ledge": TWIN_LEDGE,
 };
 

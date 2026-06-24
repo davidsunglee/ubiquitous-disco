@@ -54,7 +54,7 @@ test("RoomReady round-trips (slot 1, full, 2v2 template)", () => {
     full: true,
     slots: [0, 1, 2, 3],
     characters: ["sifu", "monkey-king", "old-master", "drunken-boxer"],
-    arenaId: "pillared-temple",
+    arenaId: "temple-ascent",
   };
   expect(deserializeRoomReady(serializeRoomReady(m))).toEqual(m);
 });

@@ -69,11 +69,7 @@ const DEFAULT_SETTINGS: LobbySettings = {
 };
 
 /** All available arenas — the lobby arena picker exposes all three. */
-const AVAILABLE_ARENAS = [
-  "flat-dojo",
-  "pillared-temple",
-  "twin-ledge",
-] as const;
+const AVAILABLE_ARENAS = ["flat-dojo", "temple-ascent", "twin-ledge"] as const;
 
 const DEFAULT_CHARACTER: CharacterId = "sifu";
 
