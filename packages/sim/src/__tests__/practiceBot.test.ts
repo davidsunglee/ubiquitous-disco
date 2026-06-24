@@ -363,8 +363,120 @@ test("Team-0 bot in own bay strikes toward center even when ball is dangerous", 
   expect(frame.strikeHeld).toBe(true);
 });
 
+// ── Phase 4 (FLI-13): Dune Basin bay defense & chamber escape ─────────────────
+// Dune Basin has bayRampBaseX: { left: -15, right: 15 } (the basin exit / inner
+// ridge foot), bells at x = ±44, and side walls' inner faces at x = ±47.5. The
+// server threads the own-side base x per slot exactly as for Temple Ascent; these
+// cases exercise the pure bot function with Dune-Basin-scaled geometry to prove
+// the data wires through: defend the own chamber, clear toward center, chase
+// across the basin, and escape the enclosed chamber without grinding the wall.
+
+const DUNE_ARENA = {
+  leftBellX: -44,
+  rightBellX: 44,
+  wallInnerX: 47.5,
+  bayRampBaseX: -15, // Team 0 own side (left chamber bay)
+} as const;
+
+// Same arena, but with the own-side base x the server threads for a Team-1 slot
+// (own bay = right chamber, base x = +15).
+const DUNE_ARENA_RIGHT = {
+  leftBellX: -44,
+  rightBellX: 44,
+  wallInnerX: 47.5,
+  bayRampBaseX: 15, // Team 1 own side (right chamber bay)
+} as const;
+
+test("Dune Basin: Team-0 bot whose left chamber holds the ball moves toward its own Bell", () => {
+  // Ball is past the basin exit (|ball.x| >= |bayRampBaseX|) on the own (left)
+  // side — i.e. in the bot's own chamber. The bot should ascend toward ownBellX
+  // (-44) to contest the defensive pocket rather than holding at center.
+  const view: BotWorldView = {
+    tick: 5,
+    self: { x: -10, y: 1, facing: -1, grounded: true },
+    ball: { x: -40, y: 2, vx: 0, vy: 0 }, // |−40| ≥ |−15| → in own (left) chamber bay
+    arena: DUNE_ARENA,
+  };
+  const frame = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  // Bot heads toward its own Bell on the left (moveX < 0).
+  expect(Math.sign(frame.moveX)).toBe(-1);
+});
+
+test("Dune Basin: Team-0 defender outboard in its own chamber clears the ball toward center", () => {
+  // The defender is wedged outboard of its own Bell (x=-46, between bell x=-44 and
+  // wall inner face x=-47.5), with the ball in reach just inboard of it. The
+  // in-bay strike shapes its impulse from moveX, which points toward the own Bell
+  // — and because the bot is OUTBOARD of the Bell, that direction is toward center
+  // (rightward). inOwnBay overrides ballDangerous so the defensive clear fires even
+  // though the ball is moving fast toward the own Bell.
+  const view: BotWorldView = {
+    tick: 5,
+    self: { x: -46, y: 1, facing: 1, grounded: true },
+    ball: { x: -45, y: 1, vx: -5, vy: 0 }, // dangerous: fast leftward, left of center
+    arena: DUNE_ARENA,
+  };
+  // Confirm the ball is in strike reach.
+  const dist = Math.hypot(view.ball.x - view.self.x, view.ball.y - view.self.y);
+  expect(dist).toBeLessThanOrEqual(DEFAULT_CONFIG.strike.reach);
+  const frame = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  expect(frame.strikeHeld).toBe(true);
+  // Defensive clear: the strike's horizontal shaping points toward center
+  // (rightward, away from the left Bell at x=-44), not deeper into the wall.
+  expect(Math.sign(frame.moveX)).toBe(1);
+});
+
+test("Dune Basin: Team-0 bot chases across the basin when the ball is on the attack side", () => {
+  // Ball on the opposing (right) side of center, well short of the right ridge
+  // base — not in either bay. The bot should simply chase it across the basin.
+  const view: BotWorldView = {
+    tick: 6,
+    self: { x: -6, y: 1, facing: 1, grounded: true },
+    ball: { x: 8, y: 2, vx: 0, vy: 0 }, // right of center, |8| < |15| → not in a bay
+    arena: DUNE_ARENA,
+  };
+  const frame = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  expect(Math.sign(frame.moveX)).toBe(1);
+});
+
+// ── Phase 4 (FLI-13): Dune Basin chamber corner/bay-escape ────────────────────
+// The anti-grind logic is shared and arena-agnostic (the cornered/awayFromWall
+// branch keyed off wallInnerX). This is a Dune-Basin-scaled regression anchor for
+// the new enclosed chamber shape — a bot pinned in its own chamber against the
+// real wallInnerX = 47.5 must head back toward open play / clear toward center
+// rather than grinding into the outer wall or chamber floor.
+
+test("Dune Basin: Team-1 bot pinned in its right chamber clears the in-reach ball toward center", () => {
+  // Team 1 (slot 2): own Bell on the right (x=44), own wall inner face at x=47.5.
+  // Bot pressed to the right wall with the ball in reach but between it and the
+  // wall — naive chase would grind the wall and never strike (facing away from
+  // the target Bell). It should clear out of the corner toward open play.
+  const view: BotWorldView = {
+    tick: 9,
+    self: { x: 46.5, y: 1, facing: 1, grounded: true },
+    ball: { x: 47.2, y: 1, vx: 0, vy: 0 }, // in reach, toward the right wall
+    arena: DUNE_ARENA_RIGHT,
+  };
+  const frame = samplePracticeBotInput(2, view, DEFAULT_CONFIG);
+  expect(frame.strikeHeld).toBe(true);
+  // Heads back toward center (leftward), away from the outer wall.
+  expect(Math.sign(frame.moveX)).toBe(-1);
+});
+
+test("Dune Basin: Team-1 bot cornered with an out-of-reach ball heads away from the outer wall", () => {
+  // Ball is toward the wall but too far to strike; the bot must move back toward
+  // open play (moveX = -1), not grind into the chamber wall (moveX = +1).
+  const view: BotWorldView = {
+    tick: 3,
+    self: { x: 46.5, y: 1, facing: 1, grounded: true },
+    ball: { x: 47.4, y: 4, vx: 0, vy: 0 }, // dist ≈ 3.1 > reach, toward wall
+    arena: DUNE_ARENA_RIGHT,
+  };
+  const frame = samplePracticeBotInput(2, view, DEFAULT_CONFIG);
+  expect(Math.sign(frame.moveX)).toBe(-1);
+});
+
 test("open-center: no bayRampBaseX → behavior unchanged (chase ball normally)", () => {
-  // When arena has no bayRampBaseX (Flat Dojo / Twin Ledge / legacy), the bot
+  // When arena has no bayRampBaseX (Flat Dojo / legacy fixtures), the bot
   // should behave exactly as before: just chase the ball.
   const viewWithBay: BotWorldView = {
     tick: 5,

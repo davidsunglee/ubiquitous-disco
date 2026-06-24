@@ -1174,6 +1174,86 @@ test("tickOnce threads own-side bayRampBaseX for Team-0 slot (Temple Ascent)", (
   expect(capturedView?.arena?.bayRampBaseX).toBe(-30);
 });
 
+// ── Phase 4 (FLI-13): Dune Basin bayRampBaseX threading ───────────────────────
+
+test("buildBotWorldView carries bayRampBaseLeft and bayRampBaseRight for Dune Basin", () => {
+  const room = makeRoom();
+  const mf = manifest2v2([3]);
+  mf.settings.arenaId = "dune-basin";
+  room.testConfigureFromManifest(mf);
+
+  const wv = (
+    room as unknown as {
+      buildBotWorldView(): {
+        bayRampBaseLeft?: number;
+        bayRampBaseRight?: number;
+      };
+    }
+  ).buildBotWorldView();
+
+  // Dune Basin: bayRampBaseX = { left: -15, right: 15 } (the basin exit).
+  expect(wv.bayRampBaseLeft).toBe(-15);
+  expect(wv.bayRampBaseRight).toBe(15);
+});
+
+test("tickOnce threads own-side bayRampBaseX into the bot slot view (Dune Basin)", () => {
+  // Dune Basin has bayRampBaseX. Slot 3 is on Team 1 (own side = right chamber
+  // bay), so its view should receive bayRampBaseX = 15 (the right basin exit).
+  const room = makeRoom();
+  const mf = manifest2v2([3]);
+  mf.settings.arenaId = "dune-basin";
+  room.testConfigureFromManifest(mf);
+
+  let capturedView: import("@bb/sim").BotWorldView | undefined;
+  const originalSrc = room.inputSources.get(3)!;
+  (
+    room as unknown as {
+      sources: Map<number, import("../slotInputSource").SlotInputSource>;
+    }
+  ).sources.set(3, {
+    ...originalSrc,
+    take(view: import("@bb/sim").BotWorldView) {
+      capturedView = view;
+      return originalSrc.take(view);
+    },
+  });
+
+  const drive = room as unknown as { tickOnce(): void };
+  drive.tickOnce();
+
+  // Slot 3 = Team 1 → own bay is right → bayRampBaseX should be 15.
+  expect(capturedView?.arena?.bayRampBaseX).toBe(15);
+});
+
+test("tickOnce threads own-side bayRampBaseX for Team-0 slot (Dune Basin)", () => {
+  // Slot 0 is on Team 0 (own side = left chamber bay), so its view should receive
+  // bayRampBaseX = -15.
+  const room = makeRoom();
+  const mf = manifest2v2([0]);
+  mf.settings.arenaId = "dune-basin";
+  room.testConfigureFromManifest(mf);
+
+  let capturedView: import("@bb/sim").BotWorldView | undefined;
+  const originalSrc = room.inputSources.get(0)!;
+  (
+    room as unknown as {
+      sources: Map<number, import("../slotInputSource").SlotInputSource>;
+    }
+  ).sources.set(0, {
+    ...originalSrc,
+    take(view: import("@bb/sim").BotWorldView) {
+      capturedView = view;
+      return originalSrc.take(view);
+    },
+  });
+
+  const drive = room as unknown as { tickOnce(): void };
+  drive.tickOnce();
+
+  // Slot 0 = Team 0 → own bay is left → bayRampBaseX should be -15.
+  expect(capturedView?.arena?.bayRampBaseX).toBe(-15);
+});
+
 test("buildBotWorldView: bayRampBaseLeft/Right absent for arenas without bayRampBaseX (Flat Dojo)", () => {
   const room = makeRoom();
   const mf = manifest2v2([3]);
