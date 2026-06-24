@@ -228,7 +228,8 @@ export class MatchRoom extends Room {
     const wallInnerX =
       this.activeArena.bounds?.rightWallInnerX ??
       this.activeArena.colliders.reduce(
-        (max, c) => (c.x > 0 ? Math.max(max, c.x - c.halfW) : max),
+        (max, c) =>
+          c.kind === "box" && c.x > 0 ? Math.max(max, c.x - c.halfW) : max,
         0,
       );
 

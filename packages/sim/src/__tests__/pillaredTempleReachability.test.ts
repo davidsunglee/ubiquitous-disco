@@ -19,15 +19,17 @@
  */
 
 import { expect, test } from "vitest";
-import { TEMPLE_ASCENT } from "../arena";
+import { type BoxCollider, TEMPLE_ASCENT } from "../arena";
 import { DEFAULT_CONFIG } from "../config";
 
 // Derive pillar tops from actual collider definitions (not hardcoded).
 const innerPillars = TEMPLE_ASCENT.colliders.filter(
-  (c) => c.kind === "box" && Math.abs(Math.abs(c.x) - 12) < 0.01,
+  (c): c is BoxCollider =>
+    c.kind === "box" && Math.abs(Math.abs(c.x) - 12) < 0.01,
 );
 const outerPillars = TEMPLE_ASCENT.colliders.filter(
-  (c) => c.kind === "box" && Math.abs(Math.abs(c.x) - 28) < 0.01,
+  (c): c is BoxCollider =>
+    c.kind === "box" && Math.abs(Math.abs(c.x) - 28) < 0.01,
 );
 
 // ── (a) Pillar tops are within single-jump reach from the floor ───────────────

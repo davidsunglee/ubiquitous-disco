@@ -9,6 +9,7 @@ export type {
   CircleZone,
   ClimbWaypoint,
   ColliderDef,
+  RampCollider,
 } from "./arena";
 export {
   ARENAS,
@@ -74,6 +75,7 @@ export type {
   DebugBox,
   DebugCircle,
   DebugCollider,
+  DebugRamp,
   MatchPhase,
   MatchState,
   RenderState,

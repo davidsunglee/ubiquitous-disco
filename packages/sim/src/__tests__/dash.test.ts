@@ -78,6 +78,9 @@ const PHH = DEFAULT_CONFIG.player.halfH;
 function staticPenetration(arena: ArenaDef, px: number, py: number): number {
   let worst = 0;
   for (const c of arena.colliders) {
+    // Ramps are convex-hull shapes with no box halfW/halfH; skip them here.
+    // Ramp solidity is proven by the no-slip-under assertion in ramp.test.ts.
+    if (c.kind !== "box") continue;
     const ox = PHW + c.halfW - Math.abs(px - c.x);
     const oy = PHH + c.halfH - Math.abs(py - c.y);
     if (ox > 1e-4 && oy > 1e-4) worst = Math.max(worst, Math.min(ox, oy));

@@ -5,7 +5,14 @@ export interface BoxCollider {
   halfW: number;
   halfH: number;
 }
-export type ColliderDef = BoxCollider;
+export interface RampCollider {
+  kind: "ramp";
+  /** World-space polygon vertices (absolute units), authored CCW. Built as a
+   *  solid convex hull, so vertex order is collision-irrelevant; order only
+   *  affects the renderer polygon fill. */
+  points: [number, number][];
+}
+export type ColliderDef = BoxCollider | RampCollider;
 
 // A circular Bell Hit-Zone (world units). Kept separate from the visible Bell art
 // so scoring geometry and visuals can diverge (the art may be larger/offset).

@@ -1319,6 +1319,15 @@ export class GameScene extends Phaser.Scene {
   private drawArena(): void {
     this.gfx.fillStyle(0x444444, 1);
     for (const c of this.activeArena.colliders) {
+      if (c.kind === "ramp") {
+        this.gfx.fillPoints(
+          c.points.map(
+            ([x, y]) => new Phaser.Math.Vector2(toScreenX(x), toScreenY(y)),
+          ),
+          true, // closePath
+        );
+        continue;
+      }
       this.gfx.fillRect(
         toScreenX(c.x - c.halfW),
         toScreenY(c.y + c.halfH),

@@ -47,11 +47,23 @@ export class RapierWorld {
 
     // 1) arena colliders — fixed order
     for (const c of arena.colliders) {
-      this.world.createCollider(
-        R.ColliderDesc.cuboid(c.halfW, c.halfH)
+      let desc: ReturnType<typeof R.ColliderDesc.cuboid>;
+      if (c.kind === "ramp") {
+        const hull = R.ColliderDesc.convexHull(
+          Float32Array.from(c.points.flat()),
+        );
+        if (!hull) {
+          throw new Error(
+            `ramp collider has no convex hull: ${JSON.stringify(c.points)}`,
+          );
+        }
+        desc = hull.setCollisionGroups(ARENA_GROUPS);
+      } else {
+        desc = R.ColliderDesc.cuboid(c.halfW, c.halfH)
           .setTranslation(c.x, c.y)
-          .setCollisionGroups(ARENA_GROUPS),
-      );
+          .setCollisionGroups(ARENA_GROUPS);
+      }
+      this.world.createCollider(desc);
     }
 
     // 2) players — kinematic bodies inserted in fixed ACTIVE slot order, AFTER
