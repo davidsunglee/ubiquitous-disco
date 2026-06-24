@@ -23,6 +23,7 @@ import {
   createReplay,
   createSimulation,
   DEFAULT_CONFIG,
+  DUNE_BASIN,
   deserializeReplay,
   EMPTY_INPUT,
   FLAT_DOJO,
@@ -33,7 +34,6 @@ import {
   samplePracticeBotInput,
   serializeReplay,
   TEMPLE_ASCENT,
-  TWIN_LEDGE,
 } from "../index";
 import { COMPACT_DOJO } from "./fixtures/compactArena";
 
@@ -155,7 +155,7 @@ test("playReplay() hash equals the live capture session's final hashState()", ()
 test("playReplay() reproduces the live hash on the new arenas (resolves arenaId)", () => {
   // arenaId is load-bearing: playReplay must resolve it and build the sim on the
   // captured arena, not hardcode flat-dojo. Round-trip on both new arenas.
-  for (const arena of [TEMPLE_ASCENT, TWIN_LEDGE]) {
+  for (const arena of [TEMPLE_ASCENT, DUNE_BASIN]) {
     const replay = createReplay(9999, arena.id);
     const sim = createSimulation({
       config: DEFAULT_CONFIG,

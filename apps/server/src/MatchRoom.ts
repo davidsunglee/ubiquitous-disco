@@ -14,7 +14,6 @@ import {
   type BotWorldView,
   CHARACTERS,
   type CharacterDef,
-  type ClimbWaypoint,
   createSimulation,
   DEFAULT_CONFIG,
   EMPTY_INPUT,
@@ -198,8 +197,6 @@ export class MatchRoom extends Room {
     ball: { x: number; y: number; vx: number; vy: number };
     selves: (BotWorldView["self"] | undefined)[];
     arena: { leftBellX: number; rightBellX: number; wallInnerX: number };
-    climbLeft?: ClimbWaypoint[];
-    climbRight?: ClimbWaypoint[];
     bayRampBaseLeft?: number;
     bayRampBaseRight?: number;
   } {
@@ -245,8 +242,6 @@ export class MatchRoom extends Room {
       },
       selves,
       arena: { leftBellX, rightBellX, wallInnerX },
-      climbLeft: this.activeArena.botClimb?.left,
-      climbRight: this.activeArena.botClimb?.right,
       bayRampBaseLeft: this.activeArena.bayRampBaseX?.left,
       bayRampBaseRight: this.activeArena.bayRampBaseX?.right,
     };
@@ -327,8 +322,6 @@ export class MatchRoom extends Room {
       const src = this.sources.get(s);
       if (!src) continue;
       const self = worldView.selves[s];
-      const attackingClimb =
-        teamForPlayerSlot(s) === 0 ? worldView.climbRight : worldView.climbLeft;
       const ownBayBaseX =
         teamForPlayerSlot(s) === 0
           ? worldView.bayRampBaseLeft
@@ -340,7 +333,6 @@ export class MatchRoom extends Room {
         self: self ?? { x: 0, y: 0, facing: 1, grounded: false },
         arena: {
           ...worldView.arena,
-          climb: attackingClimb,
           bayRampBaseX: ownBayBaseX,
         },
       };

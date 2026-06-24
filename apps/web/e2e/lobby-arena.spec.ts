@@ -67,7 +67,7 @@ test("host can switch to temple-ascent and the picker reflects it", async ({
   await ctx.close();
 });
 
-test("host can switch to twin-ledge and the picker reflects it", async ({
+test("host can switch to dune-basin and the picker reflects it", async ({
   browser,
 }) => {
   test.skip(SKIP, "SKIP_NET_E2E set — worker not running");
@@ -84,8 +84,8 @@ test("host can switch to twin-ledge and the picker reflects it", async ({
   const arenaSel = host.getByTestId("lobby-arena");
   await expect(arenaSel).toBeVisible({ timeout: 5000 });
 
-  await arenaSel.selectOption("twin-ledge");
-  await expect(arenaSel).toHaveValue("twin-ledge");
+  await arenaSel.selectOption("dune-basin");
+  await expect(arenaSel).toHaveValue("dune-basin");
 
   await ctx.close();
 });
@@ -127,7 +127,7 @@ test("guest does not see the lobby-arena control", async ({ browser }) => {
   await guestCtx.close();
 });
 
-test("host can start a 1v1 match with twin-ledge selected", async ({
+test("host can start a 1v1 match with dune-basin selected", async ({
   browser,
 }) => {
   test.skip(SKIP, "SKIP_NET_E2E set — worker not running");
@@ -137,7 +137,7 @@ test("host can start a 1v1 match with twin-ledge selected", async ({
   const host = await hostCtx.newPage();
   const guest = await guestCtx.newPage();
 
-  // Host creates lobby, switches to 1v1 and twin-ledge.
+  // Host creates lobby, switches to 1v1 and dune-basin.
   await host.goto("/#lobby");
   await host.getByTestId("lobby-name").fill("Alice");
   await host.getByTestId("lobby-create").click();
@@ -145,7 +145,7 @@ test("host can start a 1v1 match with twin-ledge selected", async ({
   const code = (await host.getByTestId("lobby-code").innerText()).trim();
 
   await host.getByTestId("lobby-mode").selectOption("1v1");
-  await host.getByTestId("lobby-arena").selectOption("twin-ledge");
+  await host.getByTestId("lobby-arena").selectOption("dune-basin");
 
   // Guest joins.
   await guest.goto("/#lobby");

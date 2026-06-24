@@ -14,14 +14,14 @@ import {
   ARENAS,
   type ArenaDef,
   type ArenaId,
+  DUNE_BASIN,
   FLAT_DOJO,
   resolveArena,
   TEMPLE_ASCENT,
-  TWIN_LEDGE,
 } from "../arena";
 import { testArenaMirrorSymmetry } from "./helpers/arenaSymmetry";
 
-const ARENA_IDS: ArenaId[] = ["flat-dojo", "temple-ascent", "twin-ledge"];
+const ARENA_IDS: ArenaId[] = ["flat-dojo", "temple-ascent", "dune-basin"];
 
 // ── Registry completeness ──────────────────────────────────────────────────────
 
@@ -44,10 +44,10 @@ test("ARENAS keys match the arena def ids", () => {
   }
 });
 
-test("FLAT_DOJO, TEMPLE_ASCENT, TWIN_LEDGE are exported and match registry", () => {
+test("FLAT_DOJO, TEMPLE_ASCENT, DUNE_BASIN are exported and match registry", () => {
   expect(ARENAS["flat-dojo"]).toBe(FLAT_DOJO);
   expect(ARENAS["temple-ascent"]).toBe(TEMPLE_ASCENT);
-  expect(ARENAS["twin-ledge"]).toBe(TWIN_LEDGE);
+  expect(ARENAS["dune-basin"]).toBe(DUNE_BASIN);
 });
 
 // ── resolveArena ──────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ test("FLAT_DOJO, TEMPLE_ASCENT, TWIN_LEDGE are exported and match registry", () 
 test("resolveArena returns the correct arena for known ids", () => {
   expect(resolveArena("flat-dojo")).toBe(FLAT_DOJO);
   expect(resolveArena("temple-ascent")).toBe(TEMPLE_ASCENT);
-  expect(resolveArena("twin-ledge")).toBe(TWIN_LEDGE);
+  expect(resolveArena("dune-basin")).toBe(DUNE_BASIN);
 });
 
 test("resolveArena falls back to FLAT_DOJO for unknown ids", () => {
@@ -175,6 +175,43 @@ test("FLAT_DOJO is the flat open court: 4 colliders, high ceiling, low bells, no
   expect(right?.hitZone.y).toBeCloseTo(6.0, 5);
   expect(right?.hitZone.x).toBeCloseTo(31, 5);
   expect(right?.hitZone.radius).toBeCloseTo(1.0, 5);
-  // No climb ladder on the flat court.
-  expect(FLAT_DOJO.botClimb).toBeUndefined();
+});
+
+// ── DUNE_BASIN-specific: dune ridges + side Bell chambers (FLI-13) ─────────────
+
+test("DUNE_BASIN is a basin + dune ridges + side chambers, with no suspended ledges", () => {
+  const boxAt = (x: number, y: number) =>
+    DUNE_BASIN.colliders.find(
+      (c) =>
+        c.kind === "box" &&
+        Math.abs(c.x - x) < 0.01 &&
+        Math.abs(c.y - y) < 0.01,
+    );
+
+  // Two dune ridges authored as ramps (one per side), descending to basin level.
+  const ramps = DUNE_BASIN.colliders.filter((c) => c.kind === "ramp");
+  expect(ramps, "two dune ridges").toHaveLength(2);
+
+  // Each chamber has a floor (top y=0) under its Bell near x = ±44.
+  expect(boxAt(-43, -0.5), "left chamber floor").toBeDefined();
+  expect(boxAt(43, -0.5), "right chamber floor").toBeDefined();
+  const leftBell = DUNE_BASIN.bells.find((b) => b.id === "left");
+  const rightBell = DUNE_BASIN.bells.find((b) => b.id === "right");
+  expect(leftBell?.hitZone.x).toBeCloseTo(-44, 5);
+  expect(rightBell?.hitZone.x).toBeCloseTo(44, 5);
+  expect(leftBell?.hitZone.radius).toBeCloseTo(1.0, 5);
+  // Bell sits inside the chamber floor's x-span (x -47.5..-38.5 / 38.5..47.5).
+  expect(leftBell?.hitZone.x).toBeGreaterThan(-47.5);
+  expect(leftBell?.hitZone.x).toBeLessThan(-38.5);
+  expect(rightBell?.hitZone.x).toBeGreaterThan(38.5);
+  expect(rightBell?.hitZone.x).toBeLessThan(47.5);
+
+  // The old Twin Ledge suspended stepping ledges (x = ±16 / ±34) are gone.
+  expect(boxAt(-16, 2.5), "old left inner ledge removed").toBeUndefined();
+  expect(boxAt(16, 2.5), "old right inner ledge removed").toBeUndefined();
+  expect(boxAt(-34, 4), "old left outer ledge removed").toBeUndefined();
+  expect(boxAt(34, 4), "old right outer ledge removed").toBeUndefined();
+
+  // Ramp-and-pocket arena: the bot reads the basin exit, with no climb data.
+  expect(DUNE_BASIN.bayRampBaseX).toEqual({ left: -15, right: 15 });
 });

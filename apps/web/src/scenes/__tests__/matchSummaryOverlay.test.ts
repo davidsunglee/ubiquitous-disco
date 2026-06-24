@@ -14,7 +14,7 @@ import { renderMatchSummaryDOM } from "../matchSummaryOverlay";
 const fixtureSummary: MatchSummary = {
   type: "MatchSummary",
   launchId: "L-fixture",
-  arenaId: "twin-ledge",
+  arenaId: "dune-basin",
   mode: "1v1",
   durationTicks: 540,
   scores: [2, 1],
@@ -61,7 +61,7 @@ describe("renderMatchSummaryDOM", () => {
     renderMatchSummaryDOM(container, fixtureSummary);
     const el = q("match-summary-arena");
     expect(el).not.toBeNull();
-    expect(el?.textContent).toContain("twin-ledge");
+    expect(el?.textContent).toContain("dune-basin");
   });
 
   test("populates mode field", () => {

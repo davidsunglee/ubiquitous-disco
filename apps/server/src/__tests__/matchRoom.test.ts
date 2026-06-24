@@ -853,33 +853,6 @@ test("configureFromManifest falls back to Sifu for an unknown characterId (no cr
   expect(room.inputSources.get(2)?.isHuman).toBe(false);
 });
 
-// ── Phase 2 (FLI-9): bot climb path threading ──────────────────────────────────
-
-test("buildBotWorldView carries climbLeft and climbRight for Twin Ledge", () => {
-  // FLI-11: FLAT_DOJO is now a flat open court without botClimb. Use TWIN_LEDGE
-  // (which retains its botClimb) to verify the shared world view includes both sides.
-  const room = makeRoom();
-  const mf = manifest2v2([3]);
-  mf.settings.arenaId = "twin-ledge";
-  room.testConfigureFromManifest(mf);
-
-  // Access the private method via casting.
-  const wv = (
-    room as unknown as {
-      buildBotWorldView(): {
-        climbLeft?: { x: number; surfaceY: number }[];
-        climbRight?: { x: number; surfaceY: number }[];
-      };
-    }
-  ).buildBotWorldView();
-
-  // Twin Ledge botClimb: left path starts at x=-16, right path starts at x=16.
-  expect(wv.climbLeft).toBeDefined();
-  expect(wv.climbRight).toBeDefined();
-  expect(wv.climbLeft?.[0]?.x).toBe(-16);
-  expect(wv.climbRight?.[0]?.x).toBe(16);
-});
-
 test("buildBotWorldView derives wallInnerX from the active arena's right wall (all arenas)", () => {
   // The bot's corner-awareness uses wallInnerX as the inner face of the right
   // side wall. It must match the actual outer-wall face for EVERY arena, not a
@@ -888,7 +861,7 @@ test("buildBotWorldView derives wallInnerX from the active arena's right wall (a
   const cases: { arenaId: string; expected: number }[] = [
     { arenaId: "flat-dojo", expected: 35.5 },
     { arenaId: "temple-ascent", expected: 45.5 }, // bounds reshaped in Phase 3
-    { arenaId: "twin-ledge", expected: 47.5 },
+    { arenaId: "dune-basin", expected: 47.5 },
   ];
 
   for (const { arenaId, expected } of cases) {
@@ -905,38 +878,6 @@ test("buildBotWorldView derives wallInnerX from the active arena's right wall (a
 
     expect(wv.arena.wallInnerX).toBe(expected);
   }
-});
-
-test("tickOnce threads the attacking-side climb into the bot slot view (Twin Ledge)", () => {
-  // FLI-11: FLAT_DOJO no longer has a botClimb (it's a flat open court). Use
-  // TWIN_LEDGE (which retains its botClimb) to cover the climb-threading path.
-  // Slot 3 is on Team 1 (attacks left), so its climb should be climbLeft.
-  const room = makeRoom();
-  const mf = manifest2v2([3]);
-  mf.settings.arenaId = "twin-ledge";
-  room.testConfigureFromManifest(mf);
-
-  // Intercept the view passed to the bot source's take() by wrapping the source.
-  let capturedView: import("@bb/sim").BotWorldView | undefined;
-  const originalSrc = room.inputSources.get(3)!;
-  (
-    room as unknown as {
-      sources: Map<number, import("../slotInputSource").SlotInputSource>;
-    }
-  ).sources.set(3, {
-    ...originalSrc,
-    take(view: import("@bb/sim").BotWorldView) {
-      capturedView = view;
-      return originalSrc.take(view);
-    },
-  });
-
-  const drive = room as unknown as { tickOnce(): void };
-  drive.tickOnce();
-
-  // Slot 3 = Team 1 → attacks left bell → climb should be climbLeft (x=-16 first in Twin Ledge).
-  expect(capturedView?.arena?.climb).toBeDefined();
-  expect(capturedView?.arena?.climb?.[0]?.x).toBe(-16);
 });
 
 // ── Phase 7 (FLI-9): balance telemetry MatchSummary ──────────────────────────
@@ -1231,6 +1172,86 @@ test("tickOnce threads own-side bayRampBaseX for Team-0 slot (Temple Ascent)", (
 
   // Slot 0 = Team 0 → own bay is left → bayRampBaseX should be -30.
   expect(capturedView?.arena?.bayRampBaseX).toBe(-30);
+});
+
+// ── Phase 4 (FLI-13): Dune Basin bayRampBaseX threading ───────────────────────
+
+test("buildBotWorldView carries bayRampBaseLeft and bayRampBaseRight for Dune Basin", () => {
+  const room = makeRoom();
+  const mf = manifest2v2([3]);
+  mf.settings.arenaId = "dune-basin";
+  room.testConfigureFromManifest(mf);
+
+  const wv = (
+    room as unknown as {
+      buildBotWorldView(): {
+        bayRampBaseLeft?: number;
+        bayRampBaseRight?: number;
+      };
+    }
+  ).buildBotWorldView();
+
+  // Dune Basin: bayRampBaseX = { left: -15, right: 15 } (the basin exit).
+  expect(wv.bayRampBaseLeft).toBe(-15);
+  expect(wv.bayRampBaseRight).toBe(15);
+});
+
+test("tickOnce threads own-side bayRampBaseX into the bot slot view (Dune Basin)", () => {
+  // Dune Basin has bayRampBaseX. Slot 3 is on Team 1 (own side = right chamber
+  // bay), so its view should receive bayRampBaseX = 15 (the right basin exit).
+  const room = makeRoom();
+  const mf = manifest2v2([3]);
+  mf.settings.arenaId = "dune-basin";
+  room.testConfigureFromManifest(mf);
+
+  let capturedView: import("@bb/sim").BotWorldView | undefined;
+  const originalSrc = room.inputSources.get(3)!;
+  (
+    room as unknown as {
+      sources: Map<number, import("../slotInputSource").SlotInputSource>;
+    }
+  ).sources.set(3, {
+    ...originalSrc,
+    take(view: import("@bb/sim").BotWorldView) {
+      capturedView = view;
+      return originalSrc.take(view);
+    },
+  });
+
+  const drive = room as unknown as { tickOnce(): void };
+  drive.tickOnce();
+
+  // Slot 3 = Team 1 → own bay is right → bayRampBaseX should be 15.
+  expect(capturedView?.arena?.bayRampBaseX).toBe(15);
+});
+
+test("tickOnce threads own-side bayRampBaseX for Team-0 slot (Dune Basin)", () => {
+  // Slot 0 is on Team 0 (own side = left chamber bay), so its view should receive
+  // bayRampBaseX = -15.
+  const room = makeRoom();
+  const mf = manifest2v2([0]);
+  mf.settings.arenaId = "dune-basin";
+  room.testConfigureFromManifest(mf);
+
+  let capturedView: import("@bb/sim").BotWorldView | undefined;
+  const originalSrc = room.inputSources.get(0)!;
+  (
+    room as unknown as {
+      sources: Map<number, import("../slotInputSource").SlotInputSource>;
+    }
+  ).sources.set(0, {
+    ...originalSrc,
+    take(view: import("@bb/sim").BotWorldView) {
+      capturedView = view;
+      return originalSrc.take(view);
+    },
+  });
+
+  const drive = room as unknown as { tickOnce(): void };
+  drive.tickOnce();
+
+  // Slot 0 = Team 0 → own bay is left → bayRampBaseX should be -15.
+  expect(capturedView?.arena?.bayRampBaseX).toBe(-15);
 });
 
 test("buildBotWorldView: bayRampBaseLeft/Right absent for arenas without bayRampBaseX (Flat Dojo)", () => {
