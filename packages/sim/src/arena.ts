@@ -42,17 +42,6 @@ export interface BellDef {
   hitZone: CircleZone; // pure-geometric Bell Ring detection target
 }
 
-/** A platform top the bot stands on while climbing toward a bell. */
-export interface ClimbWaypoint {
-  x: number;
-  surfaceY: number;
-}
-/** Per-side ordered climb paths (floor → … → bell column). */
-export interface ArenaClimb {
-  left: ClimbWaypoint[];
-  right: ClimbWaypoint[];
-}
-
 /**
  * Inner faces of the two side walls (world X). Authored alongside the wall
  * colliders so consumers (e.g. the practice bot's corner awareness) read a typed
@@ -74,8 +63,6 @@ export interface ArenaDef {
   /** @deprecated Use playerSpawns[0] instead. Kept for compatibility. */
   playerSpawn: { x: number; y: number };
   ballSpawn: { x: number; y: number };
-  /** Optional bot climb ladder per side (absent → bot uses ground+jump only). */
-  botClimb?: ArenaClimb;
   /** Per-side x where each bay's ramp begins (for bot bay-detection). Optional. */
   bayRampBaseX?: { left: number; right: number };
 }
@@ -124,7 +111,7 @@ export const FLAT_DOJO: ArenaDef = {
   ],
   playerSpawn: { x: -4, y: 1 }, // deprecated alias for slot 0
   ballSpawn: { x: 0, y: 6.0 },
-  // No botClimb: Flat Dojo is flat; the bot plays the air (Phase 4).
+  // Flat Dojo is flat; the bot plays the air (Phase 4).
 };
 
 // Temple Ascent: ~92u-wide arena with a flat open center lane that ramps up into
@@ -196,7 +183,7 @@ export const TEMPLE_ASCENT: ArenaDef = {
   ],
   playerSpawn: { x: -4, y: 1 },
   ballSpawn: { x: 0, y: 6 },
-  // botClimb intentionally absent — the ramp is a run-up, not a staged ladder.
+  // The ramp is a run-up, not a staged ladder; the bot reads it via bayRampBaseX.
   bayRampBaseX: { left: -30, right: 30 },
 };
 
@@ -245,16 +232,6 @@ export const TWIN_LEDGE: ArenaDef = {
   ],
   playerSpawn: { x: -4, y: 1 },
   ballSpawn: { x: 0, y: 6 },
-  botClimb: {
-    left: [
-      { x: -16, surfaceY: 3.0 },
-      { x: -34, surfaceY: 4.5 },
-    ],
-    right: [
-      { x: 16, surfaceY: 3.0 },
-      { x: 34, surfaceY: 4.5 },
-    ],
-  },
 };
 
 /** Registry of all available arenas, keyed by ArenaId (plus back-compat alias). */

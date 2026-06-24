@@ -175,6 +175,4 @@ test("FLAT_DOJO is the flat open court: 4 colliders, high ceiling, low bells, no
   expect(right?.hitZone.y).toBeCloseTo(6.0, 5);
   expect(right?.hitZone.x).toBeCloseTo(31, 5);
   expect(right?.hitZone.radius).toBeCloseTo(1.0, 5);
-  // No climb ladder on the flat court.
-  expect(FLAT_DOJO.botClimb).toBeUndefined();
 });

@@ -853,33 +853,6 @@ test("configureFromManifest falls back to Sifu for an unknown characterId (no cr
   expect(room.inputSources.get(2)?.isHuman).toBe(false);
 });
 
-// ── Phase 2 (FLI-9): bot climb path threading ──────────────────────────────────
-
-test("buildBotWorldView carries climbLeft and climbRight for Twin Ledge", () => {
-  // FLI-11: FLAT_DOJO is now a flat open court without botClimb. Use TWIN_LEDGE
-  // (which retains its botClimb) to verify the shared world view includes both sides.
-  const room = makeRoom();
-  const mf = manifest2v2([3]);
-  mf.settings.arenaId = "twin-ledge";
-  room.testConfigureFromManifest(mf);
-
-  // Access the private method via casting.
-  const wv = (
-    room as unknown as {
-      buildBotWorldView(): {
-        climbLeft?: { x: number; surfaceY: number }[];
-        climbRight?: { x: number; surfaceY: number }[];
-      };
-    }
-  ).buildBotWorldView();
-
-  // Twin Ledge botClimb: left path starts at x=-16, right path starts at x=16.
-  expect(wv.climbLeft).toBeDefined();
-  expect(wv.climbRight).toBeDefined();
-  expect(wv.climbLeft?.[0]?.x).toBe(-16);
-  expect(wv.climbRight?.[0]?.x).toBe(16);
-});
-
 test("buildBotWorldView derives wallInnerX from the active arena's right wall (all arenas)", () => {
   // The bot's corner-awareness uses wallInnerX as the inner face of the right
   // side wall. It must match the actual outer-wall face for EVERY arena, not a
@@ -905,38 +878,6 @@ test("buildBotWorldView derives wallInnerX from the active arena's right wall (a
 
     expect(wv.arena.wallInnerX).toBe(expected);
   }
-});
-
-test("tickOnce threads the attacking-side climb into the bot slot view (Twin Ledge)", () => {
-  // FLI-11: FLAT_DOJO no longer has a botClimb (it's a flat open court). Use
-  // TWIN_LEDGE (which retains its botClimb) to cover the climb-threading path.
-  // Slot 3 is on Team 1 (attacks left), so its climb should be climbLeft.
-  const room = makeRoom();
-  const mf = manifest2v2([3]);
-  mf.settings.arenaId = "twin-ledge";
-  room.testConfigureFromManifest(mf);
-
-  // Intercept the view passed to the bot source's take() by wrapping the source.
-  let capturedView: import("@bb/sim").BotWorldView | undefined;
-  const originalSrc = room.inputSources.get(3)!;
-  (
-    room as unknown as {
-      sources: Map<number, import("../slotInputSource").SlotInputSource>;
-    }
-  ).sources.set(3, {
-    ...originalSrc,
-    take(view: import("@bb/sim").BotWorldView) {
-      capturedView = view;
-      return originalSrc.take(view);
-    },
-  });
-
-  const drive = room as unknown as { tickOnce(): void };
-  drive.tickOnce();
-
-  // Slot 3 = Team 1 → attacks left bell → climb should be climbLeft (x=-16 first in Twin Ledge).
-  expect(capturedView?.arena?.climb).toBeDefined();
-  expect(capturedView?.arena?.climb?.[0]?.x).toBe(-16);
 });
 
 // ── Phase 7 (FLI-9): balance telemetry MatchSummary ──────────────────────────

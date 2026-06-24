@@ -1,5 +1,4 @@
 export type {
-  ArenaClimb,
   ArenaDef,
   ArenaId,
   ArtShape,
@@ -7,7 +6,6 @@ export type {
   BoxArt,
   BoxCollider,
   CircleZone,
-  ClimbWaypoint,
   ColliderDef,
   RampCollider,
 } from "./arena";
