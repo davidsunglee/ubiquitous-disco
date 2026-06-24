@@ -76,6 +76,8 @@ export interface ArenaDef {
   ballSpawn: { x: number; y: number };
   /** Optional bot climb ladder per side (absent → bot uses ground+jump only). */
   botClimb?: ArenaClimb;
+  /** Per-side x where each bay's ramp begins (for bot bay-detection). Optional. */
+  bayRampBaseX?: { left: number; right: number };
 }
 
 /** The set of available arena ids. */
@@ -195,6 +197,7 @@ export const TEMPLE_ASCENT: ArenaDef = {
   playerSpawn: { x: -4, y: 1 },
   ballSpawn: { x: 0, y: 6 },
   // botClimb intentionally absent — the ramp is a run-up, not a staged ladder.
+  bayRampBaseX: { left: -30, right: 30 },
 };
 
 // Twin Ledge: 96-unit-wide open floor with stepped symmetric side ledges (a
