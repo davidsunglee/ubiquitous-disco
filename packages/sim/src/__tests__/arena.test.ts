@@ -15,12 +15,12 @@ import {
   type ArenaDef,
   type ArenaId,
   FLAT_DOJO,
-  PILLARED_TEMPLE,
   resolveArena,
+  TEMPLE_ASCENT,
   TWIN_LEDGE,
 } from "../arena";
 
-const ARENA_IDS: ArenaId[] = ["flat-dojo", "pillared-temple", "twin-ledge"];
+const ARENA_IDS: ArenaId[] = ["flat-dojo", "temple-ascent", "twin-ledge"];
 
 // ── Registry completeness ──────────────────────────────────────────────────────
 
@@ -31,8 +31,10 @@ test("ARENAS registry contains all three ArenaId keys", () => {
   }
 });
 
-test("ARENAS registry has exactly three entries", () => {
-  expect(Object.keys(ARENAS)).toHaveLength(3);
+test("ARENAS exposes the three canonical ids plus the pillared-temple alias", () => {
+  for (const id of ARENA_IDS) expect(ARENAS).toHaveProperty(id);
+  // Alias preserves old replays/manifests instead of falling back to Flat Dojo.
+  expect(resolveArena("pillared-temple")).toBe(TEMPLE_ASCENT);
 });
 
 test("ARENAS keys match the arena def ids", () => {
@@ -41,9 +43,9 @@ test("ARENAS keys match the arena def ids", () => {
   }
 });
 
-test("FLAT_DOJO, PILLARED_TEMPLE, TWIN_LEDGE are exported and match registry", () => {
+test("FLAT_DOJO, TEMPLE_ASCENT, TWIN_LEDGE are exported and match registry", () => {
   expect(ARENAS["flat-dojo"]).toBe(FLAT_DOJO);
-  expect(ARENAS["pillared-temple"]).toBe(PILLARED_TEMPLE);
+  expect(ARENAS["temple-ascent"]).toBe(TEMPLE_ASCENT);
   expect(ARENAS["twin-ledge"]).toBe(TWIN_LEDGE);
 });
 
@@ -51,7 +53,7 @@ test("FLAT_DOJO, PILLARED_TEMPLE, TWIN_LEDGE are exported and match registry", (
 
 test("resolveArena returns the correct arena for known ids", () => {
   expect(resolveArena("flat-dojo")).toBe(FLAT_DOJO);
-  expect(resolveArena("pillared-temple")).toBe(PILLARED_TEMPLE);
+  expect(resolveArena("temple-ascent")).toBe(TEMPLE_ASCENT);
   expect(resolveArena("twin-ledge")).toBe(TWIN_LEDGE);
 });
 

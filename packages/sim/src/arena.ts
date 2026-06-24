@@ -72,7 +72,7 @@ export interface ArenaDef {
 }
 
 /** The set of available arena ids. */
-export type ArenaId = "flat-dojo" | "pillared-temple" | "twin-ledge";
+export type ArenaId = "flat-dojo" | "temple-ascent" | "twin-ledge";
 
 // Flat Dojo (FLI-11): a flat open aerial-volley court. Wide flat floor, two side
 // walls, and a high ceiling (underside ~20) that ricochets the floaty ball back
@@ -118,13 +118,14 @@ export const FLAT_DOJO: ArenaDef = {
   // No botClimb: Flat Dojo is flat; the bot plays the air (Phase 4).
 };
 
-// Pillared Temple: 84-unit-wide arena with two pairs of low interior hurdles
-// creating lane structure. Mirror-symmetric about x=0. Pillars are short
-// jumpable hurdles (tops at 2.0u and 3.0u) staggered ascending toward the bell.
-// Bells are lowered to y=5.5 so a floor jump + air-dash (apex ~3.6 + dash 3.0
-// ≈ 6.6u reach) clears them, but a bare floor single-jump (apex 3.6u) cannot.
-export const PILLARED_TEMPLE: ArenaDef = {
-  id: "pillared-temple",
+// Temple Ascent (formerly Pillared Temple): 84-unit-wide arena with two pairs of
+// low interior hurdles creating lane structure. Mirror-symmetric about x=0.
+// Pillars are short jumpable hurdles (tops at 2.0u and 3.0u) staggered ascending
+// toward the bell. Bells are lowered to y=5.5 so a floor jump + air-dash
+// (apex ~3.6 + dash 3.0 ≈ 6.6u reach) clears them, but a bare floor single-jump
+// (apex 3.6u) cannot. (Geometry unchanged in Phase 1 — full reshape in Phase 3.)
+export const TEMPLE_ASCENT: ArenaDef = {
+  id: "temple-ascent",
   // Side walls at x=±42, halfW 0.5 → inner faces at ∓41.5.
   bounds: { leftWallInnerX: -41.5, rightWallInnerX: 41.5 },
   colliders: [
@@ -224,10 +225,11 @@ export const TWIN_LEDGE: ArenaDef = {
   },
 };
 
-/** Registry of all available arenas, keyed by ArenaId. */
-export const ARENAS: Record<ArenaId, ArenaDef> = {
+/** Registry of all available arenas, keyed by ArenaId (plus back-compat alias). */
+export const ARENAS: Record<string, ArenaDef> = {
   "flat-dojo": FLAT_DOJO,
-  "pillared-temple": PILLARED_TEMPLE,
+  "temple-ascent": TEMPLE_ASCENT,
+  "pillared-temple": TEMPLE_ASCENT, // back-compat alias (old replays/manifests)
   "twin-ledge": TWIN_LEDGE,
 };
 

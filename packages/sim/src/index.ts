@@ -13,8 +13,8 @@ export type {
 export {
   ARENAS,
   FLAT_DOJO,
-  PILLARED_TEMPLE,
   resolveArena,
+  TEMPLE_ASCENT,
   TWIN_LEDGE,
 } from "./arena";
 export type { BotWorldView } from "./bot/practiceBot";

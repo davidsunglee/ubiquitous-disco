@@ -76,7 +76,7 @@ const LENGTH_OPTIONS: { label: string; ticks: number }[] = [
 /** Arena options for the host picker. */
 const ARENA_OPTIONS: { label: string; id: string }[] = [
   { label: "Flat Dojo", id: "flat-dojo" },
-  { label: "Pillared Temple", id: "pillared-temple" },
+  { label: "Temple Ascent", id: "temple-ascent" },
   { label: "Twin Ledge", id: "twin-ledge" },
 ];
 

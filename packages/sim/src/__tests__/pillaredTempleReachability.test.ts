@@ -8,9 +8,9 @@
  *  (c) Floor jump + air-dash reach (apex + dashDistance) is enough to reach the
  *      bell (y=5.5) from a floor jump or pillar-top jump.
  *  (d) SKIPPED — FLI-11 follow-up: under the new global floaty physics a bare
- *      floor single-jump (apex ≈9.08u) now clears PILLARED_TEMPLE's y=5.5 Bell,
+ *      floor single-jump (apex ≈9.08u) now clears TEMPLE_ASCENT's y=5.5 Bell,
  *      so this arena's "aerial move required" invariant no longer holds.
- *      PILLARED_TEMPLE/TWIN_LEDGE are intentionally left for a later balance pass.
+ *      TEMPLE_ASCENT/TWIN_LEDGE are intentionally left for a later balance pass.
  *
  * Reachability math (FLI-11 global feel):
  *   jumpSpeed = 16.5, gravityY = -20, movement.gravityScale = 0.75
@@ -19,15 +19,15 @@
  */
 
 import { expect, test } from "vitest";
-import { PILLARED_TEMPLE } from "../arena";
+import { TEMPLE_ASCENT } from "../arena";
 import { DEFAULT_CONFIG } from "../config";
 
 // Derive pillar tops from actual collider definitions (not hardcoded).
-const innerPillars = PILLARED_TEMPLE.colliders.filter(
-  (c) => Math.abs(Math.abs(c.x) - 12) < 0.01,
+const innerPillars = TEMPLE_ASCENT.colliders.filter(
+  (c) => c.kind === "box" && Math.abs(Math.abs(c.x) - 12) < 0.01,
 );
-const outerPillars = PILLARED_TEMPLE.colliders.filter(
-  (c) => Math.abs(Math.abs(c.x) - 28) < 0.01,
+const outerPillars = TEMPLE_ASCENT.colliders.filter(
+  (c) => c.kind === "box" && Math.abs(Math.abs(c.x) - 28) < 0.01,
 );
 
 // ── (a) Pillar tops are within single-jump reach from the floor ───────────────
@@ -67,7 +67,7 @@ test("Pillared Temple outer pillar tops (x=±28) are jumpable from the floor", (
 // ── (b) Right bell hitZone position ──────────────────────────────────────────
 
 test("Pillared Temple right bell hitZone is at y=5.5, x=36", () => {
-  const rightBell = PILLARED_TEMPLE.bells.find((b) => b.id === "right");
+  const rightBell = TEMPLE_ASCENT.bells.find((b) => b.id === "right");
   expect(rightBell).toBeDefined();
   expect(rightBell!.hitZone.y).toBeCloseTo(5.5, 5);
   expect(rightBell!.hitZone.x).toBeCloseTo(36, 5);
@@ -82,7 +82,7 @@ test("floor jump + air-dash reach clears the Pillared Temple bell (5.5u)", () =>
   const apexFeet = (v * v) / (2 * g); // ≈ 9.08
   const reachWithDash = apexFeet + DEFAULT_CONFIG.dash.distance;
 
-  const rightBell = PILLARED_TEMPLE.bells.find((b) => b.id === "right")!;
+  const rightBell = TEMPLE_ASCENT.bells.find((b) => b.id === "right")!;
   const bellY = rightBell.hitZone.y; // 5.5
 
   expect(
@@ -94,8 +94,8 @@ test("floor jump + air-dash reach clears the Pillared Temple bell (5.5u)", () =>
 // ── (d) SKIPPED — see file header ─────────────────────────────────────────────
 
 // FLI-11 follow-up: under the new global floaty physics a bare floor single-jump
-// (apex ≈9.08u) now clears PILLARED_TEMPLE's y=5.5 Bell, so this arena's
-// "aerial move required" invariant no longer holds. PILLARED_TEMPLE/TWIN_LEDGE
+// (apex ≈9.08u) now clears TEMPLE_ASCENT's y=5.5 Bell, so this arena's
+// "aerial move required" invariant no longer holds. TEMPLE_ASCENT/TWIN_LEDGE
 // are intentionally left for a later balance pass (see PR notes).
 test.skip("bare floor single-jump apex is below the Pillared Temple bell", () => {
   /* obsolete under FLI-11 global physics — see follow-up */

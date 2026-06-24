@@ -44,7 +44,7 @@ test("host sees lobby-arena select with all three arenas", async ({
   await ctx.close();
 });
 
-test("host can switch to pillared-temple and the picker reflects it", async ({
+test("host can switch to temple-ascent and the picker reflects it", async ({
   browser,
 }) => {
   test.skip(SKIP, "SKIP_NET_E2E set — worker not running");
@@ -61,8 +61,8 @@ test("host can switch to pillared-temple and the picker reflects it", async ({
   const arenaSel = host.getByTestId("lobby-arena");
   await expect(arenaSel).toBeVisible({ timeout: 5000 });
 
-  await arenaSel.selectOption("pillared-temple");
-  await expect(arenaSel).toHaveValue("pillared-temple");
+  await arenaSel.selectOption("temple-ascent");
+  await expect(arenaSel).toHaveValue("temple-ascent");
 
   await ctx.close();
 });

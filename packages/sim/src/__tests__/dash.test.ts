@@ -7,7 +7,7 @@ import {
   FLAT_DOJO,
   type InputFrame,
   initSim,
-  PILLARED_TEMPLE,
+  TEMPLE_ASCENT,
   TWIN_LEDGE,
 } from "../index";
 
@@ -131,7 +131,7 @@ test("a downward Tele-Dash is clamped by the floor, not through it", () => {
 });
 
 test("a sideways Tele-Dash is clamped by a suspended platform's face", () => {
-  // Walk toward the outer pillar in PILLARED_TEMPLE (x=±28, top y=3.0).
+  // Walk toward the outer pillar in TEMPLE_ASCENT (x=±28, top y=3.0).
   // From spawn at x=-4, walk right toward the right inner pillar (x=12)
   // then jump to its height and blink right into the outer pillar face (x=28).
   // With moveSpeed 7.2 (0.24u/tick), ~68 ticks reach x≈12; jump up and dash right.
@@ -143,7 +143,7 @@ test("a sideways Tele-Dash is clamped by a suspended platform's face", () => {
   lead.push(
     frame({ moveX: 1, dashPressed: true, dashHeld: true, jumpHeld: true }),
   );
-  expect(worstPenetrationThrough(PILLARED_TEMPLE, lead)).toBeLessThan(SKIN);
+  expect(worstPenetrationThrough(TEMPLE_ASCENT, lead)).toBeLessThan(SKIN);
 });
 
 test("an upward Tele-Dash is clamped by a suspended platform's underside", () => {
