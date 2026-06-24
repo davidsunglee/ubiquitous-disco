@@ -143,11 +143,12 @@ export const TEMPLE_ASCENT: ArenaDef = {
     { kind: "box", x: -46, y: 8.5, halfW: 0.5, halfH: 9.0 },
     // [2] right wall: inner face at x = 45.5, top y17.5
     { kind: "box", x: 46, y: 8.5, halfW: 0.5, halfH: 9.0 },
-    // [3] left slope+landing: ramp rises from x=-30,y=0 to landing at x=-43,y=4
+    // [3] left slope+landing: toe tucks under the center floor so the exposed
+    // seam at x=-30 is smooth, then rises to the x=-43,y=4 landing
     {
       kind: "ramp",
       points: [
-        [-30, 0],
+        [-29.2, -0.25],
         [-45.5, 0],
         [-45.5, 4],
         [-43, 4],
@@ -157,7 +158,7 @@ export const TEMPLE_ASCENT: ArenaDef = {
     {
       kind: "ramp",
       points: [
-        [30, 0],
+        [29.2, -0.25],
         [45.5, 0],
         [45.5, 4],
         [43, 4],
