@@ -887,7 +887,7 @@ test("buildBotWorldView derives wallInnerX from the active arena's right wall (a
   // most of the arena and refuses to advance toward its target Bell.
   const cases: { arenaId: string; expected: number }[] = [
     { arenaId: "flat-dojo", expected: 35.5 },
-    { arenaId: "temple-ascent", expected: 41.5 }, // wallInnerX unchanged this phase
+    { arenaId: "temple-ascent", expected: 45.5 }, // bounds reshaped in Phase 3
     { arenaId: "twin-ledge", expected: 47.5 },
   ];
 
