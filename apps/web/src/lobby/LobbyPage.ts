@@ -77,7 +77,7 @@ const LENGTH_OPTIONS: { label: string; ticks: number }[] = [
 const ARENA_OPTIONS: { label: string; id: string }[] = [
   { label: "Flat Dojo", id: "flat-dojo" },
   { label: "Temple Ascent", id: "temple-ascent" },
-  { label: "Twin Ledge", id: "twin-ledge" },
+  { label: "Dune Basin", id: "dune-basin" },
 ];
 
 export class LobbyPage {

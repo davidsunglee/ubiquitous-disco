@@ -3,12 +3,12 @@ import {
   type ArenaDef,
   createSimulation,
   DEFAULT_CONFIG,
+  DUNE_BASIN,
   EMPTY_INPUT,
   FLAT_DOJO,
   type InputFrame,
   initSim,
   TEMPLE_ASCENT,
-  TWIN_LEDGE,
 } from "../index";
 
 beforeAll(async () => {
@@ -145,16 +145,24 @@ test("an upward Tele-Dash is clamped by the eave underside in TEMPLE_ASCENT", ()
   expect(worstPenetrationThrough(TEMPLE_ASCENT, lead)).toBeLessThan(SKIN);
 });
 
-test("an upward Tele-Dash is clamped by a suspended platform's underside", () => {
-  // Walk under the inner ledge in TWIN_LEDGE (inner underside ≈ y=2.0).
-  // Walk right from spawn, then blink straight up into the inner ledge underside.
-  // With moveSpeed 7.2 (0.24u/tick), ~55 ticks puts the player near x=9 under the
-  // inner ledge (x=±16, halfW=4, underside y=2.5-0.5=2.0).
+test("an upward Tele-Dash is clamped by the chamber eave underside in DUNE_BASIN", () => {
+  // Walk into the right chamber in DUNE_BASIN, then jump and blink up into the
+  // eave (collider x=43, halfW=4.5, halfH=0.4 → underside y=7.0, x 38.5..47.5).
+  // From spawn at x=-6, run right across the basin, up over the right dune ridge
+  // (peak x=27,y=5) and down onto the chamber floor (top y=0); ~200 ticks put the
+  // player under the eave. The eave is 7u up — out of a single blink's reach — so
+  // the player jumps first, then dashes straight up while rising: the combined
+  // rise drives the player's head into the eave underside, where it must clamp.
+  // Parallel to the Temple Ascent right-eave dash test.
   const lead: InputFrame[] = [];
   for (let i = 0; i < 10; i++) lead.push(EMPTY_INPUT);
-  for (let i = 0; i < 40; i++) lead.push(frame({ moveX: 1 }));
-  lead.push(frame({ moveY: 1, dashPressed: true, dashHeld: true }));
-  expect(worstPenetrationThrough(TWIN_LEDGE, lead)).toBeLessThan(SKIN);
+  for (let i = 0; i < 200; i++) lead.push(frame({ moveX: 1 }));
+  lead.push(frame({ jumpPressed: true, jumpHeld: true }));
+  for (let i = 0; i < 6; i++) lead.push(frame({ jumpHeld: true }));
+  lead.push(
+    frame({ moveY: 1, jumpHeld: true, dashPressed: true, dashHeld: true }),
+  );
+  expect(worstPenetrationThrough(DUNE_BASIN, lead)).toBeLessThan(SKIN);
 });
 
 test("exactly one air-dash per airtime, reset on landing", () => {

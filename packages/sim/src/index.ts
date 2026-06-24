@@ -11,10 +11,10 @@ export type {
 } from "./arena";
 export {
   ARENAS,
+  DUNE_BASIN,
   FLAT_DOJO,
   resolveArena,
   TEMPLE_ASCENT,
-  TWIN_LEDGE,
 } from "./arena";
 export type { BotWorldView } from "./bot/practiceBot";
 export { samplePracticeBotInput } from "./bot/practiceBot";

@@ -68,7 +68,7 @@ export interface ArenaDef {
 }
 
 /** The set of available arena ids. */
-export type ArenaId = "flat-dojo" | "temple-ascent" | "twin-ledge";
+export type ArenaId = "flat-dojo" | "temple-ascent" | "dune-basin";
 
 // Flat Dojo (FLI-11): a flat open aerial-volley court. Wide flat floor, two side
 // walls, and a high ceiling (underside ~20) that ricochets the floaty ball back
@@ -187,51 +187,78 @@ export const TEMPLE_ASCENT: ArenaDef = {
   bayRampBaseX: { left: -30, right: 30 },
 };
 
-// Twin Ledge: 96-unit-wide open floor with stepped symmetric side ledges (a
-// low inner step and a wide outer main ledge) for platforming up to the bells.
-// Mirror-symmetric about x=0.
-export const TWIN_LEDGE: ArenaDef = {
-  id: "twin-ledge",
+// Dune Basin: 96u-wide gravity-fed arena. A low central basin players contest
+// from, two mirrored dune ridges (RampCollider polygons) the ball arcs over and
+// rolls down, and two inward-facing side Bell chambers (floor + side wall + eave)
+// with the Bell raised slightly behind the chamber mouth. No suspended ledges or
+// climb ladder — pressure flows downhill via ramps and into the side pockets.
+// Mirror-symmetric about x=0. Authored in world units (X right, Y up).
+export const DUNE_BASIN: ArenaDef = {
+  id: "dune-basin",
   // Side walls at x=±48, halfW 0.5 → inner faces at ∓47.5.
   bounds: { leftWallInnerX: -47.5, rightWallInnerX: 47.5 },
   colliders: [
-    // floor (96 units wide)
-    { kind: "box", x: 0, y: -0.5, halfW: 48, halfH: 0.5 },
-    // left wall: inner face at x = -47.5
-    { kind: "box", x: -48, y: 5, halfW: 0.5, halfH: 6 },
-    // right wall: inner face at x = 47.5
-    { kind: "box", x: 48, y: 5, halfW: 0.5, halfH: 6 },
-    // inner ledge pair: low stepping platforms
-    { kind: "box", x: -16, y: 2.5, halfW: 4, halfH: 0.5 },
-    { kind: "box", x: 16, y: 2.5, halfW: 4, halfH: 0.5 },
-    // outer ledge pair: wide main platforms near the bells
-    { kind: "box", x: -34, y: 4, halfW: 5, halfH: 0.5 },
-    { kind: "box", x: 34, y: 4, halfW: 5, halfH: 0.5 },
-    // ceiling
-    { kind: "box", x: 0, y: 11.5, halfW: 48, halfH: 0.5 },
+    // central basin floor: top y=0, x -15..15 (spawns + ball drop)
+    { kind: "box", x: 0, y: -0.5, halfW: 15, halfH: 0.5 },
+    // left chamber floor: top y=0, x -47.5..-38.5 (room to defend/recover/clear).
+    // Box top is flush with the basin floor and ramp feet (continuous ground y=0)
+    // so a player can walk down the ridge straight into the pocket without a step.
+    { kind: "box", x: -43, y: -0.5, halfW: 4.5, halfH: 0.5 },
+    // right chamber floor (mirror)
+    { kind: "box", x: 43, y: -0.5, halfW: 4.5, halfH: 0.5 },
+    // left dune ridge: outer face rises -38.5→peak -27,y5; inner face descends to -15,y0
+    {
+      kind: "ramp",
+      points: [
+        [-38.5, 0],
+        [-27, 5],
+        [-15, 0],
+      ],
+    },
+    // right dune ridge (mirror)
+    {
+      kind: "ramp",
+      points: [
+        [38.5, 0],
+        [27, 5],
+        [15, 0],
+      ],
+    },
+    // left wall: inner face at x = -47.5, spans y 0→18
+    { kind: "box", x: -48, y: 9, halfW: 0.5, halfH: 9 },
+    // right wall: inner face at x = 47.5, spans y 0→18
+    { kind: "box", x: 48, y: 9, halfW: 0.5, halfH: 9 },
+    // left chamber eave: underside y≈7, caps the pocket above the Bell (Option B)
+    { kind: "box", x: -43, y: 7.4, halfW: 4.5, halfH: 0.4 },
+    // right chamber eave (mirror)
+    { kind: "box", x: 43, y: 7.4, halfW: 4.5, halfH: 0.4 },
+    // ceiling: underside y≈18, allows big arcs over the ridges
+    { kind: "box", x: 0, y: 18.5, halfW: 48, halfH: 0.5 },
   ],
   bells: [
     {
       id: "left",
       defends: "left",
-      art: { kind: "box", x: -40, y: 6, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: -40, y: 6, radius: 0.8 },
+      art: { kind: "box", x: -44, y: 5.2, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: -44, y: 5.2, radius: 1.0 },
     },
     {
       id: "right",
       defends: "right",
-      art: { kind: "box", x: 40, y: 6, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: 40, y: 6, radius: 0.8 },
+      art: { kind: "box", x: 44, y: 5.2, halfW: 0.6, halfH: 0.6 },
+      hitZone: { kind: "circle", x: 44, y: 5.2, radius: 1.0 },
     },
   ],
   playerSpawns: [
-    { x: -4, y: 1 }, // slot 0 — Team 0 (left)
-    { x: -7, y: 1 }, // slot 1 — Team 0 (left)
-    { x: 4, y: 1 }, // slot 2 — Team 1 (right)
-    { x: 7, y: 1 }, // slot 3 — Team 1 (right)
+    { x: -6, y: 1 }, // slot 0 — Team 0 (left)
+    { x: -10, y: 1 }, // slot 1 — Team 0 (left)
+    { x: 6, y: 1 }, // slot 2 — Team 1 (right)
+    { x: 10, y: 1 }, // slot 3 — Team 1 (right)
   ],
-  playerSpawn: { x: -4, y: 1 },
-  ballSpawn: { x: 0, y: 6 },
+  playerSpawn: { x: -6, y: 1 }, // deprecated alias for slot 0
+  ballSpawn: { x: 0, y: 7.2 },
+  // Basin exit (inner ridge foot); the bot reads the chamber bay via this.
+  bayRampBaseX: { left: -15, right: 15 },
 };
 
 /** Registry of all available arenas, keyed by ArenaId (plus back-compat alias). */
@@ -239,7 +266,7 @@ export const ARENAS: Record<string, ArenaDef> = {
   "flat-dojo": FLAT_DOJO,
   "temple-ascent": TEMPLE_ASCENT,
   "pillared-temple": TEMPLE_ASCENT, // back-compat alias (old replays/manifests)
-  "twin-ledge": TWIN_LEDGE,
+  "dune-basin": DUNE_BASIN,
 };
 
 /** Resolve an arena by id, falling back to FLAT_DOJO for unknown ids. */

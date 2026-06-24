@@ -66,11 +66,11 @@ test("RoomReady preserves per-slot characterIds after round-trip", () => {
     full: true,
     slots: [0, 2],
     characters: ["panda", "vipra"],
-    arenaId: "twin-ledge",
+    arenaId: "dune-basin",
   };
   const decoded = deserializeRoomReady(serializeRoomReady(m));
   expect(decoded.characters).toEqual(["panda", "vipra"]);
-  expect(decoded.arenaId).toBe("twin-ledge");
+  expect(decoded.arenaId).toBe("dune-basin");
 });
 
 // ── PlayerInput ───────────────────────────────────────────────────────────────
