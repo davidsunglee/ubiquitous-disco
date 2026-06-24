@@ -87,6 +87,9 @@ export interface AuthPlayer {
   staggerDecayDelay: number;
   specialCooldown: number;
   airJumpsRemaining: number;
+  strikeActiveTicks: number;
+  strikeImpulseX: number;
+  strikeImpulseY: number;
 }
 
 /**

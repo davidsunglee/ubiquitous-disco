@@ -74,12 +74,11 @@ export interface ArenaDef {
 /** The set of available arena ids. */
 export type ArenaId = "flat-dojo" | "pillared-temple" | "twin-ledge";
 
-// Flat Dojo: a wide flat floor, two side walls, and a two-step platform ladder
-// climbing to a bell tucked under an overhang. Two elevated Bells flank the arena.
-// Authored in world units (X right, Y up).
-// FLI-9 (tall redesign): 72 units wide × 16u tall. A two-step ladder (low step
-// top 3.0, main ledge top 6.0) climbs to a bell at y=8.5 tucked under an
-// overhang lip (underside 10). Mirror-symmetric about x=0.
+// Flat Dojo (FLI-11): a flat open aerial-volley court. Wide flat floor, two side
+// walls, and a high ceiling (underside ~20) that ricochets the floaty ball back
+// into play. Two lowered Bells flank the arena at contest height (y=6.0). No
+// climb ladder, ledges, or overhangs — contesting/ringing happens through jumps +
+// aerial strikes. Mirror-symmetric about x=0. Authored in world units (X right, Y up).
 export const FLAT_DOJO: ArenaDef = {
   id: "flat-dojo",
   // Side walls at x=±36, halfW 0.5 → inner faces at ∓35.5.
@@ -91,56 +90,32 @@ export const FLAT_DOJO: ArenaDef = {
     { kind: "box", x: -36, y: 8, halfW: 0.5, halfH: 8 },
     // right wall: inner face at x = 35.5, spans y 0→16
     { kind: "box", x: 36, y: 8, halfW: 0.5, halfH: 8 },
-    // LEFT low step (mirrored): top surface y = 3.0
-    { kind: "box", x: -22, y: 2.5, halfW: 2.5, halfH: 0.5 },
-    // RIGHT low step (mirrored): top surface y = 3.0
-    { kind: "box", x: 22, y: 2.5, halfW: 2.5, halfH: 0.5 },
-    // LEFT main ledge (mirrored): top surface y = 6.0
-    { kind: "box", x: -29, y: 5.5, halfW: 3.0, halfH: 0.5 },
-    // RIGHT main ledge (mirrored): top surface y = 6.0
-    { kind: "box", x: 29, y: 5.5, halfW: 3.0, halfH: 0.5 },
-    // LEFT overhang lip (mirrored): underside y = 10, caps the bell pocket
-    { kind: "box", x: -30, y: 10.5, halfW: 4.5, halfH: 0.5 },
-    // RIGHT overhang lip (mirrored): underside y = 10
-    { kind: "box", x: 30, y: 10.5, halfW: 4.5, halfH: 0.5 },
-    // ceiling: underside at y = 16, closes the box (ball CCD prevents tunnelling)
-    { kind: "box", x: 0, y: 16.5, halfW: 36, halfH: 0.5 },
+    // ceiling: underside at y = 20, active ricochet surface for the floaty ball
+    { kind: "box", x: 0, y: 20.5, halfW: 36, halfH: 0.5 },
   ],
   bells: [
-    // Left Bell: tucked in the overhang pocket, defends the left side.
     {
       id: "left",
       defends: "left",
-      art: { kind: "box", x: -31, y: 8.5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: -31, y: 8.5, radius: 0.8 },
+      art: { kind: "box", x: -31, y: 6.0, halfW: 0.7, halfH: 0.7 },
+      hitZone: { kind: "circle", x: -31, y: 6.0, radius: 1.0 },
     },
-    // Right Bell: tucked in the overhang pocket, defends the right side.
     {
       id: "right",
       defends: "right",
-      art: { kind: "box", x: 31, y: 8.5, halfW: 0.6, halfH: 0.6 },
-      hitZone: { kind: "circle", x: 31, y: 8.5, radius: 0.8 },
+      art: { kind: "box", x: 31, y: 6.0, halfW: 0.7, halfH: 0.7 },
+      hitZone: { kind: "circle", x: 31, y: 6.0, radius: 1.0 },
     },
   ],
   playerSpawns: [
-    // Teams face off near the centre ball, then push outward toward the bells.
     { x: -4, y: 1 }, // slot 0 — Team 0 (left)
     { x: -7, y: 1 }, // slot 1 — Team 0 (left)
     { x: 4, y: 1 }, // slot 2 — Team 1 (right)
     { x: 7, y: 1 }, // slot 3 — Team 1 (right)
   ],
   playerSpawn: { x: -4, y: 1 }, // deprecated alias for slot 0
-  ballSpawn: { x: 0, y: 6 },
-  botClimb: {
-    left: [
-      { x: -22, surfaceY: 3.0 },
-      { x: -29, surfaceY: 6.0 },
-    ],
-    right: [
-      { x: 22, surfaceY: 3.0 },
-      { x: 29, surfaceY: 6.0 },
-    ],
-  },
+  ballSpawn: { x: 0, y: 6.0 },
+  // No botClimb: Flat Dojo is flat; the bot plays the air (Phase 4).
 };
 
 // Pillared Temple: 84-unit-wide arena with two pairs of low interior hurdles

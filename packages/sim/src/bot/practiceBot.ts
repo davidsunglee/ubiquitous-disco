@@ -144,8 +144,10 @@ export function samplePracticeBotInput(
   const wantStrike =
     inReach && (facingTargetBell || cornered) && !ballDangerous;
 
-  // Jump for a high ball (ball is above us and we're grounded).
-  const wantJump = ball.y - self.y > 1.5 && self.grounded && !wantStrike;
+  // Jump for a high/floaty ball (lower threshold so the bot contests the air).
+  const HIGH_BALL_JUMP_DY = 0.8;
+  const wantJump =
+    ball.y - self.y > HIGH_BALL_JUMP_DY && self.grounded && !wantStrike;
 
   // Tele-Dash to close distance when far from the ball (cadence-gated to avoid spam).
   // Only dash when not in reach and the ball is far enough to warrant it.

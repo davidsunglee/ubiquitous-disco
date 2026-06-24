@@ -143,45 +143,95 @@ test("serializeBellRingState reflects per-Bell armed flags in order", () => {
 
 // ── Replay-style: upward Strike into an elevated Bell, hash-equal across runs ─
 
-// Walk the player next to the (settled) ball so a Strike is within reach, then a
-// partial-charge up-right Strike pops it into the right Bell at (9, 5).
-function ringRightBell(sim: ReturnType<typeof newSim>): void {
-  for (let i = 0; i < 40; i++) sim.step([EMPTY_INPUT, EMPTY_INPUT]);
-  for (let i = 0; i < 40; i++) {
+// Strike the ball into the right Bell at (9, 5) in COMPACT_DOJO.
+//
+// FLI-11 Phase 3 geometry: with upwardBias=0.75, moveY=1 (grounded), and
+// minImpulse=7.5 with mass=0.35 the direction is (1, 1.75)/2.016 and velocity
+// ≈ (10.6, 18.6) u/s. The trajectory hits the ceiling at x≈5.5 and bounces
+// back down, passing through Bell zone (x≈8.7-9, y=5).
+//
+// TIMING CONSTRAINT: the ball must be near the top of a bounce (|vy| < 2.0) and
+// at low height (y < 1.5) when struck. If ball has large upward vy, the combined
+// velocity gets clamped to maxSpeed=22 and the direction changes, causing a miss.
+// The fourth bounce peak occurs around tick 200 (y≈1.32, vy≈0) — ideal target.
+//
+// PLAYER POSITION: player must be within reach=2.55 of ball when strike is
+// released. Player starts at x=-4, so we walk them into position BEFORE the
+// target bounce.
+function ringRightBell(sim: ReturnType<typeof newSim>): boolean {
+  const reach = DEFAULT_CONFIG.strike.reach;
+
+  let rang = false;
+  const drainBell = () => {
+    for (const e of sim.drainEvents()) {
+      if (e.type === "bellRing" && e.bell === "right") rang = true;
+    }
+  };
+
+  // Phase 1: walk player to x≈-1 (within reach of ball at x=0) over first ~12 ticks.
+  // This positions the player without overshooting the ball before it lands.
+  for (let i = 0; i < 12 && !rang; i++) {
     sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
+    drainBell();
+  }
+
+  // Phase 2: wait for a low-height, low-velocity ball state. The ideal moment is
+  // at or near the top of a bounce with y < 1.5 and |vy| < 2.5 (near-zero upward
+  // velocity so the impulse is not heavily clamped). Up to 600 ticks budget to
+  // find a suitable window.
+  for (let wait = 0; wait < 600 && !rang; wait++) {
+    sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+    drainBell();
+    if (rang) break;
+
     const s = sim.getRenderState();
+    const v = sim.getBallVel();
+    if (s.ball.y > 1.5 || Math.abs(v.vy) > 2.5 || s.ball.x > 4) continue;
+
+    // Ball is near floor peak — now walk player into reach (if not already).
     const p = s.players[0];
-    if (!p) break;
+    if (!p) continue;
     const d = Math.hypot(s.ball.x - p.x, s.ball.y - p.y);
-    if (d <= DEFAULT_CONFIG.strike.reach * 0.9) break;
+    if (d > reach) {
+      // Walk a bit closer.
+      for (let j = 0; j < 8 && !rang; j++) {
+        sim.step([frame({ moveX: 1 }), EMPTY_INPUT]);
+        drainBell();
+        const s2 = sim.getRenderState();
+        const p2 = s2.players[0];
+        if (!p2) break;
+        if (Math.hypot(s2.ball.x - p2.x, s2.ball.y - p2.y) <= reach) break;
+      }
+    }
+
+    // Strike: tap with moveY=1 — ceiling-bounce arc into Bell zone.
+    sim.step([
+      frame({ strikeHeld: true, strikePressed: true, moveX: 1, moveY: 1 }),
+      EMPTY_INPUT,
+    ]);
+    drainBell();
+    sim.step([
+      frame({ strikeReleased: true, moveX: 1, moveY: 1 }),
+      EMPTY_INPUT,
+    ]);
+    drainBell();
+
+    // Let ball fly toward the Bell.
+    for (let i = 0; i < 200 && !rang; i++) {
+      sim.step([EMPTY_INPUT, EMPTY_INPUT]);
+      drainBell();
+    }
   }
-  sim.step([
-    frame({ strikeHeld: true, strikePressed: true, moveX: 1, moveY: 1 }),
-    EMPTY_INPUT,
-  ]);
-  for (let i = 0; i < 8; i++) {
-    sim.step([frame({ strikeHeld: true, moveX: 1, moveY: 1 }), EMPTY_INPUT]);
-  }
-  sim.step([frame({ strikeReleased: true, moveX: 1, moveY: 1 }), EMPTY_INPUT]);
+
+  return rang;
 }
 
 test("an upward Strike into the elevated right Bell emits a bellRing event", () => {
   const sim = newSim();
-  ringRightBell(sim);
-
-  let rang: { bell: "left" | "right"; tick: number } | null = null;
-  for (let i = 0; i < 160; i++) {
-    sim.step([EMPTY_INPUT, EMPTY_INPUT]);
-    const events = sim.drainEvents();
-    const hit = events.find((e) => e.type === "bellRing");
-    if (hit) {
-      rang = { bell: hit.bell, tick: hit.tick };
-      break;
-    }
-  }
-
-  expect(rang).not.toBeNull();
-  expect(rang?.bell).toBe("right");
+  // ringRightBell makes multiple strike attempts and drains events internally.
+  // It returns true once the right Bell rings within the attempt budget.
+  const rang = ringRightBell(sim);
+  expect(rang).toBe(true);
 });
 
 test("the scripted Bell-ring run is hash-equal across two runs", () => {

@@ -187,27 +187,31 @@ for (const id of ARENA_IDS) {
   });
 }
 
-// ── FLAT_DOJO-specific: tall layout (FLI-9 tall redesign) ─────────────────────
+// ── FLAT_DOJO-specific: flat open court (FLI-11) ──────────────────────────────
 
-test("FLAT_DOJO is the tall layout: low step, main ledge, overhang, high bells", () => {
-  const top = (x: number, y: number) =>
+test("FLAT_DOJO is the flat open court: 4 colliders, high ceiling, low bells, no climb", () => {
+  const at = (x: number, y: number) =>
     FLAT_DOJO.colliders.find(
       (c) => Math.abs(c.x - x) < 0.01 && Math.abs(c.y - y) < 0.01,
     );
-  // Two-step ladder per side.
-  expect(top(-22, 2.5), "left low step (top 3.0)").toBeDefined();
-  expect(top(22, 2.5), "right low step (top 3.0)").toBeDefined();
-  expect(top(-29, 5.5), "left main ledge (top 6.0)").toBeDefined();
-  expect(top(29, 5.5), "right main ledge (top 6.0)").toBeDefined();
-  // Overhang lip over each bell pocket (underside 10).
-  expect(top(-30, 10.5), "left overhang").toBeDefined();
-  expect(top(30, 10.5), "right overhang").toBeDefined();
-  // Bells raised to 8.5 (above single-jump + floor jump+air-dash reach).
+  // Exactly four colliders: floor, two walls, ceiling.
+  expect(FLAT_DOJO.colliders).toHaveLength(4);
+  expect(at(0, -0.5), "floor").toBeDefined();
+  expect(at(-36, 8), "left wall").toBeDefined();
+  expect(at(36, 8), "right wall").toBeDefined();
+  expect(at(0, 20.5), "ceiling underside 20").toBeDefined();
+  // The climb ladder / overhangs are gone.
+  expect(at(-22, 2.5), "left low step removed").toBeUndefined();
+  expect(at(22, 2.5), "right low step removed").toBeUndefined();
+  expect(at(-29, 5.5), "left main ledge removed").toBeUndefined();
+  expect(at(29, 5.5), "right main ledge removed").toBeUndefined();
+  expect(at(-30, 10.5), "left overhang removed").toBeUndefined();
+  expect(at(30, 10.5), "right overhang removed").toBeUndefined();
+  // Bells lowered to contest height (6.0) with a larger scoring radius (1.0).
   const right = FLAT_DOJO.bells.find((b) => b.id === "right");
-  expect(right?.hitZone.y).toBeCloseTo(8.5, 5);
+  expect(right?.hitZone.y).toBeCloseTo(6.0, 5);
   expect(right?.hitZone.x).toBeCloseTo(31, 5);
-  // Ceiling raised to ~16u (taller arena).
-  expect(top(0, 16.5), "ceiling underside 16").toBeDefined();
-  // The old Phase-5 ledges at x=±27, y=2.8 are gone.
-  expect(top(27, 2.8), "old ledge removed").toBeUndefined();
+  expect(right?.hitZone.radius).toBeCloseTo(1.0, 5);
+  // No climb ladder on the flat court.
+  expect(FLAT_DOJO.botClimb).toBeUndefined();
 });

@@ -1,4 +1,5 @@
 import { beforeAll, expect, test } from "vitest";
+import { FLAT_DOJO } from "../arena";
 import { DEFAULT_CONFIG } from "../config";
 import { initSim } from "../rapier";
 import { RapierWorld } from "../rapier-world";
@@ -27,4 +28,34 @@ test("a hard-struck ball does not tunnel through the wall (CCD)", () => {
     maxX = Math.max(maxX, rw.ballPos().x);
   }
   expect(maxX).toBeLessThan(11.5 - DEFAULT_CONFIG.ball.radius + 0.1);
+});
+
+// FLI-11 Phase 2: ball floats.
+// gravityScale is a construction-time Rapier field — use RapierWorld directly
+// to compare configs without a reload. Launch the ball straight up and count how
+// many ticks it stays above its start height. The floaty config (gravityScale 0.32)
+// should keep it aloft far longer than a heavy baseline (gravityScale 1.0).
+test("a struck-up ball hangs far longer than a heavy (gravityScale 1) ball", () => {
+  const launchUpAndCountAboveStart = (gravityScale: number): number => {
+    const cfg = {
+      ...DEFAULT_CONFIG,
+      ball: { ...DEFAULT_CONFIG.ball, gravityScale },
+    };
+    const rw = new RapierWorld(cfg, FLAT_DOJO);
+    const y0 = rw.ballPos().y;
+    // Impart a strong upward velocity (matches a typical charged strike impulse).
+    rw.setBallVel(0, 14);
+    let ticks = 0;
+    for (let i = 0; i < 300; i++) {
+      rw.step();
+      if (rw.ballPos().y > y0) ticks++;
+    }
+    return ticks;
+  };
+
+  const floatyTicks = launchUpAndCountAboveStart(0.32);
+  const heavyTicks = launchUpAndCountAboveStart(1.0);
+
+  // Floaty config keeps the ball aloft for many more ticks than gravityScale 1.
+  expect(floatyTicks).toBeGreaterThan(heavyTicks * 2);
 });

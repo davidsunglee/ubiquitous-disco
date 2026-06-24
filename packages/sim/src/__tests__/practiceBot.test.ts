@@ -108,8 +108,8 @@ test("bot jumps for a high ball when grounded", () => {
     self: { x: 0, y: 1, facing: 1, grounded: true },
     ball: { x: 1, y: 4, vx: 0, vy: 0 }, // ball is 3 units above, out of reach vertically but close horizontally
   };
-  // Ball y - self y = 3 > 1.5 threshold, and not in reach (distance > 2)
-  const dist = Math.hypot(1 - 0, 4 - 1); // ~3.16 > reach 2
+  // Ball y - self y = 3 > 0.8 threshold, and not in reach (distance > reach)
+  const dist = Math.hypot(1 - 0, 4 - 1); // ~3.16 > reach
   expect(dist).toBeGreaterThan(DEFAULT_CONFIG.strike.reach);
 
   const frame = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
@@ -121,10 +121,26 @@ test("bot does NOT jump when ball is at same height", () => {
   const view: BotWorldView = {
     tick: 5,
     self: { x: 0, y: 1, facing: 1, grounded: true },
-    ball: { x: 4, y: 1.5, vx: 0, vy: 0 }, // y diff = 0.5 < 1.5 threshold
+    ball: { x: 4, y: 1.5, vx: 0, vy: 0 }, // y diff = 0.5 < 0.8 threshold
   };
   const frame = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
   expect(frame.jumpHeld).toBe(false);
+});
+
+test("bot jumps for a moderately-high floaty ball (threshold lowered to 0.8)", () => {
+  // FLI-11: the jump threshold was lowered from 1.5 → 0.8 so the bot contests
+  // the air earlier against floaty balls. A yDiff of 1.0 now triggers a jump
+  // (1.0 > 0.8) where it previously would not have (1.0 < 1.5).
+  // Ball at x=3, y=2 → yDiff = 1.0 > 0.8; dist = hypot(3,1) ≈ 3.16 > reach 2.55 (out of reach).
+  const view: BotWorldView = {
+    tick: 5,
+    self: { x: 0, y: 1, facing: 1, grounded: true },
+    ball: { x: 3, y: 2.0, vx: 0, vy: 0 }, // yDiff 1.0 > 0.8, out of reach
+  };
+  const dist = Math.hypot(3 - 0, 2.0 - 1);
+  expect(dist).toBeGreaterThan(DEFAULT_CONFIG.strike.reach);
+  const f = samplePracticeBotInput(0, view, DEFAULT_CONFIG);
+  expect(f.jumpPressed).toBe(true);
 });
 
 // ── Retreat behaviour ─────────────────────────────────────────────────────────
@@ -242,7 +258,9 @@ test("bot uses passed stats.strikeReach — high-reach character strikes from fa
 });
 
 test("bot uses passed stats.dashDistance — low-dash character dashes at shorter distance", () => {
-  // Panda's dashDistance multiplier is 0.85 → resolved dash distance = 2.55.
+  // FLI-11: dash.distance base = 2.4. Panda multiplier 0.85 → resolved 2.04.
+  // Sifu multiplier 1.0 → resolved 2.4. These tests pass explicit stats so the
+  // values are scenario fixtures chosen to show the per-character distinction.
   const lowDashStats = { strikeReach: 2, dashDistance: 2.55 };
   const sifuStats = { strikeReach: 2, dashDistance: 3 };
 

@@ -62,6 +62,9 @@ export interface AuthPlayer {
   staggerDecayDelay: number;
   specialCooldown: number;
   airJumpsRemaining: number;
+  strikeActiveTicks: number;
+  strikeImpulseX: number;
+  strikeImpulseY: number;
 }
 
 /**
@@ -314,6 +317,9 @@ export function toAuthoritativeState(sim: Simulation): AuthoritativeState {
         staggerDecayDelay: actor?.staggerDecayDelay ?? 0,
         specialCooldown: actor?.specialCooldown ?? 0,
         airJumpsRemaining: actor?.airJumpsRemaining ?? 0,
+        strikeActiveTicks: actor?.strikeActiveTicks ?? 0,
+        strikeImpulseX: actor?.strikeImpulseX ?? 0,
+        strikeImpulseY: actor?.strikeImpulseY ?? 0,
       };
     }),
     ball: { x: render.ball.x, y: render.ball.y, ...ballVel },
@@ -449,8 +455,11 @@ export function createSimulation(opts: {
                 : sb;
             }
           } else {
-            // Clear charge so it doesn't linger while knocked down.
+            // Clear charge + strike window so neither lingers while knocked down.
             actor.charge = 0;
+            actor.strikeActiveTicks = 0;
+            actor.strikeImpulseX = 0;
+            actor.strikeImpulseY = 0;
           }
         }
 
@@ -696,6 +705,9 @@ export function createSimulation(opts: {
         a.staggerDecayDelay = p.staggerDecayDelay;
         a.specialCooldown = p.specialCooldown;
         a.airJumpsRemaining = p.airJumpsRemaining;
+        a.strikeActiveTicks = p.strikeActiveTicks;
+        a.strikeImpulseX = p.strikeImpulseX;
+        a.strikeImpulseY = p.strikeImpulseY;
         // Sync kinematic player position (restoreSnapshot already did this via
         // the Rapier snapshot, but write explicitly for clarity and safety).
         rw.setPlayerPosition(i, p.x, p.y);

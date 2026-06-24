@@ -1,4 +1,4 @@
-export const SIM_CONFIG_VERSION = 8;
+export const SIM_CONFIG_VERSION = 9; // FLI-11: new default feel + appended strike-window actor fields
 
 export interface MovementConfig {
   moveSpeed: number; // world units / second of horizontal movement
@@ -75,35 +75,35 @@ export const DEFAULT_CONFIG: SimConfig = {
   tickHz: 30,
   gravityY: -20,
   ball: {
-    radius: 0.3,
-    restitution: 0.6,
-    linearDamping: 0.05,
-    gravityScale: 1,
-    mass: 0.5,
-    maxSpeed: 30,
-    playerPush: 4,
+    radius: 0.38,
+    restitution: 0.82,
+    linearDamping: 0.1,
+    gravityScale: 0.32, // FLI-11: effective gravity ≈ −6.4 u/s² — much floatier; tune up to 0.38–0.42 later
+    mass: 0.35, // lighter → impulses hit harder
+    maxSpeed: 22,
+    playerPush: 6,
   },
   player: { halfW: 0.4, halfH: 0.8 },
   movement: {
-    moveSpeed: 6,
-    jumpSpeed: 12, // FLI-9 tall redesign: feet apex ≈ 3.6u so a single jump lands a low ledge
-    gravityScale: 1,
-    jumpCutMultiplier: 0.4,
-    coyoteTicks: 4,
+    moveSpeed: 7.2,
+    jumpSpeed: 16.5, // FLI-11 floaty: feet apex ≈ 9.08u (gravityScale 0.75) — a single jump clears the y=6 Bell
+    gravityScale: 0.75,
+    jumpCutMultiplier: 0.65,
+    coyoteTicks: 5,
   },
   dash: {
-    distance: 3,
-    cooldownTicks: 18,
+    distance: 2.4,
+    cooldownTicks: 22,
   },
   strike: {
     minChargeTicks: 1,
-    maxChargeTicks: 24,
-    minImpulse: 6,
-    maxImpulse: 16,
-    upwardBias: 0.5,
-    reach: 2,
-    headerUpwardBias: 1.2,
-    spikeMultiplier: 1.6,
+    maxChargeTicks: 10,
+    minImpulse: 7.5,
+    maxImpulse: 14,
+    upwardBias: 0.75,
+    reach: 2.55,
+    headerUpwardBias: 1.9,
+    spikeMultiplier: 1.35,
   },
   match: {
     lengthTicks: 5400, // 3:00 @ 30 Hz

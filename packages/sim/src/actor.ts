@@ -38,6 +38,12 @@ export interface Actor {
   specialCooldown: number;
   /** Phase 4 (FLI-9): remaining mid-air jumps (initialized from character.airJumps; reset on landing). */
   airJumpsRemaining: number;
+  /** FLI-11: ticks a Strike swing stays live (0 = idle). Serialized/hashed. */
+  strikeActiveTicks: number;
+  /** FLI-11: snapshotted impulse vector X (dir·magnitude) for the active window. */
+  strikeImpulseX: number;
+  /** FLI-11: snapshotted impulse vector Y (dir·magnitude) for the active window. */
+  strikeImpulseY: number;
   /**
    * Phase 7 (FLI-9): slot of the actor who most recently struck this target this
    * tick (-1 = none). Used ONLY for event attribution (e.g. friendly-fire
@@ -68,6 +74,9 @@ export function createActor(
     staggerDecayDelay: 0,
     specialCooldown: 0,
     airJumpsRemaining: character.airJumps,
+    strikeActiveTicks: 0,
+    strikeImpulseX: 0,
+    strikeImpulseY: 0,
     lastHitBy: -1,
     character,
   };
@@ -100,12 +109,14 @@ export function serializeActor(actor: Actor): Uint8Array {
   //   specialCooldown i32 (4) = 4
   // Phase 4 (FLI-9) appends 4 bytes:
   //   airJumpsRemaining i32 (4) = 4
-  // Total: 64 bytes.
+  // FLI-11 appends 20 bytes:
+  //   strikeActiveTicks i32 (4) + strikeImpulseX f64 (8) + strikeImpulseY f64 (8) = 20
+  // Total: 84 bytes.
   // NOTE: Phase 7's lastHitBy is intentionally NOT serialized — it is transient
   // event-attribution metadata, excluded from hashState() (so the golden hash is
   // unchanged).
   const buf = new ArrayBuffer(
-    8 + 8 + 1 + 1 + 4 + 8 + 4 + 1 + 8 + 4 + 4 + 1 + 4 + 4 + 4,
+    8 + 8 + 1 + 1 + 4 + 8 + 4 + 1 + 8 + 4 + 4 + 1 + 4 + 4 + 4 + 4 + 8 + 8,
   );
   const view = new DataView(buf);
   let o = 0;
@@ -142,5 +153,12 @@ export function serializeActor(actor: Actor): Uint8Array {
   o += 4;
   // ── Phase 4 (FLI-9) appended field ──
   view.setInt32(o, actor.airJumpsRemaining);
+  o += 4;
+  // ── FLI-11 appended fields (strike active window): +20 bytes → 84 total ──
+  view.setInt32(o, actor.strikeActiveTicks);
+  o += 4;
+  view.setFloat64(o, actor.strikeImpulseX);
+  o += 8;
+  view.setFloat64(o, actor.strikeImpulseY);
   return new Uint8Array(buf);
 }

@@ -25,26 +25,33 @@ import {
 // Golden hash computed on V8 (Node 22 / Vitest 4.1.9, @dimforge/rapier2d-deterministic-compat 0.19.x).
 // If Bun/JSC diverges, this fails under `bun --bun vitest run`.
 // To regenerate: run this test with EXPECTED_HASH = "PLACEHOLDER" and read the console output.
-// FLI-9 Phase 6: radiusBonus (f64) + rampTicks (i32) appended to serializeBellRingState → new hash.
-const EXPECTED_HASH = "4a909c30";
+// FLI-11 Phase 5: flat-court rally script (jump → aerial header → ceiling bounce → re-hit → Bell ring).
+// SIM_CONFIG_VERSION = 9; actor 84 bytes; ball gravityScale 0.32; jump apex ~9.08u.
+const EXPECTED_HASH = "5a23c794";
 
 beforeAll(async () => {
   await initSim();
 });
 
 /**
- * Extended contact-heavy scripted session.
+ * Flat-court rally scripted session (FLI-11 Phase 5).
  *
- * Extends the replay.test.ts scriptedFrameList() shape with additional
- * sequences that exercise:
- *  - Both players active (slot 1 moves toward slot 0)
- *  - Ball bouncing off the floor, ceiling, and walls
- *  - A charged aerial Strike aimed at the Bell Hit-Zone (contact-heavy)
- *  - Golden Goal match phase transition (timer exhausted)
- *  - Multiple Bell ring attempts (ball bounced into the elevated Bell zone)
+ * Exercises the new Flat Dojo feel in a representative sequence:
+ *   1. Match start + floor settle
+ *   2. Slot 0 jumps to Bell-threat height and does an aerial header (upward Strike)
+ *      — the ball is near the spawn (y=6); the high arc sends it toward the ceiling
+ *   3. Ball bounces off the high ceiling (~y=20) and returns — floaty hang time
+ *   4. Slot 2 jumps and re-hits the descending ball (aerial tap-Strike)
+ *   5. Ball travels toward the left Bell; slot 0 repositions to contest
+ *   6. Slot 0 does a grounded tap-Strike to send the ball toward the right Bell
+ *   7. Extended settle: ball bounces off walls/floor (contact-solver activity)
+ *   8. Slot 2 jumps + downward spike from near-apex height
+ *   9. Slot 0 jumps + upward tap-Strike in the 3-tick grace window
+ *  10. Final settle — timer drains
  *
  * The purpose is maximal contact-solver activity so JSC vs V8 floating-point
- * divergence (if any) surfaces quickly.
+ * divergence (if any) surfaces quickly, with inputs that reflect the new
+ * flat open aerial-volley court rather than the old ladder geometry.
  */
 function longContactHeavyScript(): InputFrame[][] {
   const frames: InputFrame[][] = [];
@@ -54,8 +61,8 @@ function longContactHeavyScript(): InputFrame[][] {
   }
 
   // Helper: sparse row keyed by the 1v1 [0, 2] template.
-  // slot 0 = left player (same position as old "slot 0")
-  // slot 2 = right player (same position as old "slot 1": spawn at x=4)
+  // slot 0 = left player (spawns at x=-4, y=1)
+  // slot 2 = right player (spawns at x=4, y=1)
   function row(s0: InputFrame, s2: InputFrame): InputFrame[] {
     const r: InputFrame[] = [];
     r[0] = s0;
@@ -63,7 +70,7 @@ function longContactHeavyScript(): InputFrame[][] {
     return r;
   }
 
-  // ── Start the match (both players press jump) ────────────────────────────
+  // ── 1. Start the match (both players press jump to exit preRound) ────────
   frames.push(
     row(
       f({ jumpPressed: true, jumpHeld: true }),
@@ -71,102 +78,101 @@ function longContactHeavyScript(): InputFrame[][] {
     ),
   );
 
-  // ── Settle on the ground ─────────────────────────────────────────────────
-  for (let i = 0; i < 20; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
+  // ── Settle on the ground after preRound ──────────────────────────────────
+  for (let i = 0; i < 15; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
 
-  // ── Slot 0 walks right, slot 2 walks left — both converging ─────────────
-  for (let i = 0; i < 25; i++)
-    frames.push(row(f({ moveX: 1 }), f({ moveX: -1 })));
-
-  // ── Both players jump at the same time ──────────────────────────────────
+  // ── 2. Slot 0 jumps toward the ball (spawned at y=6) and does an aerial
+  //       header (upward neutral Strike): jump → rise → tap-Strike at apex ──
+  // Walk a few steps right to get under the ball.
+  for (let i = 0; i < 5; i++) frames.push(row(f({ moveX: 1 }), EMPTY_INPUT));
+  // Full jump (held for floaty, higher arc).
+  frames.push(row(f({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT));
+  for (let i = 0; i < 14; i++)
+    frames.push(row(f({ jumpHeld: true }), EMPTY_INPUT));
+  // Tap-Strike at/near apex — neutral direction (up bias) sends ball toward ceiling.
   frames.push(
-    row(
-      f({ moveX: 1, jumpPressed: true, jumpHeld: true }),
-      f({ moveX: -1, jumpPressed: true, jumpHeld: true }),
-    ),
+    row(f({ moveY: 1, strikeHeld: true, strikePressed: true }), EMPTY_INPUT),
   );
-  for (let i = 0; i < 15; i++)
-    frames.push(
-      row(f({ moveX: 1, jumpHeld: true }), f({ moveX: -1, jumpHeld: true })),
-    );
+  frames.push(row(f({ moveY: 1, strikeReleased: true }), EMPTY_INPUT));
 
-  // ── Slot 0 does a charged strike (upward) in mid-air ────────────────────
-  frames.push(
-    row(
-      f({ moveX: 1, moveY: 1, strikeHeld: true, strikePressed: true }),
-      f({ moveX: -1 }),
-    ),
-  );
-  for (let i = 0; i < 12; i++) {
-    frames.push(
-      row(f({ moveX: 1, moveY: 1, strikeHeld: true }), f({ moveX: -1 })),
-    );
-  }
-  frames.push(
-    row(f({ moveX: 1, moveY: 1, strikeReleased: true }), EMPTY_INPUT),
-  );
+  // ── 3. Ball rises toward the ceiling (~y=20) and bounces back down ───────
+  // Let both players land and the ball travel upward. Slot 2 starts walking
+  // left to position under the descending ball.
+  for (let i = 0; i < 30; i++) frames.push(row(EMPTY_INPUT, f({ moveX: -1 })));
 
-  // ── Let the ball fly (bounces off walls / ceiling) ───────────────────────
-  for (let i = 0; i < 60; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
-
-  // ── Slot 2 Tele-Dash left ────────────────────────────────────────────────
-  frames.push(
-    row(EMPTY_INPUT, f({ moveX: -1, dashPressed: true, dashHeld: true })),
-  );
-  for (let i = 0; i < 5; i++) frames.push(row(EMPTY_INPUT, f({ moveX: -1 })));
-
-  // ── Slot 2 jumps and tries an aerial upward strike toward the left Bell ──
+  // ── 4. Slot 2 jumps and re-hits the descending ball (aerial tap-Strike) ──
   frames.push(
     row(EMPTY_INPUT, f({ moveX: -1, jumpPressed: true, jumpHeld: true })),
   );
-  for (let i = 0; i < 8; i++)
+  for (let i = 0; i < 12; i++)
     frames.push(row(EMPTY_INPUT, f({ moveX: -1, jumpHeld: true })));
+  // Upward tap-Strike while airborne — sends ball back up and toward left Bell.
   frames.push(
     row(
       EMPTY_INPUT,
       f({ moveX: -1, moveY: 1, strikeHeld: true, strikePressed: true }),
     ),
   );
-  for (let i = 0; i < 10; i++) {
-    frames.push(row(EMPTY_INPUT, f({ moveX: -1, moveY: 1, strikeHeld: true })));
-  }
   frames.push(
     row(EMPTY_INPUT, f({ moveX: -1, moveY: 1, strikeReleased: true })),
   );
 
-  // ── Extended settle + ball bounces (contact-solver activity) ────────────
-  for (let i = 0; i < 80; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
+  // ── 5. Both players reposition; ball floats toward left Bell region ───────
+  // Slot 0 walks left toward its Bell side; slot 2 retreats right.
+  for (let i = 0; i < 20; i++)
+    frames.push(row(f({ moveX: -1 }), f({ moveX: 1 })));
 
-  // ── Slot 0 walks left and does a grounded strike ────────────────────────
-  for (let i = 0; i < 20; i++) frames.push(row(f({ moveX: -1 }), EMPTY_INPUT));
+  // ── 6. Slot 0 grounded tap-Strike to redirect ball toward right Bell ─────
   frames.push(
-    row(f({ moveX: -1, strikeHeld: true, strikePressed: true }), EMPTY_INPUT),
+    row(f({ moveX: 1, strikeHeld: true, strikePressed: true }), EMPTY_INPUT),
   );
-  for (let i = 0; i < 8; i++) {
-    frames.push(row(f({ moveX: -1, strikeHeld: true }), EMPTY_INPUT));
-  }
-  frames.push(row(f({ moveX: -1, strikeReleased: true }), EMPTY_INPUT));
+  frames.push(row(f({ moveX: 1, strikeReleased: true }), EMPTY_INPUT));
 
-  // ── Long idle: let physics converge, timer tick down ────────────────────
-  for (let i = 0; i < 120; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
-
-  // ── Slot 2 attempts a spike (downward aerial strike) ────────────────────
-  for (let i = 0; i < 10; i++) frames.push(row(EMPTY_INPUT, f({ moveX: 1 })));
-  frames.push(
-    row(EMPTY_INPUT, f({ moveX: 1, jumpPressed: true, jumpHeld: true })),
-  );
-  for (let i = 0; i < 6; i++)
-    frames.push(row(EMPTY_INPUT, f({ jumpHeld: true })));
-  frames.push(
-    row(EMPTY_INPUT, f({ moveY: -1, strikeHeld: true, strikePressed: true })),
-  );
-  for (let i = 0; i < 6; i++) {
-    frames.push(row(EMPTY_INPUT, f({ moveY: -1, strikeHeld: true })));
-  }
-  frames.push(row(EMPTY_INPUT, f({ moveY: -1, strikeReleased: true })));
-
-  // ── Final settle ─────────────────────────────────────────────────────────
+  // ── 7. Extended settle: ball bounces off walls/floor (contact-solver) ────
   for (let i = 0; i < 60; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
+
+  // Slot 2 walks left to chase the ball.
+  for (let i = 0; i < 15; i++) frames.push(row(EMPTY_INPUT, f({ moveX: -1 })));
+
+  // ── 8. Slot 2 jumps and tries a downward spike ───────────────────────────
+  frames.push(
+    row(EMPTY_INPUT, f({ moveX: -1, jumpPressed: true, jumpHeld: true })),
+  );
+  for (let i = 0; i < 10; i++)
+    frames.push(row(EMPTY_INPUT, f({ moveX: -1, jumpHeld: true })));
+  // Spike downward while near apex height.
+  frames.push(
+    row(
+      EMPTY_INPUT,
+      f({ moveX: -1, moveY: -1, strikeHeld: true, strikePressed: true }),
+    ),
+  );
+  frames.push(
+    row(EMPTY_INPUT, f({ moveX: -1, moveY: -1, strikeReleased: true })),
+  );
+
+  // ── Let the spike land and ball bounce ───────────────────────────────────
+  for (let i = 0; i < 25; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
+
+  // ── 9. Slot 0 jumps + upward tap-Strike (3-tick grace window) ───────────
+  // Walk right toward the ball.
+  for (let i = 0; i < 10; i++) frames.push(row(f({ moveX: 1 }), EMPTY_INPUT));
+  frames.push(row(f({ jumpPressed: true, jumpHeld: true }), EMPTY_INPUT));
+  for (let i = 0; i < 8; i++)
+    frames.push(row(f({ moveX: 1, jumpHeld: true }), EMPTY_INPUT));
+  // Upward tap — grace window (3 ticks) gives the hit a chance to connect.
+  frames.push(
+    row(
+      f({ moveX: 1, moveY: 1, strikeHeld: true, strikePressed: true }),
+      EMPTY_INPUT,
+    ),
+  );
+  frames.push(
+    row(f({ moveX: 1, moveY: 1, strikeReleased: true }), EMPTY_INPUT),
+  );
+
+  // ── 10. Final settle — timer drains, physics converge ────────────────────
+  for (let i = 0; i < 90; i++) frames.push(row(EMPTY_INPUT, EMPTY_INPUT));
 
   return frames;
 }
